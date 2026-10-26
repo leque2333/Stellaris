@@ -1,0 +1,6 @@
+name: astrbot_plugin_turnflow
+display_name: TurnFlow · 对话轮次管理
+version: 1.0.0
+author: Yuimi-chaya
+desc: 私聊对话轮次管理：动态消息收集、未完成回复中断、部分输出撤回与历史回滚保护。
+repo: https://github.com/Yuimi-chaya/astrbot_plugin_turnflow

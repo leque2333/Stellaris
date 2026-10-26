@@ -1,0 +1,362 @@
+"""明日方舟语音插件全局常量定义"""
+
+import re
+
+# ============================================================
+# 插件标识
+# ============================================================
+# 改版本号时记得同步 metadata.yaml、README.md、CHANGELOG.md，
+# 这三个文件不是 Python，无法引用本常量。
+
+PLUGIN_NAME = "astrbot_plugin_mrfz"
+PLUGIN_VERSION = "3.8.3"
+
+# ============================================================
+# 文件大小限制
+# ============================================================
+
+MAX_VOICE_BYTES = 20 * 1024 * 1024  # 20MB - 单个语音文件大小上限
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10MB - 单个图片文件大小上限
+MAX_UPLOAD_BYTES = 24 * 1024 * 1024  # 24MB - 单个上传文件大小上限
+MAX_IMPORT_BYTES = 220 * 1024 * 1024  # 220MB - ZIP 导入总大小上限
+MAX_PREVIEW_BYTES = 12 * 1024 * 1024  # 12MB - 预览文件大小上限
+
+# ============================================================
+# 缓存和限制
+# ============================================================
+
+SCAN_CACHE_DURATION = 60  # 秒 - 语音文件扫描缓存时间
+MAX_WAV_VALIDITY_CACHE = 50000  # WAV 头校验结果缓存条目上限
+OPERATOR_CATALOG_TTL = 12 * 3600  # 12小时 - PRTS 干员列表缓存时间
+VOICE_TEXT_TTL = 7 * 24 * 3600  # 7天 - PRTS 台词缓存时间
+VOICE_RECORD_TTL = 3600  # 完整资源记录缓存一小时，迁移不使用过期记录
+VOICE_RECORD_VERSION = 2  # 新增小众语言，刷新旧解析记录与台词缓存
+AVATAR_THUMB_SIZE = 96  # 管理页头像缩略图边长（像素）
+MAX_AVATAR_BATCH = 60  # 单次请求的头像数量上限
+MAX_IMPORT_MEMBERS = 160  # ZIP 导入最大文件数量
+MAX_AUDIT_ITEMS = 500  # 审计日志单次最多读取条目数
+MAX_AUDIT_LINES = MAX_AUDIT_ITEMS * 4  # 审计日志超过这么多行时截断，只保留最近 MAX_AUDIT_ITEMS 条
+PAGE_RETENTION_SECONDS = 30 * 24 * 3600  # 30天 - 管理页备份与回收站条目的保留时间
+MAX_TASK_ITEMS = 100  # 后台任务最大保留条目数
+MAX_OPERATION_PREVIEWS = 8  # 操作预览最大保留数量
+OPERATION_PREVIEW_TTL = 15 * 60  # 15分钟 - 操作预览过期时间
+ORPHAN_UPLOAD_TTL = 3600  # 1小时 - 孤儿临时文件清理时间
+
+# ============================================================
+# 匹配阈值与输入长度
+# ============================================================
+
+FUZZY_MATCH_THRESHOLD = 0.6  # 角色名称模糊匹配阈值
+MAX_TRIGGER_LENGTH = 64  # 自定义触发词最大长度
+
+# ============================================================
+# 渲染回退值
+# ============================================================
+
+UNKNOWN_LANGUAGE_COLOR = (100, 100, 100)  # 未知语言代码的标签底色
+
+# ============================================================
+# 重试配置
+# ============================================================
+
+DOWNLOAD_RETRIES = 3  # 语音下载重试次数
+DOWNLOAD_CONCURRENCY = 4  # 单个角色同时下载的语音条数
+CHARACTER_PAGE_RETRIES = 3  # 角色页请求重试次数
+RETRYABLE_PAGE_STATUSES = {429, 500, 502, 503, 504}  # 可重试的 HTTP 状态码
+
+# ============================================================
+# 版本号
+# ============================================================
+
+VOICE_RESOURCE_MAP_VERSION = 2  # 语音资源映射版本
+VOICE_INDEX_VERSION = 4  # 语音索引结构版本（写入时使用）
+LANGUAGE_ROUTING_VERSION = 3  # 重新核对旧版本被当作中文的小众语言
+SUPPORTED_VOICE_INDEX_VERSIONS = {3, 4}  # 可读取的索引版本，用于兼容旧数据
+
+# ============================================================
+# 语音资源编号映射
+# ============================================================
+# 游戏资源编号并不连续，不能用语音名称的列表位置拼接 URL。
+# 例如"编入队伍"和"任命队长"实际使用 CN_017/CN_018，
+# "问候""生日""周年庆典"实际使用 CN_042/CN_043/CN_044。
+
+VOICE_RESOURCE_IDS = {
+    "任命助理": 1,
+    "交谈1": 2,
+    "交谈2": 3,
+    "交谈3": 4,
+    "晋升后交谈1": 5,
+    "晋升后交谈2": 6,
+    "信赖提升后交谈1": 7,
+    "信赖提升后交谈2": 8,
+    "信赖提升后交谈3": 9,
+    "闲置": 10,
+    "干员报到": 11,
+    "观看作战记录": 12,
+    "精英化晋升1": 13,
+    "精英化晋升2": 14,
+    "编入队伍": 17,
+    "任命队长": 18,
+    "行动出发": 19,
+    "行动开始": 20,
+    "选中干员1": 21,
+    "选中干员2": 22,
+    "部署1": 23,
+    "部署2": 24,
+    "作战中1": 25,
+    "作战中2": 26,
+    "作战中3": 27,
+    "作战中4": 28,
+    "完成高难行动": 29,
+    "3星结束行动": 30,
+    "非3星结束行动": 31,
+    "行动失败": 32,
+    "进驻设施": 33,
+    "戳一下": 34,
+    "信赖触摸": 36,
+    "标题": 37,
+    "新年祝福": 38,
+    "问候": 42,
+    "生日": 43,
+    "周年庆典": 44,
+}
+
+# 字典插入顺序即列表显示和随机选择使用的语音顺序
+# 名称列表由资源映射派生，避免两份常量各自维护后发生错位
+VOICE_DESCRIPTIONS = list(VOICE_RESOURCE_IDS)
+
+# ============================================================
+# 语言映射
+# ============================================================
+
+LANGUAGE_MAP = {
+    "cn": {
+        "name": "中文",
+        "rank": "2",
+        "color": (46, 125, 50),
+    },
+    "jp": {
+        "name": "日语",
+        "rank": "3",
+        "color": (21, 101, 192),
+    },
+    "us": {
+        "name": "英语",
+        "rank": "4",
+        "color": (198, 40, 40),
+    },
+    "kr": {
+        "name": "韩语",
+        "rank": "5",
+        "color": (97, 97, 97),
+    },
+    "fy": {
+        "name": "方言",
+        "rank": "1",
+        "color": (230, 81, 0),
+    },
+    "it": {
+        "name": "意语",
+        "rank": "6",
+        "color": (0, 131, 143),
+    },
+    "ru": {"name": "俄语", "rank": "7", "color": (136, 80, 130)},
+    "de": {"name": "德语", "rank": "8", "color": (90, 105, 55)},
+    "es": {"name": "西班牙语", "rank": "9", "color": (190, 110, 30)},
+    "fr": {"name": "法语", "rank": "10", "color": (60, 110, 160)},
+}
+
+
+def parse_language_ranks(value: str) -> list[str]:
+    """接受旧单字符序列或逗号分隔的完整编号，保留顺序并去重。"""
+    text = str(value).strip()
+    valid = {info["rank"] for info in LANGUAGE_MAP.values()}
+    if re.search(r"[,，\s]", text):
+        ranks = re.split(r"[,，\s]+", text)
+    elif text in valid:
+        ranks = [text]
+    else:
+        ranks = list(text)
+    return list(dict.fromkeys(rank for rank in ranks if rank in valid))
+
+
+DEFAULT_LANGUAGE_PRIORITY = ("fy", "cn", "jp", "us", "kr", "it")
+DEFAULT_DOWNLOAD_LANGUAGES = ("fy", "cn", "jp")
+
+
+def normalize_languages(value) -> list[str]:
+    """语言名称/代码列表；旧数字串仅在兼容入口转换。"""
+    if isinstance(value, str):
+        ranks = parse_language_ranks(value)
+        if re.fullmatch(r"[\d,，\s]+", value):
+            rank_to_code = {info["rank"]: code for code, info in LANGUAGE_MAP.items()}
+            return [rank_to_code[rank] for rank in ranks]
+        values = re.split(r"[,，\s]+", value.strip()) if value.strip() else []
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        raise ValueError("语言配置必须是语言名称列表")
+    names = {info["name"]: code for code, info in LANGUAGE_MAP.items()}
+    result = []
+    for item in values:
+        if not isinstance(item, str):
+            raise ValueError("语言名称必须是字符串")
+        code = names.get(item, LANG_ALIAS.get(item.strip().lower()))
+        if code not in LANGUAGE_MAP:
+            raise ValueError(f"不支持的语言：{item}")
+        if code not in result:
+            result.append(code)
+    return result
+
+# 语言别名映射
+LANG_ALIAS = {
+    "中文": "cn",
+    "普通话": "cn",
+    "中": "cn",
+    "汉语": "cn",
+    "cn": "cn",
+    "2": "cn",
+    "日文": "jp",
+    "日语": "jp",
+    "日": "jp",
+    "jp": "jp",
+    "3": "jp",
+    "英文": "us",
+    "英语": "us",
+    "英": "us",
+    "us": "us",
+    "4": "us",
+    "韩文": "kr",
+    "韩语": "kr",
+    "韩": "kr",
+    "kr": "kr",
+    "5": "kr",
+    "方言": "fy",
+    "方": "fy",
+    "fy": "fy",
+    "1": "fy",
+    "意文": "it",
+    "意语": "it",
+    "意大利语": "it",
+    "意": "it",
+    "it": "it",
+    "6": "it",
+    "俄语": "ru", "俄文": "ru", "俄": "ru", "ru": "ru", "7": "ru",
+    "德语": "de", "德文": "de", "德": "de", "de": "de", "8": "de",
+    "西班牙语": "es", "西班牙文": "es", "西语": "es", "西": "es", "es": "es", "9": "es",
+    "法语": "fr", "法文": "fr", "法": "fr", "fr": "fr", "10": "fr",
+}
+
+# 常用明日方舟干员别称。键为用户输入，值为标准干员名。
+OPERATOR_ALIAS = {
+    # 白面鸮 / 阿米娅 / 能天使 / 推进之王
+    "白咕咕": "白面鸮",
+    "小驴": "阿米娅", "驴": "阿米娅",
+    "小能": "能天使",
+    "推王": "推进之王", "王小姐": "推进之王",
+    # 德克萨斯 / 拉普兰德 / 银灰 / 艾雅法拉
+    "德狗": "德克萨斯", "德狗子": "德克萨斯",
+    "拉狗": "拉普兰德", "狼狗": "拉普兰德",
+    "银老板": "银灰", "大舅哥": "银灰",
+    "小羊": "艾雅法拉",
+    # 伊芙利特 / 安洁莉娜 / 塞雷娅 / 星熊 / 煌
+    "小火龙": "伊芙利特",
+    "洁哥": "安洁莉娜", "安洁": "安洁莉娜",
+    "塞爹": "塞雷娅",
+    "熊姐": "星熊",
+    "煌喵": "煌",
+    # 陈 / 假日威龙陈 / 缄默德克萨斯 / 浊心斯卡蒂 / 归溟幽灵鲨
+    "老陈": "陈",
+    "水陈": "假日威龙陈",
+    "异德": "缄默德克萨斯", "翼德": "缄默德克萨斯",
+    "红蒂": "浊心斯卡蒂",
+    "归鲨": "归溟幽灵鲨",
+    # 令 / 异客 / 澄闪 / 纯烬艾雅法拉 / 麒麟R夜刀
+    "令姐": "令",
+    "神": "异客",
+    "粉毛": "澄闪",
+    "纯艾": "纯烬艾雅法拉",
+    "异刀": "麒麟R夜刀", "双刀": "麒麟R夜刀", "麒麟r夜刀": "麒麟R夜刀",
+    "麒麟x夜刀": "麒麟R夜刀",
+    # 耀骑士临光 / 玛恩纳 / 史尔特尔
+    "耀骑士": "耀骑士临光", "耀光": "耀骑士临光",
+    "叔叔": "玛恩纳",
+    "42": "史尔特尔", "42姐": "史尔特尔",
+}
+
+# ============================================================
+# PRTS Wiki 地址
+# ============================================================
+
+PRTS_BASE_URL = "https://prts.wiki/"
+
+# 主机白名单。子域名（如 torappu.prts.wiki）通过后缀匹配一并放行。
+PRTS_ALLOWED_HOSTS = {"prts.wiki"}
+
+# MediaWiki API 入口。请求必须带完整的浏览器请求头（含 Accept-Language），否则会被 403。
+PRTS_API_URL = PRTS_BASE_URL + "api.php"
+
+# 只包含有“语音记录”页的干员，成员页名形如“阿米娅/语音记录”
+PRTS_OPERATOR_VOICE_CATEGORY = "Category:干员语音"
+
+# 分类成员分页上限（每页 500 条），防止异常的 continue 无限循环
+PRTS_MAX_CONTINUE_PAGES = 10
+
+# 每批最多 20 个干员（语音页和头像共 40 个标题），避免 GET 地址过长
+PRTS_BATCH_TITLES = 20
+
+# 迁移时核对 CDN 文件大小的并发 HEAD 请求数
+ROUTING_HEAD_CONCURRENCY = 4
+
+# 语音页“路径”参数的语言标签（去掉皮肤括号后）-> 语言代码。
+# voice_custom 包含不同语言，必须按标签识别；未知标签仍跳过。
+PRTS_LANGUAGE_LABELS = {
+    "日语": "jp",
+    "日文": "jp",
+    "中文-普通话": "cn",
+    "中文": "cn",
+    "中文-方言": "fy",
+    "英语": "us",
+    "韩语": "kr",
+    "意大利语": "it",
+    "俄语": "ru",
+    "德语": "de",
+    "西班牙语": "es",
+    "法语": "fr",
+}
+
+# “联动”标签按资源目录判断语言
+PRTS_VOICE_FOLDERS = {
+    "voice": "jp",
+    "voice_cn": "cn",
+    "voice_en": "us",
+    "voice_kr": "kr",
+}
+
+# 语音资源 CDN 根地址
+PRTS_AUDIO_BASE_URL = "https://torappu.prts.wiki/assets/audio"
+
+# 头像文件页标题，通过 API 的 imageinfo 查询原图地址
+PRTS_AVATAR_FILE_TITLE = "文件:头像_{character}.png"
+
+# ============================================================
+# HTTP Headers
+# ============================================================
+
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/138.0.0.0 Safari/537.36"
+)
+
+DEFAULT_HEADERS = {
+    "User-Agent": DEFAULT_USER_AGENT,
+    "Referer": PRTS_BASE_URL,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    # Avoid Brotli responses because some local aiohttp runtimes cannot decode them.
+    "Accept-Encoding": "gzip, deflate",
+}

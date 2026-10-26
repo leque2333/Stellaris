@@ -1,0 +1,78 @@
+# ==========================================
+# 敏感凭据与本地工作区配置 (Secrets & Tokens)
+# ==========================================
+git_repo_config.json
+tg_monitor_config.json
+antigravity_bridge/bridge_config.json
+astrbot/data/cmd_config.json
+astrbot/data/plugins/astrbot_plugin_human_patrol/config.json
+astrbot/data/plugins/astrbot_plugin_human_patrol/state.json
+.env
+.env.*
+*.key
+*.pem
+*.token
+
+# ==========================================
+# 剥离人设卡之类特定文件 (Persona Files)
+# ==========================================
+*core_settings*.md
+*core_settings*
+*persona*.md
+*persona*.txt
+*persona*
+!agent_core/persona_template.md
+!agent_core/persona.py
+!console/backend.py
+backups/
+
+# ==========================================
+# 私人敏感档案、见闻日记与日志 (Private Archives & Logs)
+# ==========================================
+项目档案.md
+PROJECT_ARCHIVE.md
+*.log
+antigravity_bridge/*.log
+stderr.log
+stdout.log
+astrbot/data/human-world.md
+
+# ==========================================
+# 数据库与本地持久化缓存 (Databases & Caches)
+# ==========================================
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.bak*
+*.db.bak*
+
+# ==========================================
+# NapCat QQ 协议端私密数据 (QQ Sessions & Chat DB)
+# ==========================================
+napcat/
+
+# ==========================================
+# AstrBot 容器临时文件、单次排查脚本与大附件 (Temp & Attachments)
+# ==========================================
+astrbot/data/*.py
+astrbot/data/blacklist_users.json
+astrbot/data/attachments/
+astrbot/data/temp/
+astrbot/data/webchat/
+astrbot/data/site-packages/
+astrbot/data/plugin_data/
+astrbot/data/bili_console.html
+astrbot/data/agent_core
+
+# ==========================================
+# Python 运行缓存与开发环境 (Python & IDEs)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

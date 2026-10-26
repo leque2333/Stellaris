@@ -1,0 +1,7 @@
+name: astrbot_plugin_anan_bridge
+display_name: 助手反重力电脑控制桥
+desc: 让助手把主人的电脑控制与运维指令传话给反重力执行，零高额API成本安全操控宿主机。
+short_desc: 助手电脑控制传话桥。
+version: v1.0.0
+astrbot_version: ">=4.26,<5"
+author: 主人 & 反重力

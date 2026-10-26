@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>助手 · 统筹调控中枢控制台</title>
+    <style>
+        :root {
+            --bg-base: #0b0f19;
+            --bg-surface: #111827;
+            --bg-card: #1f2937;
+            --border: #374151;
+            --primary: #8b5cf6;
+            --primary-hover: #7c3aed;
+            --accent: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            line-height: 1.5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* 顶部导航与状态 */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .title-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #ddd6fe;
+        }
+
+        .badge-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .dot-pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+
+        /* 状态微卡片 */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .metric-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .metric-title {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .metric-value {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .metric-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* 选项卡容器 */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 15px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            background: var(--primary);
+            color: #ffffff;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* 布局区块 */
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+        }
+
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #c4b5fd;
+        }
+
+        /* 表单与输入项 */
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #d1d5db;
+        }
+
+        input, select, textarea {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            padding: 10px 12px;
+            font-size: 14px;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--primary);
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 280px;
+            font-family: Consolas, Monaco, monospace;
+            line-height: 1.4;
+            font-size: 13px;
+        }
+
+        /* 预设卡片选择器 */
+        .preset-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .preset-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .preset-card:hover {
+            border-color: var(--primary);
+            background: rgba(139, 92, 246, 0.1);
+        }
+
+        .preset-card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #ddd6fe;
+            margin-bottom: 4px;
+        }
+
+        .preset-card-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* 按钮与交互 */
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn:hover { background: var(--primary-hover); }
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+        .btn-outline:hover {
+            background: var(--bg-card);
+            color: var(--text-main);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        /* 提示条 */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            background: #1f2937;
+            border-left: 4px solid var(--accent);
+            border-radius: 6px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            font-size: 14px;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* 表格流水 */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部导航 -->
+        <div class="top-bar">
+            <div class="title-group">
+                <div class="title">🎭 助手 · 统筹调控中枢</div>
+                <div class="badge-live">
+                    <span class="dot-pulse"></span>
+                    <span id="sys-status">就绪 | 守护进行中</span>
+                </div>
+            </div>
+            <div style="font-size: 13px; color: var(--text-muted);" id="server-time">--:--:--</div>
+        </div>
+
+        <!-- 关键监控大盘 -->
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-title">今日调用总次数</div>
+                <div class="metric-value" id="m-today-calls">0 次</div>
+                <div class="metric-sub" id="m-today-tokens">Token: 0</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">B站发评配额进度</div>
+                <div class="metric-value" id="m-patrol-quota">0 / 0</div>
+                <div class="metric-sub" id="m-patrol-time">巡航时段: --</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">时间轴生命经历</div>
+                <div class="metric-value" id="m-memory-count">0 条</div>
+                <div class="metric-sub" id="m-master-affection">主人好感度: 90 / 100</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">当前角色卡长度</div>
+                <div class="metric-value" id="m-persona-len">0 字</div>
+                <div class="metric-sub" id="m-persona-update">更新时间: --</div>
+            </div>
+        </div>
+
+        <!-- 功能切换选项卡 -->
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('tab-persona')">🎭 角色卡统筹</button>
+            <button class="tab-btn" onclick="switchTab('tab-patrol')">🎬 B站巡检与真人参数</button>
+            <button class="tab-btn" onclick="switchTab('tab-token')">🛡️ TPM 防护与流量流水</button>
+            <button class="tab-btn" onclick="switchTab('tab-timeline')">⏳ 时间轴生命流 (Timeline)</button>
+        </div>
+
+        <!-- Tab 1: 角色卡管理 -->
+        <div id="tab-persona" class="tab-content active">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">📚 快速预设卡切换 (点击载入编辑)</div>
+                    <button class="btn btn-outline" style="padding: 6px 12px; font-size: 12px;" onclick="loadData()">🔄 刷新预设</button>
+                </div>
+                <div class="preset-grid" id="preset-list">
+                    <!-- 预设列表动态渲染 -->
+                </div>
+
+                <div class="panel-header" style="margin-top: 24px;">
+                    <div class="panel-title">✍️ 角色系统提示词 (System Prompt) 深度编辑</div>
+                    <div class="btn-group">
+                        <button class="btn btn-outline" onclick="reloadCurrentPersona()">放弃修改</button>
+                        <button class="btn" onclick="saveCurrentPersona()">💾 保存并热重载生效</button>
+                    </div>
+                </div>
+                <textarea id="persona-editor" placeholder="正在读取生效中的角色卡..."></textarea>
+                <div style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                    💡 每次保存均会自动在 <code>backups/console_backups/</code> 下生成时间戳快照，可随时追溯还原。
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 2: B站巡检配置 -->
+        <div id="tab-patrol" class="tab-content">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">⚙️ B站巡检配额与节流控制</div>
+                    <button class="btn" onclick="savePatrol()">💾 保存巡检参数</button>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>单日评论总上限 (daily_comment_limit)</label>
+                        <input type="number" id="p-daily-limit" />
+                    </div>
+                    <div class="form-group">
+                        <label>单轮会话最大评论数 (max_comments_per_session)</label>
+                        <input type="number" id="p-session-limit" />
+                    </div>
+                    <div class="form-group">
+                        <label>每次评论间隔防封节流冷却 (秒)</label>
+                        <input type="number" id="p-interval" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>主人 UID 强提醒目标</label>
+                        <input type="number" id="p-master-uid" />
+                    </div>
+                    <div class="form-group">
+                        <label>主人 QQ 号</label>
+                        <input type="text" id="p-master-qq" />
+                    </div>
+                    <div class="form-group">
+                        <label>发评最大字数门槛</label>
+                        <input type="number" id="p-body-len" />
+                    </div>
+                </div>
+                <div class="form-group" style="margin-bottom: 16px;">
+                    <label>搜索关键词 (以逗号分隔)</label>
+                    <input type="text" id="p-keywords" />
+                </div>
+                <div class="form-group">
+                    <label>必中关键词池 (命中指定数目才触发互动)</label>
+                    <input type="text" id="p-target-pool" />
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 4: 自传式时间轴生命流 -->
+        <div id="tab-timeline" class="tab-content">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">⏳ 助手连续自传式生命流 (LifeStream)</div>
+                    <button class="btn btn-outline" style="padding: 6px 12px; font-size: 12px;" onclick="loadData()">🔄 刷新时间轴</button>
+                </div>
+                <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+                    将各模块（B站拟真巡航、QQ拟人对话、宿主机PC反重力操作、Telegram交互）汇总为一条连续时间轴，赋予助手人类般的前后因果与时序连续记忆。
+                </div>
+                <div id="timeline-list">
+                    <!-- 动态时间轴流 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 3: TPM 防护与流水 -->
+        <div id="tab-token" class="tab-content">
+            <div class="panel">
+                <div class="panel-header">
+                    <div class="panel-title">🛡️ 流量防盗刷与 TPM 报警阈值</div>
+                    <button class="btn" onclick="saveTokenGuard()">💾 保存护栏配置</button>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>单日最大 Token 熔断阈值</label>
+                        <input type="number" id="t-daily-threshold" />
+                    </div>
+                    <div class="form-group">
+                        <label>2分钟突发爆发调用封顶限制 (次)</label>
+                        <input type="number" id="t-burst-limit" />
+                    </div>
+                    <div class="form-group">
+                        <label>单次回复最大 Output Token 异常阈值</label>
+                        <input type="number" id="t-spike-threshold" />
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>消息向外平滑发送间隔 (秒，防被封)</label>
+                        <input type="number" step="0.1" id="t-msg-interval" />
+                    </div>
+                    <div class="form-group">
+                        <label>巡检巡查间隔 (秒)</label>
+                        <input type="number" id="t-check-interval" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title" style="margin-bottom: 16px;">📊 最近 10 次大模型调用真实流水</div>
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>序号</th>
+                                <th>模型</th>
+                                <th>输入 Token</th>
+                                <th>缓存命中 Token</th>
+                                <th>输出 Token</th>
+                                <th>时间 (UTC)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="token-table-body">
+                            <!-- 动态表格 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 提示条 -->
+    <div id="toast" class="toast">操作已成功</div>
+
+    <script>
+        let globalConfig = null;
+        let globalPresets = [];
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+
+        async function loadData() {
+            try {
+                const res = await fetch('/api/overview');
+                const data = await res.json();
+                
+                // 顶部状态
+                document.getElementById('server-time').innerText = data.summary.server_time;
+                document.getElementById('m-memory-count').innerText = data.summary.memory_count + ' 条';
+                document.getElementById('m-profile-count').innerText = '深度画像: ' + data.summary.user_profile_count + ' 个';
+
+                // Token 统计
+                const todayTokens = data.tokens.today.total_tokens.toLocaleString();
+                document.getElementById('m-today-calls').innerText = data.tokens.today.calls + ' 次';
+                document.getElementById('m-today-tokens').innerText = `Token: ${todayTokens} (输出: ${data.tokens.today.output_tokens})`;
+
+                // 巡检配置大盘
+                const pBili = data.patrol_config.bilibili || {};
+                document.getElementById('m-patrol-quota').innerText = `上限: ${pBili.daily_comment_limit || 0} 条/日`;
+                const hours = (pBili.active_hours || []).map(h => `${h[0]}~${h[1]}点`).join(', ');
+                document.getElementById('m-patrol-time').innerText = '巡航时段: ' + (hours || '全天');
+
+                // 角色卡
+                document.getElementById('m-persona-len').innerText = (data.current_persona.length || 0) + ' 字';
+                document.getElementById('m-persona-update').innerText = '生效于: ' + (data.current_persona.updated_at || '未知');
+                document.getElementById('persona-editor').value = data.current_persona.system_prompt || '';
+
+                // 渲染预设
+                globalPresets = data.presets || [];
+                const pContainer = document.getElementById('preset-list');
+                pContainer.innerHTML = '';
+                globalPresets.forEach((p, idx) => {
+                    const card = document.createElement('div');
+                    card.className = 'preset-card';
+                    card.innerHTML = `
+                        <div class="preset-card-title">${p.name}</div>
+                        <div class="preset-card-desc">文件: ${p.filename} (${p.length} 字)</div>
+                    `;
+                    card.onclick = () => {
+                        document.getElementById('persona-editor').value = p.content;
+                        showToast(`已将【${p.name}】载入编辑器，点击保存即可热重载生效！`);
+                    };
+                    pContainer.appendChild(card);
+                });
+
+                // 填充巡检表单
+                globalConfig = data.patrol_config;
+                document.getElementById('p-daily-limit').value = pBili.daily_comment_limit || 16;
+                document.getElementById('p-session-limit').value = pBili.max_comments_per_session || 8;
+                document.getElementById('p-interval').value = pBili.min_comment_interval_seconds || 360;
+                document.getElementById('p-master-uid').value = pBili.master_uid || '';
+                document.getElementById('p-master-qq').value = pBili.master_qq || '';
+                document.getElementById('p-body-len').value = pBili.max_comment_body_len || 40;
+                document.getElementById('p-keywords').value = (pBili.keywords || []).join(', ');
+                document.getElementById('p-target-pool').value = (pBili.target_keyword_pool || []).join(', ');
+
+                // 填充 Token 护栏
+                const pToken = data.patrol_config.token_monitor || {};
+                document.getElementById('t-daily-threshold').value = pToken.max_daily_token_threshold || 1500000;
+                document.getElementById('t-burst-limit').value = pToken.max_burst_calls_per_2min || 15;
+                document.getElementById('t-spike-threshold').value = pToken.max_output_token_spike || 500;
+                document.getElementById('t-msg-interval').value = pToken.outbound_msg_interval_seconds || 5.0;
+                document.getElementById('t-check-interval').value = pToken.check_interval_seconds || 180;
+
+                // 更新主人好感度与时间轴总数
+                if (data.summary.master_affection !== undefined) {
+                    document.getElementById('m-master-affection').innerText = `主人好感度: ${data.summary.master_affection} / 100`;
+                }
+                const tlCount = data.summary.timeline_count || data.summary.memory_count || 0;
+                document.getElementById('m-memory-count').innerText = `${tlCount} 条经历`;
+
+                // 填充自传式时间轴生命流
+                const timelineContainer = document.getElementById('timeline-list');
+                if (timelineContainer && data.timeline) {
+                    timelineContainer.innerHTML = '';
+                    if (data.timeline.length === 0) {
+                        timelineContainer.innerHTML = '<div style="color: var(--text-muted); padding: 20px; text-align: center;">暂无时间轴事件记录</div>';
+                    } else {
+                        data.timeline.forEach(ev => {
+                            let badgeColor = '#8b5cf6';
+                            let moduleName = '交互经历';
+                            let icon = '💬';
+                            if (ev.source_module === 'bilibili_patrol') {
+                                badgeColor = '#06b6d4';
+                                moduleName = 'B站巡视';
+                                icon = '🎬';
+                            } else if (ev.source_module === 'pc_bridge') {
+                                badgeColor = '#10b981';
+                                moduleName = 'PC控制';
+                                icon = '💻';
+                            } else if (ev.source_module === 'qq_chat') {
+                                badgeColor = '#f59e0b';
+                                moduleName = 'QQ对话';
+                                icon = '💬';
+                            }
+
+                            const item = document.createElement('div');
+                            item.style = `border-left: 3px solid ${badgeColor}; padding: 12px 16px; margin-bottom: 12px; background: rgba(31, 41, 55, 0.6); border-radius: 0 8px 8px 0; border: 1px solid var(--border); border-left: 3px solid ${badgeColor};`;
+                            item.innerHTML = `
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                    <span style="font-size: 13px; font-weight: 600; color: ${badgeColor};">${icon} ${moduleName} · ${ev.actor_name || '主体'}</span>
+                                    <span style="font-size: 12px; color: #94a3b8;">${ev.time_str}</span>
+                                </div>
+                                <div style="font-size: 14px; color: #f3f4f6; line-height: 1.6;">${ev.narrative}</div>
+                            `;
+                            timelineContainer.appendChild(item);
+                        });
+                    }
+                }
+
+                // 填充流水表格
+                const tableBody = document.getElementById('token-table-body');
+                tableBody.innerHTML = '';
+                (data.tokens.recent_calls || []).forEach(r => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>#${r.id}</td>
+                        <td style="color: #a78bfa; font-weight: 600;">${r.model}</td>
+                        <td>${r.input.toLocaleString()}</td>
+                        <td style="color: #34d399;">${r.cached.toLocaleString()}</td>
+                        <td style="color: #fbbf24;">${r.output.toLocaleString()}</td>
+                        <td style="color: #94a3b8;">${r.time}</td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('sys-status').innerText = '连接中断';
+            }
+        }
+
+        async function reloadCurrentPersona() {
+            const res = await fetch('/api/persona');
+            const data = await res.json();
+            document.getElementById('persona-editor').value = data.system_prompt || '';
+            showToast('已重置为当前生效的角色卡');
+        }
+
+        async function saveCurrentPersona() {
+            const content = document.getElementById('persona-editor').value;
+            if (!content.trim()) {
+                alert('角色卡内容不能为空！');
+                return;
+            }
+            const res = await fetch('/api/persona', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ system_prompt: content })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`✅ 角色卡已热生效！字数: ${data.length}`);
+                loadData();
+            } else {
+                alert('保存失败: ' + (data.error || '未知错误'));
+            }
+        }
+
+        async function savePatrol() {
+            if (!globalConfig) return;
+            globalConfig.bilibili.daily_comment_limit = parseInt(document.getElementById('p-daily-limit').value);
+            globalConfig.bilibili.max_comments_per_session = parseInt(document.getElementById('p-session-limit').value);
+            globalConfig.bilibili.min_comment_interval_seconds = parseInt(document.getElementById('p-interval').value);
+            globalConfig.bilibili.master_uid = parseInt(document.getElementById('p-master-uid').value);
+            globalConfig.bilibili.master_qq = document.getElementById('p-master-qq').value;
+            globalConfig.bilibili.max_comment_body_len = parseInt(document.getElementById('p-body-len').value);
+            globalConfig.bilibili.keywords = document.getElementById('p-keywords').value.split(',').map(s => s.trim()).filter(Boolean);
+            globalConfig.bilibili.target_keyword_pool = document.getElementById('p-target-pool').value.split(',').map(s => s.trim()).filter(Boolean);
+
+            const res = await fetch('/api/patrol_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(globalConfig)
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('✅ B站巡检配置已成功保存！');
+                loadData();
+            }
+        }
+
+        async function saveTokenGuard() {
+            if (!globalConfig) return;
+            globalConfig.token_monitor.max_daily_token_threshold = parseInt(document.getElementById('t-daily-threshold').value);
+            globalConfig.token_monitor.max_burst_calls_per_2min = parseInt(document.getElementById('t-burst-limit').value);
+            globalConfig.token_monitor.max_output_token_spike = parseInt(document.getElementById('t-spike-threshold').value);
+            globalConfig.token_monitor.outbound_msg_interval_seconds = parseFloat(document.getElementById('t-msg-interval').value);
+            globalConfig.token_monitor.check_interval_seconds = parseInt(document.getElementById('t-check-interval').value);
+
+            const res = await fetch('/api/patrol_config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(globalConfig)
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast('✅ TPM 防撑爆护栏参数已生效！');
+                loadData();
+            }
+        }
+
+        // 初始化加载并每 15 秒轻量同步一次大盘
+        loadData();
+        setInterval(loadData, 15000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+    "sessdata": "",
+    "proxy": "",
+    "bangumi_token": "",
+    "interval_secs": 300,
+    "task_gap_secs": 20,
+    "reconnect_silent": false,
+    "rai": true,
+    "renderer_template": "template_2",
+    "node": false,
+    "enable_parse_miniapp": false,
+    "enable_parse_BV": false,
+    "dynamic_limit": 5,
+    "recent_dynamic_cache": 4,
+    "plain_push_template": "",
+    "plain_push_forward_template": "",
+    "enable_ai_summary": false,
+    "ai_summary_prompt": ""
+}

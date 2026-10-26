@@ -1,0 +1,7 @@
+name: astrbot_plugin_memory
+display_name: 高级三层长效记忆库
+desc: 全自动三层记忆系统：用户画像偏好库 + 向量化情景经历检索 + 后台静默事实抽取。
+short_desc: 高级长效记忆与个性化画像。
+version: v1.0.0
+astrbot_version: ">=4.26,<5"
+author: Admin

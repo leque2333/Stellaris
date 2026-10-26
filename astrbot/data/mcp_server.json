@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "you-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@youdotcom-oss/mcp"
+      ],
+      "env": {
+        "YDC_API_KEY": "ydc-sk-6a3e29a8f91bc801-AmdYNHeuCcVaOQFSC7bikDjLTLwwtCkb-494539cd",
+        "HTTP_PROXY": "http://192.168.65.254:7897",
+        "HTTPS_PROXY": "http://192.168.65.254:7897"
+      }
+    },
+    "image-generator": {
+      "command": "python",
+      "args": [
+        "/AstrBot/data/mcp_servers/image_generator/server.py"
+      ]
+    }
+  }
+}

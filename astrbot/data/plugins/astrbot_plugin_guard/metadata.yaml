@@ -1,0 +1,7 @@
+name: astrbot_plugin_guard
+display_name: 消息守卫与长度过滤
+desc: 过滤群聊长消息（超过200字不回复）及保护逻辑。
+short_desc: 群聊超过200字不回复。
+version: v1.0.0
+astrbot_version: ">=4.26,<5"
+author: Admin

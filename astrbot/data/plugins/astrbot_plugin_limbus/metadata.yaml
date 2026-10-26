@@ -1,0 +1,7 @@
+name: astrbot_plugin_limbus
+display_name: 边狱公司数据查询
+desc: 基于都市零协会官方汉化数据的边狱公司（Limbus Company）人格、罪人技能、硬币效果、被动查询插件。
+short_desc: 边狱公司人格与技能数据查询。
+version: v1.0.0
+astrbot_version: ">=4.26,<5"
+author: Admin

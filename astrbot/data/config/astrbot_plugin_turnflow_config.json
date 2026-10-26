@@ -1,0 +1,35 @@
+﻿{
+  "enable": true,
+  "debounce_time": 2.5,
+  "enable_dynamic_debounce": true,
+  "min_debounce_time": 1.5,
+  "max_debounce_time": 6.0,
+  "continuation_extension": 3.0,
+  "fast_complete_comma_count": 2,
+  "fast_complete_min_chars": 30,
+  "fast_complete_delay": 1.5,
+  "enable_recall_filter": true,
+  "command_prefixes": [
+    "/"
+  ],
+  "merge_separator": "\n",
+  "enable_forward_analysis": true,
+  "forward_prefix": "",
+  "enable_typing_detection": true,
+  "max_typing_wait": 30.0,
+  "max_collection_wait": 30.0,
+  "enable_ordered_image_caption": false,
+  "caption_timeout": 20.0,
+  "enable_humanoid_recall": true,
+  "enable_reasoning_content_fallback": false,
+  "recall_grace_seconds": 20.0,
+  "history_rollback_delays": [
+    0.2,
+    1.0,
+    3.0
+  ],
+  "invalidated_turn_retention_seconds": 180.0,
+  "enable_qq_card_parsing": true,
+  "qq_card_disabled_platforms": [],
+  "qq_card_prompt": "[卡片链接]"
+}
