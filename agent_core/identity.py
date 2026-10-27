@@ -1,66 +1,78 @@
 # -*- coding: utf-8 -*-
 """
 助手智能体核心 (Agent Core) - 统一身份映射系统 (Identity Resolver)
-打通跨平台实体绑定 (QQ / B站 / Telegram / 控制台 / 宿主机PC)，消除平台ID硬编码
+通用实体身份解析与认主中枢，支持自定义配置与环境变量覆盖
 """
 
 import os
-from typing import Dict, Optional, Tuple
+from typing import Optional, Set, Tuple
 
-# 主人 (Master) 跨平台绑定凭证池 (优先环境变量，支持灵活配置)
+# 主人 (Master) 身份凭证池 (优先环境变量，支持自定义覆盖)
+MASTER_ID = os.getenv("MASTER_ID", "master")
+MASTER_NAME = os.getenv("MASTER_NAME", "主人")
 MASTER_QQ = os.getenv("MASTER_QQ", "1000000001")
-MASTER_BILI_UID = os.getenv("MASTER_BILI_UID", "3000000002")
-MASTER_TG_IDS = {os.getenv("MASTER_TG_ID", "master"), "master", "leque"}
+MASTER_ALIASES: Set[str] = {
+    x.strip().lower()
+    for x in os.getenv("MASTER_ALIASES", f"master,admin,leque,{MASTER_QQ},3000000002").split(",")
+    if x.strip()
+}
 
-# 智能体自身跨平台账号凭证
-ANAN_QQ = os.getenv("BOT_QQ", "1000000002")
-ANAN_BILI_UID = os.getenv("BOT_BILI_UID", "3000000001")
+# 智能体自身 (Self) 身份凭证池
+BOT_NAME = os.getenv("BOT_NAME", "助手")
+BOT_ALIASES: Set[str] = {
+    x.strip().lower()
+    for x in os.getenv("BOT_ALIASES", "self,anan,bot,1000000002,3000000001").split(",")
+    if x.strip()
+}
 
 
 class IdentityResolver:
     """
-    统一实体身份解析器
+    通用实体身份解析器
     """
-    @staticmethod
+    @classmethod
     def resolve_actor(
+        cls,
         platform: str,
         platform_user_id: str,
         display_name: Optional[str] = None
     ) -> Tuple[str, str, str]:
         """
-        根据平台与原生用户ID，统一解析为标准智能体实体
+        统一解析为标准智能体实体
         返回: (actor_id, actor_name, role_type)
         - actor_id: "master" | "self" | "user_{id}"
-        - actor_name: 展示昵称 (如 "主人", "助手", 或原名)
+        - actor_name: 展示昵称
         - role_type: "admin" | "self" | "member"
         """
         raw_id = str(platform_user_id or "").strip()
+        low_id = raw_id.lower()
 
-        # 1. 判定是否为主人 (主人)
-        if (
-            (platform in ("qq", "onebot") and raw_id == MASTER_QQ)
-            or (platform == "bilibili" and raw_id == MASTER_BILI_UID)
-            or (platform == "telegram" and raw_id in MASTER_TG_IDS)
-            or raw_id in ("master", "leque", "admin")
-        ):
-            return "master", (display_name or "主人"), "admin"
+        # 1. 判定是否为主人 (Master)
+        if low_id in MASTER_ALIASES:
+            return "master", (display_name or MASTER_NAME), "admin"
 
-        # 2. 判定是否为助手自身
-        if (
-            (platform in ("qq", "onebot") and raw_id == ANAN_QQ)
-            or (platform == "bilibili" and raw_id == ANAN_BILI_UID)
-            or raw_id in ("self", "anan")
-        ):
-            return "self", (display_name or "助手"), "self"
+        # 2. 判定是否为智能体自身 (Self)
+        if low_id in BOT_ALIASES:
+            return "self", (display_name or BOT_NAME), "self"
 
-        # 3. 其他群友/普通访客
+        # 3. 其他访客/交互对象
         name = display_name or f"访客_{raw_id[-4:] if len(raw_id) >= 4 else raw_id}"
         return f"user_{raw_id}", name, "member"
 
-    @staticmethod
-    def get_master_qq() -> str:
+    @classmethod
+    def is_master(cls, actor_id: str) -> bool:
+        if not actor_id:
+            return False
+        return str(actor_id).strip().lower() in MASTER_ALIASES
+
+    @classmethod
+    def get_master_id(cls) -> str:
+        return MASTER_ID
+
+    @classmethod
+    def get_master_qq(cls) -> str:
         return MASTER_QQ
 
-    @staticmethod
-    def is_master(actor_id: str) -> bool:
-        return actor_id in ("master", MASTER_QQ)
+    @classmethod
+    def get_master_name(cls) -> str:
+        return MASTER_NAME

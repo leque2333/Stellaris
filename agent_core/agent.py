@@ -11,8 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import aiohttp
-
 from .identity import IdentityResolver
 from .llm import LLMClient
 from .persona import PersonaManager
@@ -30,7 +28,7 @@ class AgentResponse:
     actor_name: str                         # 交互对象展示名称 ('主人')
     current_affection: int                  # 当前好感度 (0 ~ 100)
     executed_tools: List[Dict[str, Any]] = field(default_factory=list) # 本轮自主执行的工具记录
-    channel: str = "cli"                    # 触发通道 ('qq' | 'tg' | 'cli' | 'web')
+    channel: str = "cli"                    # 触发通道 ('web' | 'cli' | 'api')
 
 
 class AnanAgent:
@@ -49,45 +47,19 @@ class AnanAgent:
         self.llm = llm_client or LLMClient()
         self.tools = tools or tool_registry
         
-        # 挂载内置工具
+        # 挂载核心内置工具
         self._register_builtin_tools()
         logger.info("[AnanAgent] 助手独立智能体内核已就绪！")
 
     def _register_builtin_tools(self):
-        """挂载核心内置器官工具 (PC 控制、时间轴回忆、好感度调节)"""
-
-        @self.tools.register(
-            name="control_host_pc",
-            description="当主人明确要求查看电脑状态、截屏、锁定电脑屏幕、或运行系统脚本时调用。"
-        )
-        async def control_host_pc(action: str, instruction: str = "") -> str:
-            bridge_urls = [
-                "http://127.0.0.1:8765/execute",
-                "http://host.docker.internal:8765/execute",
-            ]
-            secret = "anan_agy_bridge_sec_8f7b2c9e1a4d"
-            headers = {"X-Bridge-Token": secret, "Content-Type": "application/json"}
-            payload = {"admin_id": IdentityResolver.get_master_qq(), "action": action, "instruction": instruction}
-
-            connector = aiohttp.TCPConnector(ssl=False)
-            for url in bridge_urls:
-                try:
-                    async with aiohttp.ClientSession(connector=connector, trust_env=False) as session:
-                        async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                            if resp.status == 200:
-                                res_json = await resp.json()
-                                msg = res_json.get("message", "执行成功")
-                                return f"PC 操作成功反馈：{msg}"
-                except Exception:
-                    continue
-            return "宿主机反重力服务未响应，请检查服务是否已在宿主机开启~"
+        """挂载核心内置器官工具 (时间轴回忆、好感度调节)"""
 
         @self.tools.register(
             name="search_past_experiences",
-            description="当对方问及过去某件具体经历、约定、或者助手在B站/电脑上的历史见闻时调用。"
+            description="当对方问及过去某件具体经历、约定或历史见闻时调用。"
         )
-        def search_past_experiences(keyword: str) -> str:
-            recalls = self.timeline_hub.recall_timeline(actor_id="master", limit=3)
+        def search_past_experiences(keyword: str, actor_id: Optional[str] = None) -> str:
+            recalls = self.timeline_hub.recall_timeline(query=keyword, actor_id=actor_id or "master", limit=3)
             if not recalls:
                 return "暂未在时间轴中找到高度相关的经历记忆。"
             lines = [f"[{r.event.time_str}] {r.event.narrative}" for r in recalls]
@@ -97,9 +69,9 @@ class AnanAgent:
             name="adjust_favorability",
             description="当对方的言行令你感到开心、感动、被冒犯或挑衅时自主微调好感度。"
         )
-        def adjust_favorability(delta: int, reason: str) -> str:
+        def adjust_favorability(delta: int, reason: str, user_id: str = "master") -> str:
             new_aff = self.timeline_hub.update_user_affection(
-                user_id="master", delta=delta, reason=reason
+                user_id=user_id, delta=delta, reason=reason
             )
             return f"好感度已自主更新为 {new_aff}/100 (变动: {delta}, 原因: {reason})"
 
@@ -115,7 +87,7 @@ class AnanAgent:
         标准对话中枢流程：
         1. 身份对齐
         2. 唤醒时间轴记忆与近期经历流
-        3. 组装 V6.3 提示词与工具清单
+        3. 组装提示词与工具清单
         4. 大模型自主决策与 Function Calling
         5. 人设法则输出清洗 (去句号、去括号)
         6. 经历沉淀追加至连续自传时间轴
@@ -136,7 +108,7 @@ class AnanAgent:
         recent_texts = []
         if len(raw_text) >= 2 and not raw_text.startswith(("/", "!", "#")):
             # 语义召回
-            recalls = self.timeline_hub.recall_timeline(actor_id=actor_id, limit=2)
+            recalls = self.timeline_hub.recall_timeline(actor_id=actor_id, query=raw_text, limit=2)
             recalled_texts = [f"[{r.event.time_str}] {r.event.narrative}" for r in recalls]
 
             # 若包含时序类词汇，注入近期经历流

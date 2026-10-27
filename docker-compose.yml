@@ -1,73 +1,30 @@
-name: qq-robot
+name: anan-agent-core
 
 services:
-  napcat:
-    image: mlikiowa/napcat-docker:latest
-    container_name: napcat
-    hostname: DESKTOP-ABIN5FH
-    mac_address: "08:bf:b8:35:0b:c5"
-    dns:
-      - 119.29.29.29
-      - 223.5.5.5
-    restart: unless-stopped
-    ports:
-      - "6099:6099" # NapCat WebUI 管理与扫码登录
-      - "3001:3001" # OneBot v11 正向 WebSocket
-    environment:
-      - ACCOUNT=1000000002
-      - NAPCAT_QUICK_ACCOUNT=1000000002
-      - WS_PORT=3001
-      - HTTP_PORT=3000
-      - WEBUI_PORT=6099
-      - NAPCAT_GID=0
-      - NAPCAT_UID=0
-      - TZ=Asia/Shanghai
-      - LANG=zh_CN.UTF-8
-      - LANGUAGE=zh_CN:zh
-      - LC_ALL=zh_CN.UTF-8
-    volumes:
-      - ./napcat/config:/app/napcat/config
-      - ./napcat/qq:/app/.config/QQ
-    networks:
-      - bot-net
-
-  astrbot:
-    image: soulter/astrbot:latest
-    container_name: astrbot
-    restart: unless-stopped
-    ports:
-      - "6185:6185" # AstrBot Web 管理控制台
-    environment:
-      - HTTP_PROXY=http://192.168.65.254:7897
-      - HTTPS_PROXY=http://192.168.65.254:7897
-      - NO_PROXY=localhost,127.0.0.1,napcat,astrbot,host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - ./astrbot/data:/AstrBot/data
-    networks:
-      - bot-net
-    depends_on:
-      - napcat
-
-  bot-console:
+  agent-core:
     build:
-      context: ./console
+      context: .
       dockerfile: Dockerfile
-    container_name: bot-console
+    container_name: anan-agent-core
     restart: unless-stopped
     ports:
-      - "8890:8890"
+      - "18890:18890" # 极简控制台网页端口
+      - "18888:18888" # 智能体内核对外统一 API / 调控端口 (备用)
     environment:
-      - ROBOT_BASE_DIR=/workspace
-      - ASTRBOT_DATA_DIR=/workspace/astrbot/data
+      - CONSOLE_PORT=18890
+      - ROBOT_BASE_DIR=/app
+      - MEMORY_DB_PATH=/app/data/memory.db
+      - PERSONA_FILE_PATH=/app/data/anan_persona.md
       - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
     volumes:
-      - .:/workspace
+      # 持久化挂载记忆库与人设文件，不粘合任何 QQ / B站 等具体下游业务
+      - ./data:/app/data
+      - ./backups:/app/backups
     networks:
-      - bot-net
+      - anan-net
 
 networks:
-  bot-net:
+  anan-net:
     driver: bridge
-    name: qq-bot-net
+    name: anan-agent-net

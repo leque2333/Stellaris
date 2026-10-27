@@ -14,11 +14,11 @@ import aiohttp
 
 logger = logging.getLogger("AgentLLM")
 
-# 尝试自动定位 AstrBot cmd_config.json 获取凭据与代理
+# 自动定位项目模型与凭据配置
+BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE_CANDIDATES = [
-    Path("/AstrBot/data/cmd_config.json"),
-    Path(__file__).resolve().parent.parent.parent / "astrbot" / "data" / "cmd_config.json",
-    Path("d:/机器人/astrbot/data/cmd_config.json"),
+    BASE_DIR / "data" / "models_config.json",
+    BASE_DIR / "data" / "compute_providers.json",
 ]
 
 
@@ -41,51 +41,29 @@ class LLMClient:
         self.proxy = proxy or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
         self.api_base = api_base.rstrip("/")
         
-        # 若未显式传入配置，尝试从 cmd_config.json 自动提取
+        # 若未显式传入配置，尝试从统一配置中自动提取
         if not self.api_key:
             self._load_from_config()
 
     def _load_from_config(self):
-        is_docker = Path("/.dockerenv").exists()
         for p in CONFIG_FILE_CANDIDATES:
             if p.exists():
                 try:
                     with open(p, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
-                    # 提取 key 与 proxy
-                    for ps in cfg.get("provider_sources", []):
-                        raw_k = ps.get("key") or ps.get("api_key")
-                        if raw_k:
-                            if isinstance(raw_k, list) and raw_k:
-                                self.api_key = str(raw_k[0]).strip()
-                            else:
-                                self.api_key = str(raw_k).strip()
-                            if ps.get("api_base"):
-                                self.api_base = ps.get("api_base").rstrip("/")
-                            
-                            # 优先从该 provider_source 读取代理配置
-                            if ps.get("proxy"):
-                                prx = ps.get("proxy")
-                                if not is_docker and ("192.168.65.254" in prx or "host.docker.internal" in prx):
-                                    self.proxy = "http://127.0.0.1:7897"
-                                else:
-                                    self.proxy = prx
-                            break
-
-                    # 全局代理 fallback
-                    if not self.proxy and cfg.get("http_proxy"):
-                        raw_proxy = cfg.get("http_proxy")
-                        if not is_docker and ("host.docker.internal" in raw_proxy or "192.168.65.254" in raw_proxy):
-                            self.proxy = "http://127.0.0.1:7897"
-                        else:
-                            self.proxy = raw_proxy
-
-                    # 若依然没有代理且运行在宿主机，默认尝试本地 Clash 7897
-                    if not self.proxy and not is_docker:
-                        self.proxy = "http://127.0.0.1:7897"
-
-                    logger.info(f"[LLMClient] 成功加载 Gemini 凭证 (Proxy: {self.proxy})")
-                    return
+                    # 从 compute_providers.json 提取
+                    provs = cfg.get("providers", {})
+                    if "google_gemini_official" in provs:
+                        k = provs["google_gemini_official"].get("api_key")
+                        if k and k != "none":
+                            self.api_key = k
+                            return
+                    # 从 models_config.json api_pool 提取
+                    for item in cfg.get("api_pool", []):
+                        k = item.get("key") or item.get("api_key")
+                        if k:
+                            self.api_key = k
+                            return
                 except Exception as e:
                     logger.debug(f"[LLMClient] 读取配置 {p} 失败: {e}")
 
@@ -104,7 +82,7 @@ class LLMClient:
         返回: (final_text, executed_tools_log)
         """
         if not self.api_key:
-            return "（提示：未检测到有效 Gemini API Key，请配置 cmd_config.json 或 GEMINI_API_KEY）", []
+            return "（提示：未检测到有效大模型 API Key，请配置 models_config.json 或环境变量）", []
 
         url = f"{self.api_base}/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         executed_tool_logs: List[Dict[str, Any]] = []

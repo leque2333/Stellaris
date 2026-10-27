@@ -9,9 +9,9 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# 寻找人设卡物理文件
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_PERSONA_FILE = BASE_DIR / "anan_core_settings_v5_3.md"
+# 寻找人设卡物理文件（支持位于项目根目录下的设定集文件）
+BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_PERSONA_FILE = BASE_DIR / "data" / "anan_persona.md"
 
 
 class PersonaManager:
@@ -27,23 +27,23 @@ class PersonaManager:
         """读取基底人设卡配置（优先指定人设文件，降级模板人设）"""
         candidate_paths = [
             self.persona_path,
+            BASE_DIR / "data" / "anan_persona.md",
+            BASE_DIR / "anan_core_settings_v5_3.md",
             Path(__file__).parent / "persona_template.md",
         ]
         for p in candidate_paths:
-            if p and p.exists():
+            if p and Path(p).exists():
                 try:
                     with open(p, "r", encoding="utf-8") as f:
-                        self._cached_prompt = f.read().strip()
-                    if self._cached_prompt:
+                        content = f.read().strip()
+                    if content and content != "你是一个严谨高效的智能体助手。":
+                        self._cached_prompt = content
                         return
                 except Exception:
                     pass
         
-        # 降级备用基底人设
-        self._cached_prompt = (
-            "你是助手（An'an），真实随性、毒舌傲娇、追求省力、眼光毒辣的天才少女。\n"
-            "语言规则：句末绝不带句号（。），只输出纯粹口语台词，严禁任何括号神态描写，保持从容自然。"
-        )
+        # 纯框架降级：默认为空，由使用者在控制台或文件中自由定义
+        self._cached_prompt = ""
 
     def get_base_prompt(self) -> str:
         return self._cached_prompt
@@ -108,19 +108,46 @@ class PersonaManager:
     @staticmethod
     def post_process_response(text: str) -> str:
         """
-        遵循助手人设法则的输出清洗：
-        1. 剥离任何括号描写（神态、动作、心理说明）
+        遵循助手人设法则的输出清洗（带代码块与链接防护罩）：
+        1. 剥离任何剧本括号神态动作描写
         2. 彻底剔除句末句号（。）
-        3. 消除感叹词「啦」「呀」与粗俗「搞起」
+        3. 严密保护代码块参数与Markdown链接，绝不破坏编程语法
         """
-        cleaned = text.strip()
+        if not text:
+            return ""
+        raw = str(text).strip()
 
-        # 移除中英文括号及其包含的舞台说明 (例: "（伸了个懒腰）今天好累" -> "今天好累")
-        cleaned = re.sub(r"（[^）]*）", "", cleaned)
-        cleaned = re.sub(r"\([^)]*\)", "", cleaned)
+        # 1. 保护多行代码块 ```...``` 与 行内代码 `...`
+        code_snippets = []
+        def _save_code(m):
+            code_snippets.append(m.group(0))
+            return f"__CODE_SNIPPET_{len(code_snippets)-1}__"
 
-        # 句末绝不带句号
+        masked = re.sub(r"```[\s\S]*?```", _save_code, raw)
+        masked = re.sub(r"`[^`\r\n]+`", _save_code, masked)
+
+        # 2. 保护 Markdown 链接 [text](url)
+        md_links = []
+        def _save_link(m):
+            md_links.append(m.group(0))
+            return f"__MD_LINK_{len(md_links)-1}__"
+
+        masked = re.sub(r"\[[^\]]+\]\([^\)]+\)", _save_link, masked)
+
+        # 3. 剥离中文括号舞台神态描写
+        cleaned = re.sub(r"（[^）]*）", "", masked)
+        # 剥离包含中文/动作词的英文括号神态说明
+        cleaned = re.sub(r"\([^\)]*[一-龥][^\)]*\)", "", cleaned)
+
+        # 4. 句末绝无句号法则
         cleaned = re.sub(r"。+$", "", cleaned.strip())
-        cleaned = re.sub(r"(?<!\.)\.(?!\.)$", "", cleaned).rstrip()
+        if not cleaned.endswith("__"):
+            cleaned = re.sub(r"(?<!\.)\.(?!\.)$", "", cleaned).rstrip()
+
+        # 5. 无损还原 Markdown 链接与代码块
+        for i, link in enumerate(md_links):
+            cleaned = cleaned.replace(f"__MD_LINK_{i}__", link)
+        for i, code in enumerate(code_snippets):
+            cleaned = cleaned.replace(f"__CODE_SNIPPET_{i}__", code)
 
         return cleaned.strip()

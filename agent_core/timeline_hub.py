@@ -22,19 +22,9 @@ from .models import RecallResult, TimelineEvent, UserProfile, get_cst_now_str
 
 def _resolve_default_db_path() -> Path:
     if os.name != "nt" and Path("/.dockerenv").exists():
-        return Path("/AstrBot/data/memory.db")
-    
-    # 宿主机或独立运行环境下查找
+        return Path("/app/data/memory.db")
     base = Path(__file__).resolve().parent.parent
-    candidates = [
-        base / "astrbot" / "data" / "memory.db",
-        base / "data" / "memory.db",
-        base / "memory.db",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return base / "astrbot" / "data" / "memory.db"
+    return base / "data" / "memory.db"
 
 DEFAULT_DB_PATH = _resolve_default_db_path()
 
@@ -94,6 +84,23 @@ class TimelineHub:
                 affection_history TEXT DEFAULT '[]'
             );
             """)
+            # 3. 统一 Token 账本与大模型交互消耗流水表
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL,
+                time_str TEXT,
+                session_type TEXT,
+                model TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                cached_tokens INTEGER DEFAULT 0,
+                call_duration_ms INTEGER DEFAULT 0
+            );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_token_ts ON token_usage(timestamp);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_token_session ON token_usage(session_type);")
             conn.commit()
 
     def _seed_master_profile(self):
@@ -128,6 +135,54 @@ class TimelineHub:
                 conn.commit()
 
     def _migrate_legacy_episodic_if_needed(self):
+        # 自动合并 anan_memory.db 中的历史经历与 Token 记录
+        try:
+            anan_db = self.db_path.parent / "anan_memory.db"
+            if anan_db.exists() and anan_db.resolve() != self.db_path.resolve():
+                with sqlite3.connect(anan_db) as a_conn:
+                    a_conn.row_factory = sqlite3.Row
+                    a_cur = a_conn.cursor()
+                    with self._get_connection() as conn:
+                        cur = conn.cursor()
+                        # 合并 agent_timeline
+                        a_tbl = a_cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_timeline'").fetchone()
+                        if a_tbl:
+                            a_rows = a_cur.execute("SELECT * FROM agent_timeline").fetchall()
+                            for ar in a_rows:
+                                cur.execute(
+                                    """
+                                    INSERT OR IGNORE INTO agent_timeline 
+                                    (event_id, timestamp, time_str, source_module, actor_id, actor_name, narrative, emotional_impact, importance, prev_event_id, causal_relation, metadata, embedding)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    """,
+                                    (
+                                        ar["event_id"], ar["timestamp"], ar["time_str"], ar["source_module"],
+                                        ar["actor_id"], ar["actor_name"], ar["narrative"], ar["emotional_impact"],
+                                        ar["importance"], ar["prev_event_id"], ar["causal_relation"],
+                                        ar["metadata"], ar["embedding"]
+                                    )
+                                )
+                        # 合并 token_usage
+                        t_tbl = a_cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='token_usage'").fetchone()
+                        if t_tbl:
+                            t_rows = a_cur.execute("SELECT * FROM token_usage").fetchall()
+                            for tr in t_rows:
+                                cur.execute(
+                                    """
+                                    INSERT OR IGNORE INTO token_usage
+                                    (id, timestamp, time_str, session_type, model, prompt_tokens, completion_tokens, total_tokens, cached_tokens, call_duration_ms)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    """,
+                                    (
+                                        tr["id"], tr["timestamp"], tr["time_str"], tr["session_type"],
+                                        tr["model"], tr["prompt_tokens"], tr["completion_tokens"],
+                                        tr["total_tokens"], tr["cached_tokens"], tr["call_duration_ms"]
+                                    )
+                                )
+                        conn.commit()
+        except Exception:
+            pass
+
         """
         无缝数据升级：将原 episodic_memories 老表中的所有历史经历平滑迁入 agent_timeline
         确保老系统已有经历（如历史B站巡检、历史群聊记忆）一条不丢！
@@ -303,11 +358,12 @@ class TimelineHub:
         query_embedding: Optional[List[float]] = None,
         actor_id: Optional[str] = "master",
         limit: int = 3,
-        threshold: float = 0.45,
+        threshold: float = 0.40,
         alpha: float = 0.45,    # 语义相似度权重
         beta: float = 0.35,     # 艾宾浩斯时间近因权重
         gamma: float = 0.20,    # 重要度权重
-        half_life_hours: float = 36.0  # 记忆近因半衰期 (小时)
+        half_life_hours: float = 36.0,  # 记忆近因半衰期 (小时)
+        query: Optional[str] = None     # 文本关键字/用户原句
     ) -> List[RecallResult]:
         """
         三维拟人召回模型：
@@ -344,7 +400,7 @@ class TimelineHub:
         q_norm = np.linalg.norm(q_vec) if q_vec is not None else 0.0
 
         for r in rows:
-            # 1. 语义相似度计算
+            # 1. 语义相似度计算 (支持向量匹配与文本关键字/语义重叠)
             sim = 0.0
             if q_vec is not None and q_norm > 0 and r["embedding"]:
                 try:
@@ -355,6 +411,20 @@ class TimelineHub:
                 except Exception:
                     sim = 0.0
 
+            # 文本相关度启发式匹配 (无需向量也能顺畅按语意与事件匹配召回)
+            if query and r["narrative"]:
+                q_clean = str(query).strip().lower()
+                narr_clean = str(r["narrative"]).lower()
+                if q_clean in narr_clean:
+                    sim = max(sim, 0.95)
+                else:
+                    q_chars = [c for c in q_clean if c.strip() and c not in ("，", "。", "！", "？", " ", ",", ".", "!", "?", "“", "”", "：")]
+                    if q_chars:
+                        overlap = sum(1 for c in q_chars if c in narr_clean)
+                        ratio = overlap / len(q_chars)
+                        if ratio >= 0.4:
+                            sim = max(sim, float(ratio * 0.9))
+
             # 2. 艾宾浩斯时间近因评分
             delta_t = max(0.0, now_ts - float(r["timestamp"]))
             recency_score = math.exp(- delta_t / tau)
@@ -364,11 +434,11 @@ class TimelineHub:
             importance_score = min(max(importance_raw / 5.0, 0.2), 1.0)
 
             # 综合多维打分
-            if q_vec is not None:
-                # 具备向量检索时的三维融分
+            if q_vec is not None or (query and sim > 0):
+                # 具备向量或文本关键字检索时的三维融分
                 total_score = (alpha * max(0.0, sim)) + (beta * recency_score) + (gamma * importance_score)
             else:
-                # 无向量输入时，依据时间近因与重要度检索
+                # 纯时序近期生命流，依据时间近因与重要度检索
                 total_score = (0.7 * recency_score) + (0.3 * importance_score)
 
             if total_score >= threshold:

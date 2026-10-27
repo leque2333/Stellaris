@@ -1,156 +1,93 @@
-# 🌟 Agent Core: Persona-Centric Autonomous Agent & LifeStream Hub
+# 🧠 Agent 记忆中枢 (Agent Memory Hub)
 
-一个以**人格灵魂（Persona Kernel）**与**连续自传式时间轴（Chronological LifeStream）**为核心的独立智能体架构系统。
-
-解耦了传统“聊天机器人即核心”的束缚，将 QQ、Telegram、Web 控制台与终端 CLI 作为外设通道，向下统筹 PC 宿主机系统操控、B 站拟真巡检、多模态工具调用与连续经历流沉淀。
+> **定位声明**：本项目**本体只是一个纯粹的 Agent 记忆库与人格中枢**。  
+> 诸如 QQ 对话接入、B 站拟真巡检、PC 宿主机控制等模块，全部属于外部自行接入的扩展外设通道，不属于中枢本体。
 
 ---
 
-## 🏛️ 核心架构
+## 🏛️ 项目本体的三大核心功能
 
-```mermaid
-flowchart TD
-    subgraph Channels ["多端通信与接入通道 (IO Adapters)"]
-        QQ["QQ 通道 (NapCat / OneBot v11)"]
-        TG["Telegram 通道"]
-        WebConsole["Web 调控中枢控制台 (8890)"]
-        CLI["本地终端交互 (agent_core.cli)"]
-    end
+系统本体仅保留并聚焦于智能体不可或缺的**三大核心底层能力**：
 
-    subgraph AgentCore ["智能体大脑与状态机 (AnanAgent Core)"]
-        direction TB
-        Identity["统一实体解析 (IdentityResolver)"]
-        
-        subgraph Soul ["人设与认知规范 (Persona Kernel)"]
-            Persona["黄金人设与台词法则<br>(自然口语 / 纯净台词 / 句末去句号)"]
-            Affection["亲疏温差体系 (0~100 好感动态指引)"]
-        end
-
-        subgraph MemoryHub ["连续自传时间轴中枢 (LifeStream Hub)"]
-            Timeline["连续经历时间轴 (agent_timeline)<br>三维近因召回 + 时序顺藤摸瓜"]
-            Profile["长效偏好事实库 (user_profiles)"]
-        end
-
-        Orchestrator["智能体决策器 (ReAct Tool Loop)"]
-        PostProcessor["拟人口语清洗器 (去句号 / 剥离神态描写)"]
-    end
-
-    subgraph Tools ["统一工具与技能总线 (Tool & Skill Engine)"]
-        T_PC["💻 宿主机 PC 操控 (状态/截屏/锁屏/脚本)"]
-        T_Bili["🎬 B站拟真探索与见闻检索"]
-        T_Aff["❤️ 情绪与好感度自主浮动"]
-        T_Ext["🧩 声明式自定义扩展工具 (@tool_registry.register)"]
-    end
-
-    Channels -->|AgentInput| Identity
-    Identity --> Orchestrator
-    Orchestrator <--> Soul & MemoryHub
-    Orchestrator <--> Tools
-    Orchestrator --> PostProcessor
-    PostProcessor -->|AgentOutput| Channels
-    PostProcessor -.->|经历流回灌 (Experience Stream)| Timeline
+```
+┌────────────────────────────────────────────────────────┐
+│               🧠 Agent 记忆中枢 (本体)                  │
+├──────────────────┬──────────────────┬──────────────────┤
+│ 1. Agent人格设定 │   2. 记忆库      │   3. Token账本   │
+│ (Persona Kernel) │ (Timeline Hub)   │  (Token Ledger)  │
+│                  │                  │                  │
+│ • 纯口语黄金法则 │ • 自传时间轴生命流│ • 全模块调用审计 │
+│ • 亲疏温差指引   │ • 三维拟人近因衰减│ • 输入/输出消耗  │
+│ • 句末去句号清洗 │ • 深度事实画像沉淀│ • 上下文缓存统计 │
+└──────────────────┴──────────────────┴──────────────────┘
+                           ▲
+                           │ 统一经历回灌 / 提示词提取
+     ┌─────────────────────┴─────────────────────┐
+     │           外部自行扩展模块 (Extensions)    │
+     │  • QQ 协议端 (NapCat)                     │
+     │  • B 站拟真探索巡航 (Bilibili Patrol)      │
+     │  • PC 宿主机自动化控制 (PC Bridge)         │
+     │  • 命令行交互外壳 (CLI)                   │
+     └───────────────────────────────────────────┘
 ```
 
----
+### 1. 🎭 Agent 人格设定 (Persona Kernel)
+* **纯净口语台词**：杜绝客服腔、翻译腔，拒绝括号动作神态描写，强制执行“句末绝不带句号（。）”法则。
+* **亲疏温差动态调配**：根据交互对象好感度（0~100）动态组装系统认知上下文，赋予智能体真实的距离感与性格层次。
+* **热重载与在线维护**：可在控制台对基底设定进行无缝热修改与版本归档。
 
-## ✨ 核心特性
+### 2. ⏳ 记忆库 · 时间轴生命流 (Timeline Hub)
+* **连续自传式时间轴**：将所有外部模块传递过来的交互事件按物理时间线汇总为一条连续的经历流（`agent_timeline`）。
+* **三维拟人召回模型**：
+  $$\text{Score} = \alpha \cdot \text{语义相关度} + \beta \cdot e^{-\Delta t / \tau} (\text{艾宾浩斯时间近因衰减}) + \gamma \cdot \text{事件重大程度}$$
+  支持时序顺藤摸瓜，让智能体真正具备类似人类的记忆感知能力。
+* **长效偏好事实沉淀**：自动更新维护主人的深度认知档案与长效偏好（`user_profiles`）。
 
-1. **以人设为中心（Persona-Centric）**：
-   * 严格的人设与口语质感控制，杜绝客服腔与翻译腔；
-   * 遵循输出规范：句末绝不带句号（。）、剥离任何括号描写（神态/心理说明）；
-   * 动态亲疏温差指引，依据好感度（0~100）自调节亲昵度与表达尺度。
-
-2. **自传式时间轴生命流（Chronological LifeStream）**：
-   * 各模块（B站巡视、PC控制、多端对话）统一汇入一条时序时间轴；
-   * **三维拟人召回模型**：
-     $$\text{Score} = \alpha \cdot \text{Similarity} + \beta \cdot e^{-\Delta t / \tau} + \gamma \cdot \text{Importance}$$
-     融合语义相似度、艾宾浩斯时间衰减（近因效应）与重大事件锚点，解决传统 AI 失去时间感知与因果断裂的问题。
-
-3. **声明式统一工具总线（Tool Registry）**：
-   * 仅需使用 `@tool_registry.register` 装饰器，即可一键挂载任意 Python 异步/同步函数；
-   * 自动推导 JSON Schema，由大模型自主规划并执行 Function Calling 闭环。
-
-4. **多端解耦接入**：
-   * QQ (NapCat/OneBot)、Telegram、WebUI、本地 CLI 终端均作为无状态适配器接入。
+### 3. 📊 Token 账本 (Token Ledger)
+* **透明审计与记账**：按日统计大模型调用频次、Prompt 输入、Completion 输出以及 Context Caching 缓存命中数。
+* **调用明细流水**：记录最近大模型交互的完整 Token 消耗明细，为智能体多模块运行提供精准的资源护栏。
 
 ---
 
-## 📁 目录结构
+## 📁 核心目录架构
 
 ```
 .
-├── agent_core/                       # 核心独立智能体引擎
-│   ├── agent.py                      # AnanAgent 主控调度器
-│   ├── persona.py                    # 人设管理器与输出清洗器
-│   ├── tools.py                      # 统一工具注册中心
+├── agent_core/                       # 智能体核心引擎 (本体)
+│   ├── persona.py                    # 功能 1：Agent 人格设定与口语清洗
+│   ├── timeline_hub.py               # 功能 2：记忆库与自传时间轴
+│   ├── models.py                     # 核心数据契约 (时间轴事件/用户画像)
+│   ├── identity.py                   # 统一交互对象实体解析
 │   ├── llm.py                        # 大模型 Function Calling 网关
-│   ├── timeline_hub.py               # 时间轴生命流总线
-│   ├── identity.py                   # 统一身份对齐解析器
-│   ├── models.py                     # 数据模型契约
-│   └── cli.py                        # 本地终端交互外壳
-├── antigravity_bridge/               # 宿主机反重力 PC 控制网关
-├── console/                          # 容器化调控中枢 WebUI (端口 8890)
-├── astrbot/                          # QQ 协议接入与扩展插件目录
-│   └── data/
-│       ├── plugins/                  # 巡检、轮次防抖、长效记忆等自研插件
-│       └── cmd_config.example.json   # 核心配置模板
-├── docker-compose.yml                # 容器化编排定义
-├── telegram_monitor.py               # Telegram 监控与通知通道
-└── README.md
+│   └── agent.py                      # 记忆驱动的智能体决策调度器
+├── console/                          # OpenRouter 风格极简网页控制台
+│   ├── index.html                    # 纯净去描边、去阴影控制台 UI (高位端口 18890)
+│   ├── server.py                     # 控制台轻量 HTTP 服务
+│   └── backend.py                    # 三大核心数据适配层
+├── data/                             # 记忆库与人设持久化挂载卷
+│   ├── memory.db                     # 自传式时间轴记忆库 SQLite
+│   ├── anan_persona.md               # 核心生效人格卡
+│   ├── models_config.json            # 统一模型与 API 池配置
+│   └── compute_providers.json        # 算力矩阵与双槽位调度
+├── docker-compose.yml                # 记忆中枢纯净容器编排
+├── Dockerfile                        # 记忆中枢纯净容器构建清单
+├── requirements-agent.txt            # 最小核心运行依赖
+└── 启动控制台.bat                     # 一键唤起控制台脚本
 ```
 
 ---
 
-## 🚀 快速启动
+## 🚀 启动方式
 
-### 1. 本地命令行终端体验（无需 Docker）
-直接在终端与智能体展开对话、调试工具调用：
+### 方案 A：独立 Docker 容器启动（推荐，纯净轻量运行）
 ```bash
-python -m agent_core.cli
+# 仅启动记忆库、人格设定与控制台，纯净容器化运行
+docker compose up -d --build
 ```
+启动后访问控制台：**[http://localhost:18890](http://localhost:18890)**。
 
-### 2. 配置文件初始化
-复制模板文件并填入凭据：
+### 方案 B：本地 Python 直接运行
 ```bash
-cp git_repo_config.example.json git_repo_config.json
-cp tg_monitor_config.example.json tg_monitor_config.json
-cp antigravity_bridge/bridge_config.example.json antigravity_bridge/bridge_config.json
-cp astrbot/data/cmd_config.example.json astrbot/data/cmd_config.json
-cp astrbot/data/plugins/astrbot_plugin_human_patrol/config.example.json astrbot/data/plugins/astrbot_plugin_human_patrol/config.json
+python console/server.py
 ```
-
-### 3. Docker 容器编排部署
-```bash
-# 启动所有服务 (QQ协议端 NapCat + AstrBot + 调控中枢 Console)
-docker compose up -d
-
-# 查看运行日志
-docker compose logs -f
-```
-
----
-
-## 🛠️ 自定义工具扩展
-
-只需 3 行代码即可为智能体扩展任意新功能：
-
-```python
-from agent_core import tool_registry
-
-@tool_registry.register(
-    name="my_custom_tool",
-    description="当用户询问自定义业务或需要执行特定任务时调用"
-)
-async def my_custom_tool(query: str) -> str:
-    # 你的业务执行逻辑
-    return f"任务执行结果: {query}"
-```
-
----
-
-## 📄 开源与隐私声明
-
-本项目仓库已脱敏：
-- 剥离了特定私人人设卡与核心私密设定集；
-- 剥离了个人数据库（`*.db`）、会话记录与观测信笺；
-- 剥离了所有真实 API Key、Cookie、QQ 会话缓存与敏感 Token。
+默认高位端口 `18890`，随起随用。
