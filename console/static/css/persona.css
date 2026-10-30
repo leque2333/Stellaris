@@ -1,0 +1,52 @@
+/* Stellaris - Persona, Affection Tiers & Speech Regex Rules (Pure Flat Borderless) */
+
+#persona-editor {
+    background: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    padding: 18px 20px !important;
+    font-size: 13.5px !important;
+    line-height: 1.6 !important;
+    color: #0f172a !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    resize: vertical !important;
+    font-family: var(--font-mono, monospace) !important;
+}
+
+.tier-card {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 18px 20px !important;
+    margin-bottom: 12px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+    transition: background 0.15s ease !important;
+}
+
+.regex-rule-item {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 18px 20px !important;
+    margin-bottom: 12px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+    transition: background 0.15s ease !important;
+}
+
+.persona-test-card,
+.regex-test-box {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 18px 20px !important;
+    margin-top: 20px !important;
+}

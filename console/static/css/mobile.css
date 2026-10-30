@@ -1,0 +1,420 @@
+/* ========================================================
+   移动端 (手机屏幕 <= 768px) 极致纯平响应式适配系统
+   遵循：无描边、无阴影、无横线分割、纯平半透明毛玻璃质感
+   ======================================================== */
+@media (max-width: 768px) {
+    /* 全局防横向溢出与原生触控优化 */
+    html, body {
+        width: 100% !important;
+        max-width: 100vw !important;
+        overflow-x: hidden !important;
+        -webkit-tap-highlight-color: transparent !important;
+        position: relative !important;
+    }
+
+    .app-layout {
+        display: block !important;
+        width: 100% !important;
+        min-height: 100dvh !important;
+    }
+
+    .main-wrapper {
+        margin-left: 0 !important;
+        width: 100% !important;
+        max-width: 100vw !important;
+        padding: 0 !important;
+    }
+
+    /* 内容滚动区域，为底部移动导航栏留出适度安全边距 */
+    .content-scroll {
+        padding: 16px 14px 88px 14px !important;
+        max-width: 100vw !important;
+        box-sizing: border-box !important;
+        overflow-x: hidden !important;
+    }
+
+    /* 移动端底部快捷导航栏 */
+    .mobile-bottom-nav {
+        display: flex !important;
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        width: 100% !important;
+        height: 60px !important;
+        padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+        background: rgba(255, 255, 255, 0.94) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        border: none !important;
+        box-shadow: none !important;
+        z-index: 9999 !important;
+        justify-content: space-around !important;
+        align-items: center !important;
+    }
+
+    .mobile-nav-btn {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 3px !important;
+        flex: 1 !important;
+        height: 100% !important;
+        color: #64748b !important;
+        font-size: 11px !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+        user-select: none !important;
+        transition: color 0.15s ease !important;
+    }
+
+    .mobile-nav-btn.active {
+        color: #2563eb !important;
+        font-weight: 600 !important;
+    }
+
+    .mobile-nav-btn svg {
+        transition: transform 0.15s ease !important;
+    }
+
+    .mobile-nav-btn.active svg {
+        transform: scale(1.08) !important;
+    }
+
+    /* 移动端侧边抽屉 */
+    .sidebar {
+        position: fixed !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        width: 280px !important;
+        max-width: 82vw !important;
+        z-index: 10000 !important;
+        transform: translateX(-100%) !important;
+        transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1) !important;
+        border: none !important;
+        box-shadow: none !important;
+        background: #ffffff !important;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom, 0px)) 16px !important;
+    }
+
+    .sidebar.open {
+        transform: translateX(0) !important;
+    }
+
+    /* 侧栏半透明遮罩 (平时严格 display: none，彻底杜绝任何透明层拦截点击) */
+    .sidebar-overlay {
+        display: none !important;
+        position: fixed !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        background: rgba(15, 23, 42, 0.45) !important;
+        backdrop-filter: blur(4px) !important;
+        -webkit-backdrop-filter: blur(4px) !important;
+        z-index: 9998 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: opacity 0.2s ease !important;
+    }
+
+    .sidebar-overlay.show {
+        display: block !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+    }
+
+    /* 仪表盘核心金额与指标长条 (Hero Strip) */
+    .balance-hero-strip {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        padding: 20px 16px !important;
+        gap: 20px !important;
+        margin: 0 0 20px 0 !important;
+        border-radius: 14px !important;
+        box-sizing: border-box !important;
+    }
+
+    .balance-strip-left {
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .balance-val-row {
+        align-items: baseline !important;
+    }
+
+    .balance-val-row .or-main-num {
+        font-size: 32px !important;
+        line-height: 1.1 !important;
+    }
+
+    .balance-secondary-display {
+        font-size: 15px !important;
+        margin-top: 4px !important;
+    }
+
+    .strip-metrics-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        width: 100% !important;
+        gap: 10px !important;
+    }
+
+    .strip-stat-cell {
+        padding: 12px 14px !important;
+        border-radius: 10px !important;
+    }
+
+    .strip-stat-cell .strip-stat-val {
+        font-size: 17px !important;
+    }
+
+    .strip-stat-cell .strip-stat-label {
+        font-size: 11px !important;
+    }
+
+    /* AI 硬件资源看板 (GPU, CPU, RAM) */
+    .ai-res-headline {
+        display: flex !important;
+        flex-direction: row !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        gap: 6px !important;
+        margin-bottom: 14px !important;
+    }
+
+    .ai-hardware-grid {
+        grid-template-columns: 1fr !important;
+        gap: 12px !important;
+        margin-bottom: 16px !important;
+    }
+
+    .ai-hw-card {
+        padding: 16px 18px !important;
+        border-radius: 12px !important;
+    }
+
+    .ai-hw-num {
+        font-size: 26px !important;
+    }
+
+    .ai-service-item {
+        padding: 14px 16px !important;
+        border-radius: 10px !important;
+    }
+
+    .ai-svc-metrics {
+        flex-wrap: wrap !important;
+        gap: 6px 14px !important;
+        font-size: 11.5px !important;
+    }
+
+    /* 账单流水页面 (tab-ledger) */
+    .ledger-stats-strip {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 8px !important;
+        padding: 12px !important;
+        margin-bottom: 16px !important;
+    }
+
+    .ledger-stat-box {
+        padding: 8px !important;
+    }
+
+    .ledger-stat-label {
+        font-size: 10.5px !important;
+    }
+
+    .ledger-stat-val {
+        font-size: 14px !important;
+    }
+
+    /* 表格容器触摸左右滑动 */
+    .table-wrap {
+        width: 100% !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        margin-top: 12px !important;
+        border-radius: 10px !important;
+    }
+
+    .data-table {
+        min-width: 600px !important;
+    }
+
+    .data-table th,
+    .data-table td {
+        padding: 10px 12px !important;
+        font-size: 12px !important;
+        white-space: nowrap !important;
+    }
+
+    /* 时间轴页面 (tab-timeline) */
+    .timeline-stream {
+        padding-left: 18px !important;
+    }
+
+    .timeline-item {
+        padding-left: 14px !important;
+    }
+
+    .timeline-card {
+        padding: 14px 16px !important;
+        border-radius: 12px !important;
+    }
+
+    .timeline-text {
+        font-size: 13px !important;
+        line-height: 1.55 !important;
+    }
+
+    /* 人格与设置页面的二级导航栏支持水平滑动 */
+    .subtab-bar {
+        display: flex !important;
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        white-space: nowrap !important;
+        padding-bottom: 4px !important;
+        gap: 6px !important;
+    }
+
+    .subtab-btn {
+        padding: 8px 14px !important;
+        font-size: 12.5px !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* 弹窗在手机上的居中自适应 */
+    .modal-content, .custom-modal-box {
+        width: calc(100vw - 32px) !important;
+        max-width: calc(100vw - 32px) !important;
+        margin: 16px auto !important;
+        padding: 20px 18px !important;
+        border-radius: 16px !important;
+        max-height: 85vh !important;
+        overflow-y: auto !important;
+    }
+
+    /* 模块详情页面在手机上的优雅自适应 */
+    .module-header-clean {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 14px !important;
+        padding-bottom: 14px !important;
+        margin-bottom: 12px !important;
+    }
+
+    .module-header-actions {
+        width: 100% !important;
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
+
+    .aligned-setting-row {
+        flex-wrap: wrap !important;
+        padding: 9px 4px !important;
+        gap: 6px 10px !important;
+    }
+
+    .setting-col-label {
+        width: 100% !important;
+        font-size: 11.5px !important;
+        color: #94a3b8 !important;
+    }
+
+    .setting-col-content {
+        flex: 1 !important;
+        min-width: 0 !important;
+        font-size: 12.5px !important;
+    }
+
+    .setting-col-action {
+        margin-left: auto !important;
+    }
+
+    .setting-col-badge {
+        width: 48px !important;
+        min-width: 48px !important;
+    }
+
+    .setting-col-name {
+        width: auto !important;
+        min-width: 0 !important;
+        flex: 1 !important;
+        font-size: 12.5px !important;
+    }
+
+    .setting-col-desc {
+        width: 100% !important;
+        flex-basis: 100% !important;
+        padding-left: 48px !important;
+        white-space: normal !important;
+        font-size: 12px !important;
+    }
+
+    /* 隐藏原桌面悬浮按钮，由底部栏取代 */
+    .mobile-menu-btn-float {
+        display: none !important;
+    }
+}
+
+/* 凭证卡片移动端适配 */
+    .credential-card {
+        padding: 14px 14px !important;
+        gap: 10px !important;
+    }
+
+    .credential-card > div {
+        flex-wrap: wrap !important;
+    }
+
+    .credential-card input.form-input,
+    .credential-card select.form-select {
+        font-size: 12px !important;
+    }
+
+/* 桌面端隐藏移动端专属组件 */
+@media (min-width: 769px) {
+    .mobile-bottom-nav {
+        display: none !important;
+    }
+    .mobile-menu-btn-float {
+        display: none !important;
+    }
+}
+
+
+/* 移动端底部按钮穿透优化：确保图标与文字不吞触控事件 */
+.mobile-nav-btn {
+    -webkit-tap-highlight-color: transparent !important;
+    touch-action: manipulation !important;
+}
+.mobile-nav-btn * {
+    pointer-events: none !important;
+}
+
+/* 移动端数字进一步缩小，保证两列不溢出 */
+@media (max-width: 760px) {
+    .balance-hero-strip {
+        padding: 18px 14px !important;
+    }
+    .balance-strip-left {
+        min-width: 0 !important;
+    }
+    .balance-strip-left .or-balance-amount {
+        font-size: 40px !important;
+    }
+    .strip-metrics-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 12px !important;
+    }
+    .or-metric-value {
+        font-size: 22px !important;
+    }
+    .or-metric-label {
+        font-size: 11px !important;
+    }
+}

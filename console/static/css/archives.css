@@ -1,0 +1,324 @@
+/* Stellaris - Archives Page (Flat / Borderless / White Surface) */
+
+.archive-layout {
+    display: grid;
+    grid-template-columns: 320px minmax(0, 1fr);
+    gap: 22px;
+    align-items: start;
+}
+
+.archive-list-head {
+    font-size: 12px;
+    color: #64748b;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.archive-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.archive-card {
+    background: #ffffff;
+    border: none;
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.archive-card:hover,
+.archive-card.active {
+    background: rgba(124, 58, 237, 0.07);
+}
+
+.archive-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: rgba(124, 58, 237, 0.1);
+    color: #7c3aed;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.archive-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #0f172a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.archive-meta {
+    font-size: 11.5px;
+    color: #64748b;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.archive-role {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.06);
+    color: #334155;
+    flex-shrink: 0;
+}
+
+.archive-role.admin {
+    background: rgba(124, 58, 237, 0.1);
+    color: #7c3aed;
+}
+
+.archive-detail {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 22px 24px;
+    min-height: 260px;
+}
+
+.archive-detail-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.archive-detail-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.archive-detail-sub {
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 4px;
+    font-family: var(--font-mono, monospace);
+}
+
+.archive-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 180px;
+    gap: 14px;
+}
+
+.archive-section {
+    background: rgba(15, 23, 42, 0.025);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 12px;
+}
+
+.archive-section-head {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+
+.archive-section-title-input {
+    flex: 1;
+    font-weight: 600;
+}
+
+.archive-section-remove {
+    font-size: 12px;
+    padding: 4px 10px;
+    flex-shrink: 0;
+}
+
+.archive-section-content {
+    width: 100%;
+    resize: vertical;
+    line-height: 1.65;
+    min-height: 92px;
+    box-sizing: border-box;
+}
+
+.archive-form-grid .form-group:last-child {
+    grid-column: span 1;
+}
+
+.archive-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    margin: 22px 0 10px;
+}
+
+.archive-identity-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    background: rgba(15, 23, 42, 0.03);
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-bottom: 6px;
+    font-size: 12.5px;
+}
+
+.archive-platform {
+    font-weight: 600;
+    color: #0f172a;
+    margin-right: 8px;
+}
+
+.archive-uid {
+    color: #334155;
+    font-family: var(--font-mono, monospace);
+}
+
+.archive-identity-name {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.archive-empty,
+.archive-empty-inline {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.archive-empty {
+    text-align: center;
+    padding: 40px 20px;
+}
+
+.archive-empty-inline {
+    padding: 10px 0;
+}
+
+@media (max-width: 900px) {
+    .archive-layout {
+        grid-template-columns: 1fr;
+    }
+    .archive-form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 档案页：好感度浮动范围 + 自定义设定 */
+.archive-range-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.archive-range-label {
+    font-size: 12px;
+    color: var(--text-muted, #64748b);
+}
+
+.archive-range-input {
+    width: 72px;
+    padding: 5px 8px;
+    font-size: 12px;
+}
+
+.archive-range-sep {
+    font-size: 12px;
+    color: var(--text-muted, #64748b);
+}
+
+.archive-range-hint {
+    font-size: 11.5px;
+    color: var(--text-muted, #64748b);
+    margin: 6px 0 10px;
+    line-height: 1.6;
+}
+
+.archive-setting-form {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.archive-setting-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border-color-subtle, rgba(0, 0, 0, 0.03));
+}
+
+.archive-setting-row:last-child {
+    border-bottom: none;
+}
+
+.archive-setting-label {
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary, #0f172a);
+    min-width: 72px;
+}
+
+.archive-setting-content {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text-secondary, #334155);
+    word-break: break-word;
+}
+
+.archive-setting-del {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    padding: 3px 9px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+    background: #fff;
+    color: var(--text-muted, #64748b);
+    cursor: pointer;
+}
+
+.archive-setting-del:hover {
+    color: var(--accent-rose, #e11d48);
+    border-color: rgba(225, 29, 72, 0.35);
+}
+/* 自定义设定：大文本框 */
+.archive-settings-text {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+    background: rgba(255, 255, 255, 0.7);
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-secondary, #334155);
+    resize: vertical;
+    outline: none;
+    font-family: inherit;
+}
+
+.archive-settings-text:focus {
+    border-color: rgba(99, 102, 241, 0.45);
+}
+
+.archive-settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}

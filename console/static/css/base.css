@@ -1,0 +1,717 @@
+:root {
+    /* 整体一体更浅极简银灰底色 (更透亮、更纯净、更高对比) */
+    --bg-body: #f0eff3;
+    --bg-sidebar: #f0eff3;
+    --bg-main: #f0eff3;
+    --bg-surface: rgba(255, 255, 255, 0.72);
+    --bg-surface-elevated: rgba(255, 255, 255, 0.88);
+    --bg-input: rgba(255, 255, 255, 0.65);
+    
+    --border-glass: rgba(0, 0, 0, 0.07);
+    --border-glass-subtle: rgba(0, 0, 0, 0.04);
+    --border-color: rgba(0, 0, 0, 0.07);
+    --border-color-subtle: rgba(0, 0, 0, 0.03);
+    
+    /* 文本色系：极度清晰的深邃黑灰字阶 */
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-muted: #64748b;
+    --text-light: #94a3b8;
+    --text-on-primary: #ffffff;
+    
+    /* 强调品牌色 */
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-glow: rgba(99, 102, 241, 0.25);
+    --primary-subtle: rgba(99, 102, 241, 0.08);
+    
+    --accent-green: #059669;
+    --accent-amber: #d97706;
+    --accent-cyan: #0284c7;
+    --accent-purple: #7c3aed;
+    --accent-rose: #e11d48;
+    
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 18px;
+    --radius-pill: 20px;
+    --radius-full: 9999px;
+    
+    /* 顶级现代字体栈 + 全局表格数字 tabular-nums */
+    --font-sans: 'Geist', 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* 基础重置 */
+*, *::before, *::after {
+    box-sizing: border-box;
+    outline: none;
+}
+body, h1, h2, h3, h4, p, ul, ol {
+    margin: 0;
+    padding: 0;
+}
+body, input, button, select, textarea, table {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-sans);
+}
+
+
+        /* 标准盒模型重置：保留边框与阴影自定义能力 */
+        *, *::before, *::after {
+            box-sizing: border-box;
+            outline: none;
+        }
+        body, h1, h2, h3, h4, p, ul, ol {
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            font-size: 14px;
+            line-height: 1.5;
+            overflow: hidden;
+            display: flex;
+            height: 100vh;
+            width: 100%; max-width: 100vw;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* 左侧侧边栏 */
+        .sidebar {
+            width: 260px;
+            background-color: var(--bg-sidebar);
+            display: flex;
+            flex-direction: column;
+            padding: 24px 16px;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .brand-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 0 8px 24px 8px;
+        }
+
+        .brand-badge {
+            width: 32px;
+            height: 32px;
+            background: var(--primary);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .brand-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .brand-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+        }
+
+        .brand-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .nav-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex: 1;
+        }
+
+        .nav-category {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            padding: 8px 10px 4px 10px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            border-radius: var(--radius-md);
+            color: var(--text-secondary);
+            font-size: 13.5px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .nav-item:hover {
+            background-color: var(--bg-surface);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background-color: var(--primary-subtle);
+            color: #818cf8;
+            font-weight: 600;
+        }
+
+        .nav-item svg {
+            width: 17px;
+            height: 17px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            flex-shrink: 0;
+        }
+
+        .sidebar-footer {
+            padding: 14px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            background: var(--accent-green);
+            border-radius: 50%;
+        }
+
+        .footer-settings-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12.5px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 5px 10px;
+            border-radius: var(--radius-sm);
+            background-color: transparent;
+            border: none;
+            transition: all 0.15s ease;
+        }
+
+        .footer-settings-btn:hover,
+        .footer-settings-btn.active {
+            color: var(--text-primary);
+            background-color: var(--bg-surface-elevated);
+        }
+
+        /* 右侧主工作区 */
+        .main-wrapper {
+            flex: 1;
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-body);
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        .top-navbar {
+            height: 64px;
+            padding: 0 40px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--bg-body);
+            flex-shrink: 0;
+        }
+
+        .page-heading {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.4px;
+        }
+
+        .top-meta {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .content-scroll {
+            flex: 1;
+            min-width: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            box-sizing: border-box !important;
+            padding: 20px 24px 56px 24px !important;
+        }
+
+        .view-section {
+            display: none;
+            max-width: 1100px;
+        }
+
+        .view-section.active {
+            display: block;
+            animation: fadeIn 0.15s ease-out;
+        }
+
+
+/* --- Flat Borderless System Overrides --- */
+/* ========================================================
+   顶级极简无描边纯平视觉系统 (Premium Borderless Flat System)
+   - 彻底去除所有描边 (NO BORDERS / BORDERLESS)
+   - 彻底去除所有立体浮雕与阴影 (NO 3D / NO SHADOWS)
+   - 按钮全平面、无描边、软底色 (Flat Buttons without outlines)
+   - 标识纯净清晰高对比无描边 (Borderless High-Contrast Badges)
+   - 拒绝琐碎杂乱，大面积呼吸留白排版，回归苹果/Linear现代高级感
+   - 纯平面板，所有文字和内容统一沉浸于更浅灰底 (#f0eff3)
+   ======================================================== */
+
+/* 1. 全局重置：彻底消除所有阴影、投影与多余边框 */
+*, *::before, *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+}
+
+body {
+    background-color: var(--bg-body) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-sans) !important;
+    letter-spacing: -0.01em;
+}
+
+/* 2. 侧边栏：极简通透无外框，告别琐碎线条 */
+.sidebar {
+    background-color: var(--bg-body) !important;
+    border-right: 1px solid rgba(0, 0, 0, 0.05) !important;
+    box-shadow: none !important;
+}
+
+.brand-badge {
+    background: #0f172a !important; /* 稳重大气的深墨灰黑 */
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 8px !important;
+}
+
+.brand-title {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+}
+
+.brand-subtitle {
+    color: var(--text-muted) !important;
+}
+
+.nav-category {
+    color: var(--text-muted) !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.05em !important;
+}
+
+/* 侧栏导航项：无描边，悬停与激活为平滑平底色 */
+.nav-item, .mod-sidebar-item {
+    color: var(--text-secondary) !important;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 8px !important;
+    transition: background 0.15s ease, color 0.15s ease !important;
+}
+
+.nav-item:hover, .mod-sidebar-item:hover {
+    background: rgba(0, 0, 0, 0.04) !important;
+    color: var(--text-primary) !important;
+}
+
+.nav-item.active, .mod-sidebar-item.active {
+    background: rgba(0, 0, 0, 0.06) !important;
+    color: #0f172a !important;
+    font-weight: 600 !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* 3. 清晰高质感标识：彻底去除描边，统一浅灰纯平底色 + 深色文字 */
+.mod-nav-badge,
+.mod-tag-system,
+.mod-tag-memory,
+.mod-tag-skills,
+.mod-tag-host,
+.mod-tag-mcp,
+.mod-tag-custom {
+    border: none !important;
+    box-shadow: none !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    padding: 2px 7px !important;
+    border-radius: 4px !important;
+    line-height: 1.25 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-family: var(--font-sans) !important;
+    background: rgba(15, 23, 42, 0.06) !important;
+    color: #334155 !important;
+}
+
+.mod-sidebar-item:hover .mod-nav-badge,
+.mod-sidebar-item:hover .mod-tag-system,
+.mod-sidebar-item:hover .mod-tag-memory,
+.mod-sidebar-item:hover .mod-tag-skills,
+.mod-sidebar-item:hover .mod-tag-mcp,
+.mod-sidebar-item:hover .mod-tag-host,
+.mod-sidebar-item:hover .mod-tag-custom {
+    background: rgba(15, 23, 42, 0.1) !important;
+    color: #0f172a !important;
+}
+
+.mod-sidebar-item.active .mod-nav-badge,
+.mod-sidebar-item.active .mod-tag-system,
+.mod-sidebar-item.active .mod-tag-memory,
+.mod-sidebar-item.active .mod-tag-skills,
+.mod-sidebar-item.active .mod-tag-mcp,
+.mod-sidebar-item.active .mod-tag-host,
+.mod-sidebar-item.active .mod-tag-custom {
+    background: rgba(124, 58, 237, 0.12) !important;
+    color: #7c3aed !important;
+}
+
+/* 侧栏分类数量标识 (如 3)：无描边平滑小药丸 */
+#cat-count-system, #cat-count-custom, .badge-count {
+    background: rgba(0, 0, 0, 0.06) !important;
+    color: #334155 !important;
+    font-weight: 700 !important;
+    font-family: var(--font-mono) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 1px 7px !important;
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+}
+
+/* 4. 顶栏导航区：极简平面，无生硬描边线 */
+.main-wrapper {
+    background-color: var(--bg-body) !important;
+}
+
+.top-navbar {
+    display: none !important;
+}
+
+.page-heading {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+    font-size: 18px !important;
+}
+
+.top-meta {
+    color: var(--text-muted) !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+}
+
+.content-scroll {
+    background-color: var(--bg-body) !important;
+    padding: 20px 44px 56px 44px !important;
+}
+
+.view-section {
+    width: 100% !important;
+    max-width: 980px !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+}
+
+/* ========================================================
+   10. 彻底去掉所有横线（自然呼吸留白，严禁任何细线切割页面）
+   ======================================================== */
+.aligned-setting-row,
+.module-header-clean,
+.panel-headline,
+.subtab-bar,
+.tool-item-row,
+.data-table th,
+.data-table td,
+.table-wrap,
+#master-credentials-list > div,
+#function-credentials-list > div,
+.subtab-content,
+hr,
+.divider {
+    border-bottom: none !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+}
+
+/* 依靠自然留白与微透交互悬停，完全无横向割裂感 */
+.aligned-setting-row {
+    padding: 10px 8px !important;
+    border-radius: 8px !important;
+    margin-bottom: 2px !important;
+    border: none !important;
+}
+
+.aligned-setting-row:hover {
+    background: rgba(0, 0, 0, 0.028) !important;
+}
+
+.module-header-clean {
+    border: none !important;
+    padding-bottom: 16px !important;
+    margin-bottom: 16px !important;
+}
+
+/* ========================================================
+   11. 纯净普通灰色纯平底色架构 (Clean Neutral Solid Gray Architecture)
+   ======================================================== */
+
+:root {
+    --bg-body: #f0f2f5;
+    --bg-sidebar: #e9ebf0;
+    --bg-main: #f0f2f5;
+    --bg-surface: #ffffff;
+    --bg-surface-elevated: #ffffff;
+    --bg-input: #ffffff;
+}
+
+body {
+    background-color: #f0f2f5 !important;
+    background-image: none !important;
+    height: 100vh !important;
+    width: 100% !important; max-width: 100vw !important;
+    overflow: hidden !important;
+    display: flex !important;
+    position: relative !important;
+}
+
+/* 彻底移除任何噪点或拟物纹理层 */
+body::before {
+    display: none !important;
+    content: none !important;
+}
+
+/* 保证所有内容层级整洁清晰 */
+.layout-container {
+    position: relative !important;
+    z-index: 2 !important;
+    background: transparent !important;
+}
+
+.main-wrapper {
+    background: transparent !important;
+    position: relative !important;
+    z-index: 2 !important;
+}
+
+.content-scroll {
+    background: transparent !important;
+    position: relative !important;
+    z-index: 2 !important;
+}
+
+/* 侧边栏：纯净普通灰一体化底色，无多余描边 */
+.sidebar {
+    background: #e9ebf0 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-right: none !important;
+    position: relative !important;
+    z-index: 10 !important;
+}
+
+/* 侧边栏底部信息块 */
+.sidebar-footer {
+    background: rgba(15, 23, 42, 0.04) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 10px !important;
+    margin: 8px 10px 14px 10px !important;
+    padding: 10px 14px !important;
+    border: none !important;
+}
+
+/* 额度容器采用专有 Google Gemini 旗舰色彩 */
+
+/* 输入框与选择器：纯平白底，无边框无立体无阴影 */
+.form-input, .form-select, .form-textarea {
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* 凭证池纯平白底卡片条 */
+#master-credentials-list > div,
+#function-credentials-list > div {
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 10px !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+/* ========================================================
+   12. 极度克制二至三色规范 (Ultra-Restrained 2-to-3 Color Architecture)
+   - 1. 银灰磨砂基底: #ebecf1 / rgba(255,255,255,0.60)
+   - 2. 曜石墨黑主色: #0f172a / 次级浅墨灰 #64748b (文字、按钮、所有徽标与指令代码)
+   - 3. 极简状态点绿: #059669 (仅用于服务连通在线状态微点)
+   ======================================================== */
+
+/* 所有徽标标签完全统一为曜石纯平徽标，杜绝五颜六色 */
+.badge, .badge-mini, .mod-nav-badge, 
+.mod-tag-system, .mod-tag-memory, .mod-tag-skills, 
+.mod-tag-host, .mod-tag-mcp, .mod-tag-custom,
+.badge-type-tool, .badge-type-cmd, .status-pill-green {
+    background: rgba(15, 23, 42, 0.06) !important;
+    color: #0f172a !important;
+    border: none !important;
+    box-shadow: none !important;
+    font-weight: 600 !important;
+}
+
+/* 快捷指令代码统一为曜石黑 */
+.font-cmd {
+    color: #0f172a !important;
+}
+
+/* 超链接统一为曜石黑配淡下划线，不再使用突兀高亮蓝 */
+a {
+    color: #0f172a !important;
+}
+
+/* 按钮统一规范 */
+.btn-primary {
+    background: #0f172a !important;
+    color: #ffffff !important;
+}
+
+.btn-secondary {
+    background: rgba(15, 23, 42, 0.05) !important;
+    color: #0f172a !important;
+}
+
+.btn-secondary:hover {
+    background: rgba(15, 23, 42, 0.09) !important;
+    color: #0f172a !important;
+}
+
+.subtab-btn.active {
+    background: #0f172a !important;
+    color: #ffffff !important;
+}
+
+.nav-item.active, .mod-sidebar-item.active {
+    background: rgba(15, 23, 42, 0.07) !important;
+    color: #0f172a !important;
+}
+
+/* ========================================================
+   13. 高阶罗兰紫强调色规范 (Electric Violet #7c3aed Accent Architecture)
+   - 强调色 (Primary Accent): #7c3aed (深邃高阶罗兰紫)
+   - 悬停强调色: #6d28d9
+   - 浅紫微透底: rgba(124, 58, 237, 0.08) ~ rgba(124, 58, 237, 0.14)
+   ======================================================== */
+
+:root {
+    --primary: #7c3aed;
+    --primary-hover: #6d28d9;
+    --primary-glow: rgba(124, 58, 237, 0.25);
+    --primary-subtle: rgba(124, 58, 237, 0.08);
+}
+
+/* 主要操作按钮：罗兰紫纯平高阶质感 */
+.btn-primary, button.btn:not(.btn-secondary):not(.btn-subtle) {
+    background: #7c3aed !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.btn-primary:hover, button.btn:not(.btn-secondary):not(.btn-subtle):hover {
+    background: #6d28d9 !important;
+    color: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.btn-primary:active, button.btn:not(.btn-secondary):not(.btn-subtle):active {
+    background: #5b21b6 !important;
+}
+
+/* 侧栏激活项：浅紫微透底 + 罗兰紫高亮 */
+.nav-item.active, .mod-sidebar-item.active {
+    background: rgba(124, 58, 237, 0.09) !important;
+    color: #7c3aed !important;
+    font-weight: 600 !important;
+}
+
+.nav-item.active svg, .mod-sidebar-item.active svg {
+    stroke: #7c3aed !important;
+}
+
+/* 二级子菜单激活：纯平罗兰紫药丸 */
+.subtab-btn.active {
+    background: #7c3aed !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+}
+
+/* 复选框与开关强调色 */
+input[type="checkbox"] {
+    accent-color: #7c3aed !important;
+}
+
+/* 表单聚焦罗兰紫呼吸光晕 */
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+    outline: 2px solid rgba(124, 58, 237, 0.28) !important;
+}
+
+/* 核心主控凭证生效标签 */
+.badge-master-active {
+    background: rgba(124, 58, 237, 0.12) !important;
+    color: #7c3aed !important;
+    font-weight: 600 !important;
+}
+
+/* 超链接悬停强调 */
+a:hover {
+    color: #7c3aed !important;
+}
+

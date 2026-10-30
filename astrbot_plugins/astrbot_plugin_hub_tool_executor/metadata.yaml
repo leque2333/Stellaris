@@ -1,0 +1,9 @@
+name: astrbot_plugin_hub_tool_executor
+display_name: 中枢工具执行器壳
+desc: 把大体积/高危工具的 schema 从主模型工具表里摘掉，只暴露一个薄工具 call_raw_tool；插件按白名单执行原始工具，并把结果交给中枢清洗压缩。
+short_desc: 薄壳执行器 + 中枢结果清洗
+version: v1.0.0
+astrbot_version: ">=4.26,<5"
+author: Anan Hub
+config:
+  - _conf_schema.json

@@ -1,0 +1,272 @@
+/* Stellaris - 身份映射（按插件分组的 UID → 档案绑定） */
+
+.id-group {
+    background: #ffffff;
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.07));
+    border-radius: 12px;
+    margin-bottom: 10px;
+    overflow: hidden;
+}
+
+.id-group-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(0, 0, 0, 0.015);
+    border-bottom: 1px solid var(--border-color-subtle, rgba(0, 0, 0, 0.03));
+}
+
+.id-group-toggle {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted, #64748b);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+}
+
+.id-group-toggle:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.id-group-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-primary, #0f172a);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.id-group-meta {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    color: var(--text-muted, #64748b);
+}
+
+.id-group-select {
+    flex: 0 0 220px;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
+.id-group-body {
+    padding: 6px 14px 12px;
+}
+
+.id-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color-subtle, rgba(0, 0, 0, 0.03));
+}
+
+.id-row:last-child {
+    border-bottom: none;
+}
+
+.id-row-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.id-uid {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #0f172a);
+}
+
+.id-platform {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.08);
+    color: var(--primary, #6366f1);
+}
+
+.id-sources {
+    font-size: 11.5px;
+    color: var(--text-muted, #64748b);
+}
+
+.id-badge {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-muted, #64748b);
+}
+
+.id-badge.ok {
+    background: rgba(5, 150, 105, 0.1);
+    color: var(--accent-green, #059669);
+}
+
+.id-row-select {
+    flex: 0 0 220px;
+    font-size: 12px;
+    padding: 5px 8px;
+}
+
+@media (max-width: 720px) {
+    .id-group-head {
+        flex-wrap: wrap;
+    }
+
+    .id-group-select,
+    .id-row-select {
+        flex: 1 1 100%;
+    }
+
+    .id-row {
+        flex-wrap: wrap;
+    }
+}
+
+
+/* 隐藏 / 重扫 小按钮 */
+.id-mini-btn {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    padding: 4px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+    background: #fff;
+    color: var(--text-secondary, #334155);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.id-mini-btn:hover {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+.id-mini-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* 已隐藏的行 */
+.id-row.is-hidden {
+    opacity: 0.55;
+    background: rgba(0, 0, 0, 0.02);
+}
+
+.id-show-hidden {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--text-muted, #64748b);
+    cursor: pointer;
+    user-select: none;
+}
+
+.id-badge.muted {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-muted, #64748b);
+}
+
+/* 好感度模块 */
+.aff-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: #fff;
+    border-radius: 12px;
+    margin-bottom: 8px;
+}
+
+.aff-name {
+    flex: 0 0 150px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.aff-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-primary, #0f172a);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.aff-role {
+    font-size: 10.5px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-muted, #64748b);
+    flex: 0 0 auto;
+}
+
+.aff-role.admin {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--primary, #6366f1);
+}
+
+.aff-bar {
+    flex: 1;
+    min-width: 120px;
+}
+
+.aff-value {
+    flex: 0 0 40px;
+    text-align: right;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary, #0f172a);
+}
+
+.aff-value.unknown {
+    color: #94a3b8;
+}
+
+.aff-range {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.aff-range-input {
+    width: 64px;
+    padding: 5px 7px;
+    font-size: 12px;
+}
+
+.aff-input-value {
+    width: 72px;
+}
+
+.aff-sep {
+    font-size: 12px;
+    color: var(--text-muted, #64748b);
+}
+
+@media (max-width: 900px) {
+    .aff-row {
+        flex-wrap: wrap;
+    }
+
+    .aff-range {
+        flex: 1 1 100%;
+    }
+}

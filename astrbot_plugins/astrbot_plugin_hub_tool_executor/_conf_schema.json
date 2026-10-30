@@ -1,0 +1,36 @@
+{
+  "hidden_tools": {
+    "description": "允许 call_raw_tool 执行的原始工具白名单",
+    "type": "list",
+    "default": [
+      "control_host_pc_via_antigravity",
+      "bilibili_hub",
+      "you-search",
+      "you-contents",
+      "you-balance"
+    ],
+    "hint": "只有这里列出的工具能被薄壳调用；原始工具请同时在 AstrBot 的 MCP/插件设置里停用，避免主模型直接点名调用。"
+  },
+  "hub_clean_url": {
+    "description": "中枢清洗接口地址",
+    "type": "string",
+    "default": "http://192.168.3.4:18895/api/tools/clean",
+    "hint": "AstrBot 在容器里，不要写 127.0.0.1；要用中枢所在机器的局域网地址。"
+  },
+  "hub_key": {
+    "description": "中枢客户端 Key（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "填 data/clients.json 里登记的 Key；留空则沿用中枢“clients.json 不存在就不校验”的旧行为。"
+  },
+  "clean_timeout": {
+    "description": "清洗请求超时（秒）",
+    "type": "int",
+    "default": 25
+  },
+  "max_raw_chars": {
+    "description": "回灌中枢前的原始输出长度上限（字符）",
+    "type": "int",
+    "default": 200000
+  }
+}

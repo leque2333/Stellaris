@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-助手智能体核心 (Agent Core) - 全合规双池算力矩阵与调度中枢 (Compute Providers & Dual-Pool Dispatcher)
+Stellaris Core - 全合规双池算力矩阵与调度中枢 (Compute Providers & Dual-Pool Dispatcher)
 支持：
 1. 官方 IDE / 本地开发者环境桥接 (IDE Bridge / Local Toolchain)
 2. 官方直接 API (Official BYOK: DeepSeek, Google, OpenAI, Anthropic, 国内合规大模型)
@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("ComputeProviders")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-CONFIG_PATH = BASE_DIR / "data" / "compute_providers.json"
+CONFIG_PATH = Path(os.getenv("COMPUTE_CONFIG_PATH") or (BASE_DIR / "data" / "compute_providers.json"))
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "active_slots": {
@@ -59,7 +59,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "api_key": "",
             "model": "gemini-2.0-flash",
             "temperature": 0.7,
-            "description": "官方 API 直连，高情商、响应快、极度适合前台助手发声"
+            "description": "官方 API 直连，高情商、响应快、极度适合前台角色发声"
         },
         "local_ollama": {
             "name": "本地私有化 Ollama 引擎",
@@ -237,71 +237,254 @@ class ComputeManager:
             cost_ms = int((time.time() - t0) * 1000)
             return {"ok": False, "latency_ms": cost_ms, "error": str(e)}
 
+    def resolve_model(self, slot_or_key: str = "persona_slot") -> str:
+        """返回当前槽位最可能实际使用的模型，用于账本记录。"""
+        try:
+            candidates = self._candidate_providers(slot_or_key)
+            if candidates:
+                return str(candidates[0].get("model") or "")
+        except Exception:
+            pass
+        return ""
+
+    def _candidate_providers(self, slot_or_key: str) -> List[Dict[str, Any]]:
+        """组装候选 provider：凭证池优先，compute_providers 配置兜底"""
+        self.load_config()
+        models_cfg_path = os.path.join(os.path.dirname(self.config_path), "models_config.json")
+        models_cfg: Dict[str, Any] = {}
+        if os.path.exists(models_cfg_path):
+            try:
+                with open(models_cfg_path, "r", encoding="utf-8") as f:
+                    models_cfg = json.load(f)
+            except Exception:
+                pass
+
+        candidate_providers: List[Dict[str, Any]] = []
+        is_func_slot = (slot_or_key in ("logic_slot", "function", "tool"))
+
+        if is_func_slot:
+            for fc in models_cfg.get("function_credentials", []):
+                if fc.get("is_active", True) and (fc.get("api_key") or fc.get("auth_type") in ("ollama", "ide_bridge")):
+                    candidate_providers.append({
+                        "name": fc.get("name") or fc.get("provider", "功能凭证"),
+                        "base_url": fc.get("base_url") or "https://api.openai.com/v1",
+                        "api_key": fc.get("api_key", ""),
+                        "model": fc.get("model", "default"),
+                        "reasoning_effort": fc.get("reasoning_effort", "none"),
+                        "temperature": fc.get("temperature", 0.2),
+                    })
+        else:
+            for mc in models_cfg.get("master_credentials", []):
+                if mc.get("is_active", True) and mc.get("api_key"):
+                    candidate_providers.append({
+                        "name": mc.get("name") or mc.get("provider", "主控凭证"),
+                        "base_url": mc.get("base_url") or "https://generativelanguage.googleapis.com/v1beta/openai/",
+                        "api_key": mc.get("api_key", ""),
+                        "model": mc.get("model") or models_cfg.get("active_model", "gemini-3.8-flash"),
+                        "reasoning_effort": mc.get("reasoning_effort") or models_cfg.get("reasoning_effort", "none"),
+                        "temperature": 0.7,
+                    })
+
+        p_def = self.get_provider(slot_or_key)
+        if p_def:
+            # 兜底 provider 也跟随 Web 选择的主控 Gemini 模型
+            provider_key = self._config.get("active_slots", {}).get(slot_or_key, slot_or_key)
+            if provider_key == "google_gemini_official":
+                active_master_model = ""
+                for mc in models_cfg.get("master_credentials", []):
+                    if mc.get("is_active", True) and mc.get("api_key") and mc.get("model"):
+                        active_master_model = str(mc["model"])
+                        break
+                if active_master_model.startswith("gemini"):
+                    p_def = dict(p_def)
+                    p_def["model"] = active_master_model
+            # 空 key 的 provider 只会制造 401，跳过它，避免打断有效凭证的轮换
+            if p_def.get("api_key") or p_def.get("auth_type") in ("ollama", "ide_bridge"):
+                candidate_providers.append(p_def)
+        return candidate_providers
+
+    def _build_payload(
+        self,
+        provider: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "model": provider.get("model", "default"),
+            "messages": messages,
+            "temperature": temperature if temperature is not None else provider.get("temperature", 0.7),
+            "max_tokens": max_tokens or 2048,
+        }
+        if provider.get("reasoning_effort") and provider.get("reasoning_effort") != "none":
+            payload["reasoning_effort"] = provider["reasoning_effort"]
+        if extra:
+            for key, value in extra.items():
+                if value is not None:
+                    payload[key] = value
+        payload["model"] = provider.get("model", payload.get("model", "default"))
+        return payload
+
+    def _request_headers(self, provider: Dict[str, Any]) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "AnanHub-ComputeMatrix/1.0",
+        }
+        api_key = provider.get("api_key", "")
+        if api_key and api_key not in ("none", "local-ide-session", ""):
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+    def _endpoint(self, provider: Dict[str, Any]) -> str:
+        base_url = provider.get("base_url", "").rstrip("/")
+        if base_url.endswith("/chat/completions"):
+            return base_url
+        return f"{base_url}/chat/completions"
+
+    def _execute_request(
+        self,
+        provider: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        timeout: int,
+        current_port: Optional[int],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        base_url = provider.get("base_url", "").rstrip("/")
+        if current_port and f":{current_port}" in base_url:
+            return None
+
+        payload = self._build_payload(provider, messages, temperature, max_tokens, extra)
+        req = urllib.request.Request(
+            self._endpoint(provider),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._request_headers(provider),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+    def chat_completion_response(
+        self,
+        slot_or_key: str,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: int = 30,
+        current_port: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """返回上游完整 OpenAI 响应（含 tool_calls），供网关透传"""
+        for idx, prov in enumerate(self._candidate_providers(slot_or_key)):
+            p_name = prov.get("name", f"凭证-{idx+1}")
+            try:
+                data = self._execute_request(
+                    prov, messages, temperature, max_tokens, timeout, current_port, extra
+                )
+                if data and data.get("choices"):
+                    return data
+            except Exception as e:
+                logger.warning("凭证 [%s] 调用报错: %s，切换备用凭证", p_name, e)
+                try:
+                    from . import messages as _msgs
+
+                    _msgs.warn(f"凭证「{p_name}」调用失败：{str(e)[:80]}，已切备用")
+                except Exception:
+                    pass
+                self._report_failover(p_name, e)
+                continue
+        return None
+
+    def _report_failover(self, p_name: str, error: Exception) -> None:
+        """凭证轮换只是运维事件，不写时间轴（那是 AI 的自传记忆）。"""
+        try:
+            from . import messages as _msgs
+
+            _msgs.warn(f"凭证「{p_name}」轮换：{str(error)[:80]}")
+        except Exception:
+            pass
+
     def chat_completion(
         self,
         slot_or_key: str,
         messages: List[Dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        timeout: int = 15,
-        current_port: Optional[int] = None
+        timeout: int = 30,
+        current_port: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], int, int]:
-        """
-        向指定槽位或 Provider 发起真实大模型对话推导
-        返回: (reply_text, prompt_tokens, completion_tokens)
-        若上游离线、超时或未配置 Key，返回 (None, 0, 0) 由中枢无缝降级兜底
-        """
-        provider = self.get_provider(slot_or_key)
-        if not provider:
+        """兼容旧调用：只取文本内容与 token 数"""
+        data = self.chat_completion_response(
+            slot_or_key, messages, temperature, max_tokens, timeout, current_port, extra
+        )
+        if not data:
             return None, 0, 0
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message", {}) or {}
+        content = message.get("content") or ""
+        usage = data.get("usage", {}) or {}
+        p_in = int(usage.get("prompt_tokens", len(str(messages)) // 3) or 0)
+        p_out = int(usage.get("completion_tokens", len(content) // 2) or 0)
+        return content, p_in, p_out
 
-        base_url = provider.get("base_url", "").rstrip("/")
-        api_key = provider.get("api_key", "")
-        model = provider.get("model", "default")
+    def stream_chat_completion(
+        self,
+        slot_or_key: str,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: int = 120,
+        current_port: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ):
+        """真流式：逐块 yield 上游 SSE 原始字节；首个成功连接前支持故障转移"""
+        for idx, prov in enumerate(self._candidate_providers(slot_or_key)):
+            p_name = prov.get("name", f"凭证-{idx+1}")
+            base_url = prov.get("base_url", "").rstrip("/")
+            if current_port and f":{current_port}" in base_url:
+                continue
 
-        # 防本地自死锁保护：如果 base_url 指向自身当前端口，不发本地 HTTP 自循环
-        if current_port and f":{current_port}" in base_url:
-            return None, 0, 0
+            payload = self._build_payload(prov, messages, temperature, max_tokens, extra)
+            payload["stream"] = True
+            headers = self._request_headers(prov)
+            headers["Accept"] = "text/event-stream"
 
-        endpoint = f"{base_url}/chat/completions"
-        if base_url.endswith("/chat/completions"):
-            endpoint = base_url
-
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AnanHub-ComputeMatrix/1.0"
-        }
-        if api_key and api_key not in ("none", "local-ide-session", ""):
-            headers["Authorization"] = f"Bearer {api_key}"
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature if temperature is not None else provider.get("temperature", 0.7),
-            "max_tokens": max_tokens or 2048
-        }
-
-        try:
             req = urllib.request.Request(
-                endpoint,
+                self._endpoint(prov),
                 data=json.dumps(payload).encode("utf-8"),
                 headers=headers,
-                method="POST"
+                method="POST",
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-                choices = data.get("choices", [])
-                if choices:
-                    content = choices[0].get("message", {}).get("content", "")
-                    usage = data.get("usage", {})
-                    p_in = usage.get("prompt_tokens", len(str(messages)) // 3)
-                    p_out = usage.get("completion_tokens", len(content) // 2)
-                    return content, p_in, p_out
-        except Exception as e:
-            logger.warning(f"调用 Provider [{provider.get('name')}] 异常: {e}")
-            return None, 0, 0
-        return None, 0, 0
+            try:
+                resp = urllib.request.urlopen(req, timeout=timeout)
+            except Exception as e:
+                logger.warning("流式凭证 [%s] 连接失败: %s，切换备用凭证", p_name, e)
+                try:
+                    from . import messages as _msgs
+
+                    _msgs.warn(f"流式凭证「{p_name}」连接失败：{str(e)[:80]}，已切备用")
+                except Exception:
+                    pass
+                self._report_failover(p_name, e)
+                continue
+
+            try:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            return
 
 
-# 全局单例
+# 全局单例（网关与 CLI 共用）
 compute_manager = ComputeManager()
+

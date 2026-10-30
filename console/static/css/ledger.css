@@ -1,0 +1,475 @@
+/* Stellaris - Billing & Token Consumption Ledger (Pure Flat Borderless) */
+
+/* ── 合计指标：只保留 Token 与调用次数 ───────────────────────── */
+.ledger-stats-strip {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 16px !important;
+    margin-bottom: 24px !important;
+}
+
+.ledger-stat-box {
+    background: #ffffff !important;
+    border-radius: 12px !important;
+    padding: 18px 22px !important;
+    border: none !important;
+    box-shadow: none !important;
+    min-width: 0 !important;
+}
+
+.ledger-stat-label {
+    font-size: 12px !important;
+    color: #64748b !important;
+    font-weight: 500 !important;
+    margin-bottom: 6px !important;
+}
+
+.ledger-stat-val {
+    font-size: 24px !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    font-variant-numeric: tabular-nums !important;
+    font-family: var(--font-sans) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+/* ── 金额核算：主控 / 执行分开，组内按币种 ───────────────────── */
+.ledger-accounting-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 4px 0 12px 0;
+}
+
+.ledger-accounting-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 0.01em;
+}
+
+.ledger-accounting-hint {
+    margin-top: 3px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: #64748b;
+}
+
+.ledger-accounting-groups {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin: 0 0 20px 0;
+}
+
+.ledger-accounting-card {
+    background: #ffffff;
+    border: none;
+    border-radius: 14px;
+    padding: 18px 20px 16px;
+    min-width: 0;
+}
+
+.ledger-accounting-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.ledger-accounting-card-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.ledger-accounting-card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.ledger-accounting-card-sub {
+    font-size: 10.5px;
+    color: #94a3b8;
+}
+
+.ledger-accounting-unit-badge {
+    flex: none;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #475569;
+    background: #f1f5f9;
+    border-radius: 999px;
+    padding: 3px 9px;
+    white-space: nowrap;
+}
+
+.ledger-money-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0;
+    border-top: 1px solid rgba(15, 23, 42, 0.05);
+    border-bottom: 1px solid rgba(15, 23, 42, 0.05);
+}
+
+.ledger-money-row {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+}
+
+.ledger-money-unit {
+    justify-self: start;
+    font-size: 10.5px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #64748b;
+    background: #f8fafc;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+
+.ledger-money-cell {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.ledger-money-label {
+    flex: none;
+    font-size: 10.5px;
+    color: #94a3b8;
+}
+
+.ledger-money-value {
+    font-size: 17px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ledger-money-empty {
+    padding: 10px 0;
+    font-size: 11.5px;
+    color: #94a3b8;
+}
+
+.ledger-usage-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 16px;
+    padding-top: 12px;
+}
+
+.ledger-usage-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ledger-usage-label {
+    font-size: 10.5px;
+    color: #94a3b8;
+    white-space: nowrap;
+}
+
+.ledger-usage-value {
+    font-size: 13px;
+    font-weight: 650;
+    color: #334155;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ledger-usage-value em {
+    font-style: normal;
+    font-size: 10px;
+    color: #94a3b8;
+    margin-left: 2px;
+}
+
+/* ── 金额核算：主控/执行两行，每行指标各自独立成卡 ───────────── */
+.ledger-accounting-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin: 0 0 24px 0;
+}
+
+.ledger-accounting-row {
+    min-width: 0;
+}
+
+.ledger-accounting-subtitle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px 2px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 0.01em;
+}
+
+.ledger-accounting-subtitle::before {
+    content: "";
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: #2563eb;
+}
+
+.ledger-accounting-subtitle.is-function::before {
+    background: #7c3aed;
+}
+
+.ledger-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.ledger-metric-card {
+    /* 外观完全继承 .ledger-stat-box，与顶部四张卡同宽同高同内边距 */
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.ledger-metric-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+    margin-bottom: 6px;
+}
+
+.ledger-metric-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #64748b;
+    line-height: 1.35;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ledger-metric-badge {
+    flex: none;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #475569;
+    background: #f1f5f9;
+    border-radius: 999px;
+    padding: 2px 6px;
+    white-space: nowrap;
+}
+
+.ledger-metric-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-sans);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── 明细表 ─────────────────────────────────────────────────── */
+.table-wrap {
+    background: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    overflow-x: auto !important;
+    padding: 8px 16px !important;
+}
+
+.data-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    background: transparent !important;
+}
+
+.data-table th {
+    background: transparent !important;
+    color: #64748b !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.04em !important;
+    padding: 12px 14px !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.05) !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+}
+
+.data-table td {
+    padding: 14px 14px !important;
+    font-size: 13px !important;
+    color: #0f172a !important;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.035) !important;
+    vertical-align: middle !important;
+}
+
+.data-table tr:hover td {
+    background: rgba(15, 23, 42, 0.02) !important;
+}
+
+.ledger-row-recharge td {
+    background: rgba(34, 197, 94, 0.035) !important;
+}
+
+.ledger-id-cell {
+    color: var(--text-muted) !important;
+    font-family: var(--font-mono) !important;
+}
+
+.ledger-model-cell {
+    font-weight: 600 !important;
+    color: #0f172a !important;
+    word-break: break-all !important;
+}
+
+.ledger-muted-cell {
+    color: #94a3b8 !important;
+}
+
+.ledger-cost-cell {
+    font-family: var(--font-mono) !important;
+    font-weight: 650 !important;
+    color: #0f172a !important;
+    white-space: nowrap !important;
+}
+
+.ledger-cost-cell.is-recharge {
+    color: #059669 !important;
+}
+
+.ledger-time-cell {
+    color: #94a3b8 !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+}
+
+.ledger-credential-badge {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 650;
+    line-height: 1.5;
+    border-radius: 999px;
+    padding: 1px 7px;
+    white-space: nowrap;
+}
+
+.ledger-credential-badge.is-master {
+    color: #1d4ed8;
+    background: rgba(37, 99, 235, 0.10);
+}
+
+.ledger-credential-badge.is-function {
+    color: #6d28d9;
+    background: rgba(124, 58, 237, 0.10);
+}
+
+.ledger-credential-badge.is-other {
+    color: #475569;
+    background: #f1f5f9;
+}
+
+.ledger-credential-badge.is-recharge {
+    color: #059669;
+    background: rgba(34, 197, 94, 0.12);
+}
+
+.ledger-credential-currency {
+    margin-left: 5px;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: #94a3b8;
+}
+
+/* ── 响应式 ─────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+    .ledger-stats-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .ledger-metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 900px) {
+    .ledger-accounting-groups {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    /* 与 mobile.css 中顶部 .ledger-stats-strip / .ledger-stat-* 保持一致 */
+    .ledger-metric-grid {
+        gap: 8px;
+    }
+
+    .ledger-metric-label {
+        font-size: 10.5px;
+    }
+
+    .ledger-metric-value {
+        font-size: 14px;
+    }
+}
+
+@media (max-width: 640px) {
+    .ledger-stats-strip {
+        grid-template-columns: minmax(0, 1fr) !important;
+        gap: 10px !important;
+    }
+
+    .ledger-stat-val {
+        font-size: 21px !important;
+    }
+
+    .ledger-metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ledger-accounting-card {
+        padding: 16px 14px 14px;
+    }
+
+    .ledger-money-row {
+        grid-template-columns: 48px minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .ledger-money-value {
+        font-size: 15px;
+    }
+}

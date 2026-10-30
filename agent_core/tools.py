@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-助手智能体核心 (Agent Core) - 统一工具总线 (Tool & Skill Engine)
+Stellaris Core - 统一工具总线 (Tool & Skill Engine)
 提供声明式工具注册 (@tool_registry.register)、自动类型推导生成 Schema、异步/同步执行与统一分发
 """
 
@@ -30,6 +30,11 @@ class ToolRegistry:
     """
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
+
+    @property
+    def tools(self) -> Dict[str, ToolDefinition]:
+        """获取所有已注册的工具字典"""
+        return self._tools
 
     def register(
         self,

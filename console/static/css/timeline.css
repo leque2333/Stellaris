@@ -1,0 +1,72 @@
+/* Stellaris - Timeline Stream & Event Cards (Pure Flat Borderless) */
+
+.timeline-stream {
+    background: transparent !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+}
+
+.timeline-card {
+    background: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    padding: 18px 22px !important;
+    margin-bottom: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+    transition: transform 0.15s ease, background-color 0.15s ease !important;
+}
+
+.timeline-card:hover {
+    background: #ffffff !important;
+}
+
+.timeline-header {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+}
+
+.timeline-tag,
+.tag-pc,
+.tag-bili,
+.tag-chat,
+.tag-core {
+    background: rgba(15, 23, 42, 0.06) !important;
+    color: #334155 !important;
+    border: none !important;
+    box-shadow: none !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    padding: 2px 8px !important;
+    border-radius: 4px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    line-height: 1.3 !important;
+}
+
+.timeline-time {
+    font-size: 12px !important;
+    color: #64748b !important;
+    font-family: var(--font-mono) !important;
+    font-variant-numeric: tabular-nums !important;
+}
+
+.timeline-body {
+    font-size: 13.5px !important;
+    color: #0f172a !important;
+    line-height: 1.6 !important;
+    word-break: break-word !important;
+}
+
+.timeline-item {
+    background: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    padding: 18px 22px !important;
+}

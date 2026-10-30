@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-助手独立智能体内核 (AnanAgent Engine)
+Stellaris 智能体内核 (Agent Engine)
 以人设灵魂与自传时间轴为中枢，对外提供统一的 .chat() 入口，向下统领统一工具总线与经历沉淀
 """
 
@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .identity import IdentityResolver
 from .llm import LLMClient
+from .memory import register_memory_tools
 from .persona import PersonaManager
 from .timeline_hub import TimelineHub
 from .tools import ToolRegistry, tool_registry
@@ -25,7 +26,7 @@ class AgentResponse:
     """智能体交互标准响应对象"""
     text: str                               # 经人设法则清洗后的最终纯口语台词 (无句号，无括号)
     actor_id: str                           # 交互对象实体标识 ('master' | 'user_xxx')
-    actor_name: str                         # 交互对象展示名称 ('主人')
+    actor_name: str                         # 交互对象展示名称 ('主人' / '用户')
     current_affection: int                  # 当前好感度 (0 ~ 100)
     executed_tools: List[Dict[str, Any]] = field(default_factory=list) # 本轮自主执行的工具记录
     channel: str = "cli"                    # 触发通道 ('web' | 'cli' | 'api')
@@ -33,7 +34,7 @@ class AgentResponse:
 
 class AnanAgent:
     """
-    助手独立智能体大脑主控
+    Stellaris 智能体大脑主控；角色名与人格内容全部来自人设卡
     """
     def __init__(
         self,
@@ -49,7 +50,7 @@ class AnanAgent:
         
         # 挂载核心内置工具
         self._register_builtin_tools()
-        logger.info("[AnanAgent] 助手独立智能体内核已就绪！")
+        logger.info("[AgentEngine] 智能体内核已就绪，角色=%s", IdentityResolver.get_bot_name())
 
     def _register_builtin_tools(self):
         """挂载核心内置器官工具 (时间轴回忆、好感度调节)"""
@@ -75,6 +76,25 @@ class AnanAgent:
             )
             return f"好感度已自主更新为 {new_aff}/100 (变动: {delta}, 原因: {reason})"
 
+        @self.tools.register(
+            name="delegate_execution",
+            description="把需要多步执行的任务交给执行 AI：mode=investigate 只读调查，mode=execute 在工作区改文件/跑白名单命令。"
+        )
+        async def delegate_execution(goal: str, mode: str = "execute") -> str:
+            from .execution import ExecutionAgent
+
+            result = await ExecutionAgent(store=self.timeline_hub.store).run(
+                goal=goal, mode=mode if mode in ("investigate", "execute") else "execute"
+            )
+            return result.text or result.error or "执行 AI 没有返回内容"
+
+        # 挂载自主长期记忆与偏好维护工具 (Letta / Mem0 原生器官)
+        register_memory_tools(
+            tools=self.tools,
+            fact_mgr=self.timeline_hub.profile,
+            reflection_engine=self.timeline_hub.profile.diary
+        )
+
     async def chat(
         self,
         text: str,
@@ -96,12 +116,10 @@ class AnanAgent:
         actor_id, actor_name, role_type = IdentityResolver.resolve_actor(channel, user_id, user_name)
         current_affection = self.timeline_hub.get_user_affection(actor_id)
 
-        # 1. 提取主人事实画像
+        # 1. 提取主人事实画像 (优先使用原子事实库)
         master_facts = []
         if actor_id == "master":
-            prof = self.timeline_hub.get_user_profile("master")
-            if prof:
-                master_facts = prof.get("facts", [])
+            master_facts = self.timeline_hub.profile.get_facts_for_prompt("master", limit=8)
 
         # 2. 检索时间轴经历
         recalled_texts = []
@@ -150,7 +168,7 @@ class AnanAgent:
                 source_module=f"{channel}_interaction",
                 actor_id=actor_id,
                 actor_name=actor_name,
-                narrative=f"{actor_name}说：“{raw_text}”，助手回答：“{final_speech}”",
+                narrative=f"{actor_name}说：“{raw_text}”，{IdentityResolver.get_bot_name()}回答：“{final_speech}”",
                 importance=2.0 if actor_id == "master" else 1.0,
                 metadata={"channel": channel, "tool_count": len(tool_logs)}
             )
