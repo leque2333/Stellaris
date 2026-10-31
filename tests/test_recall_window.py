@@ -12,7 +12,11 @@ sys.path.insert(0, str(ROOT / "console"))
 sys.path.insert(0, str(ROOT))
 
 from agent_core.memory.aggregator import SegmentAggregator, _readable_context  # noqa: E402
-from agent_core.memory.episodic_stream import _recall_window, _trim_to_budget  # noqa: E402
+from agent_core.memory.episodic_stream import (  # noqa: E402
+    _drop_empty_summaries,
+    _recall_window,
+    _trim_to_budget,
+)
 from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
 
@@ -81,6 +85,13 @@ class RecallWindowTest(unittest.TestCase):
             for key in ("HUB_RECALL_CHARS", "HUB_RECALL_DAYS", "HUB_RECALL_CANDIDATES",
                         "HUB_RECALL_EXCLUDE"):
                 os.environ.pop(key, None)
+
+    def test_drop_empty_summaries(self):
+        empty = _fake_event("a", "qq 群聊 784826874；模块：llm.persona（共 2 个片段）")
+        with_highlights = _fake_event("b", "qq 群聊；模块：x（共 3 个片段）。要点：看了视频")
+        dialog = _fake_event("c", "某说：「hi」；安桉回答：「嗯」")
+        kept = _drop_empty_summaries([empty, with_highlights, dialog])
+        self.assertEqual([e.event_id for e in kept], ["b", "c"])
 
     def test_trim_to_budget(self):
         events = [

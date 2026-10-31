@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time
 from typing import Any, Dict, Optional
@@ -251,7 +252,17 @@ class SegmentAggregator:
         )
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+
+
 def run_forever(store: Store, interval: float = 30.0, **kwargs) -> None:
+    """后台聚合：默认每 30 秒 tick 一次，空闲窗口可用环境变量调。"""
+    kwargs.setdefault("idle_seconds", _env_float("HUB_AGGREGATOR_IDLE_SECONDS", 600.0))
+    interval = _env_float("HUB_AGGREGATOR_INTERVAL_SECONDS", interval)
     aggregator = SegmentAggregator(store, **kwargs)
     while True:
         try:

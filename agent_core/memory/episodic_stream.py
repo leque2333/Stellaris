@@ -69,6 +69,20 @@ def _recall_window():
     return chars, days, limit, excluded
 
 
+SUMMARY_MARK = "个片段）"
+
+
+def _drop_empty_summaries(events):
+    """聚合摘要行没有实际内容，别占召回名额；带「要点」的保留。"""
+    kept = []
+    for event in events:
+        narrative = getattr(event, "narrative", "") or ""
+        if SUMMARY_MARK in narrative and "要点：" not in narrative:
+            continue
+        kept.append(event)
+    return kept
+
+
 def _trim_to_budget(events, budget: int):
     """从新到旧累计字数，超过预算就停；保证候选池大小可预期。"""
     if budget <= 0:
@@ -313,6 +327,7 @@ class EpisodicStream:
             person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group,
             since_ts=since_ts, limit=candidate_limit, exclude_sources=excluded,
         )
+        candidates = _drop_empty_summaries(candidates)
         candidates = _trim_to_budget(candidates, char_budget)
         if not candidates:
             return []
