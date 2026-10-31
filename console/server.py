@@ -671,6 +671,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         """改开关：local_only / allow_cidrs / trusted_proxies / signature。"""
         allowed = ('local_only', 'allow_cidrs', 'trusted_proxies', 'signature')
         patch = {key: body[key] for key in allowed if key in body}
+        if isinstance(patch.get('signature'), dict) and patch['signature'].pop('rotate', False):
+            # 轮换：新密钥立刻生效，旧密钥留一段过渡期
+            grace = int(patch['signature'].pop('grace_seconds', 1800) or 1800)
+            saved = api_security.rotate_secret(grace)
+            return self._send_json({
+                "ok": True,
+                "rotated": True,
+                "secret": saved["signature"]["secret"],
+                "previous_valid_for": max(
+                    0, saved["signature"]["previous_until"] - int(__import__("time").time())
+                ),
+            })
         if not patch:
             return self._send_json({"ok": False, "error": "没有可更新的字段"}, status=400)
         saved = api_security.save_config(patch)
@@ -1335,8 +1347,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         username = str(body.get('username') or '').strip()
         password = body.get('password') or ''
         remember = body.get('remember', True)
+        ip = api_security.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', ''))
+        wait = api_security.login_throttle.blocked_for(ip)
+        if wait:  # 连续输错就锁一会儿，挡住公网爆破
+            return self._send_json(
+                {"success": False, "error": "too_many_attempts", "retry_after": wait},
+                status=429,
+            )
         if not auth_mgr.verify_credentials(username, password):
+            api_security.login_throttle.record_failure(ip)
             return self._send_json({"success": False, "error": "用户名或安全密码不正确"}, status=401)
+        api_security.login_throttle.record_success(ip)
         token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
         max_age = 604800 if remember else 86400
         cookie = f'anan_session={token}; Path=/; SameSite=Lax; Max-Age={max_age}'

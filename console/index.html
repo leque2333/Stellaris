@@ -852,6 +852,7 @@
                         <div class="setting-col-content" style="display:flex;gap:8px;align-items:center;">
                             <input class="form-input" id="sec-secret" type="password" placeholder="留空则不修改" style="max-width: 300px; padding: 5px 8px; border: none; background: rgba(255,255,255,0.75);" />
                             <button class="btn btn-secondary" onclick="generateApiSecret()" style="font-size:12px;padding:4px 10px;">生成</button>
+                            <button class="btn btn-secondary" onclick="rotateApiSecret()" style="font-size:12px;padding:4px 10px;">轮换</button>
                         </div>
                         <div class="setting-col-action">
                             <button class="btn btn-primary" onclick="saveApiSecurity()" style="font-size:12px;padding:6px 16px;">保存 API 安全</button>

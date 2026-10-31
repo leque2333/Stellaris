@@ -71,10 +71,19 @@ def main() -> int:
     parser.add_argument("--secret", default="", help="直接指定密钥")
     parser.add_argument("--window-seconds", type=int, default=0, help="签名时间窗口")
     parser.add_argument("--lan", action="store_true", help="把局域网 / docker 网段加入放行列表")
+    parser.add_argument("--rotate-secret", action="store_true", help="轮换签名密钥（旧密钥留过渡期）")
+    parser.add_argument("--grace-minutes", type=int, default=30, help="旧密钥过渡分钟数，默认 30")
     args = parser.parse_args()
 
     if args.show:
         print(json.dumps(api_security.status(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.rotate_secret:
+        saved = api_security.rotate_secret(max(60, args.grace_minutes * 60))
+        print(f"密钥已轮换：{api_security.config_path()}")
+        print(f"新密钥（只显示这一次）：{saved['signature']['secret']}")
+        print(f"旧密钥保留 {args.grace_minutes} 分钟")
         return 0
 
     config = apply(

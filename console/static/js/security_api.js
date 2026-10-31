@@ -18,6 +18,9 @@ async function loadApiSecurity() {
             const bits = [];
             bits.push(signature.secret_configured ? '密钥已配置' : '密钥未配置');
             if (signature.window_seconds) bits.push(`窗口 ${signature.window_seconds}s`);
+            if (signature.previous_valid_for) {
+                bits.push(`旧密钥还剩 ${Math.ceil(signature.previous_valid_for / 60)} 分钟`);
+            }
             state.textContent = bits.join(' · ');
         }
     } catch (e) {
@@ -82,3 +85,22 @@ function generateApiSecret() {
 window.loadApiSecurity = loadApiSecurity;
 window.saveApiSecurity = saveApiSecurity;
 window.generateApiSecret = generateApiSecret;
+
+async function rotateApiSecret() {
+    if (!window.confirm('轮换后旧密钥 30 分钟内仍可用，过期的外部客户端需要换新密钥。继续？')) return;
+    try {
+        const resp = await fetch('/api/access_control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signature: { rotate: true, grace_seconds: 1800 } }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) throw new Error(data.error || '轮换失败');
+        window.prompt('新密钥（只显示这一次，复制给外部客户端）：', data.secret || '');
+        await loadApiSecurity();
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('轮换失败：' + (e.message || e));
+    }
+}
+
+window.rotateApiSecret = rotateApiSecret;

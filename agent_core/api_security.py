@@ -25,6 +25,7 @@ import hmac
 import ipaddress
 import json
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -43,6 +44,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "127.0.0.0/8", "::1/128",
             "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
         ],
+        # 轮换过渡：旧密钥在 previous_until 之前仍然有效
+        "previous_secret": "",
+        "previous_until": 0,
     },
 }
 
@@ -133,6 +137,8 @@ def _signature_block(value) -> Dict[str, Any]:
         "exempt_cidrs": _cidrs(
             block.get("exempt_cidrs"), DEFAULT_CONFIG["signature"]["exempt_cidrs"]
         ),
+        "previous_secret": str(block.get("previous_secret") or ""),
+        "previous_until": int(block.get("previous_until") or 0),
     }
 
 
@@ -212,10 +218,67 @@ def signature_error(
         return "bad_timestamp"
     if abs((now if now is not None else time.time()) - sent_at) > block["window_seconds"]:
         return "stale_timestamp"
-    expected = sign(method, path, timestamp, raw_body, secret)
-    if not hmac.compare_digest(expected, str(signature).strip().lower()):
-        return "bad_signature"
-    return None
+    now_ts = now if now is not None else time.time()
+    sent = str(signature).strip().lower()
+    if hmac.compare_digest(sign(method, path, timestamp, raw_body, secret), sent):
+        return None
+    previous = block["previous_secret"]
+    if previous and now_ts <= block["previous_until"]:
+        if hmac.compare_digest(sign(method, path, timestamp, raw_body, previous), sent):
+            return None
+    return "bad_signature"
+
+
+def rotate_secret(grace_seconds: int = 1800, secret: str = "") -> Dict[str, Any]:
+    """换新密钥，旧密钥在 grace_seconds 内继续有效（给客户端留出更新时间）。"""
+    current = load_config()["signature"]
+    new_secret = secret or secrets.token_hex(32)
+    return save_config({
+        "signature": {
+            "secret": new_secret,
+            "previous_secret": current["secret"],
+            "previous_until": int(time.time()) + max(60, int(grace_seconds)),
+        }
+    })
+
+
+class LoginThrottle:
+    """按 IP 记登录失败：窗口内失败够数就锁一段时间。"""
+
+    def __init__(self, max_failures: int = 5, window_seconds: int = 600, block_seconds: int = 600):
+        self.max_failures = max_failures
+        self.window_seconds = window_seconds
+        self.block_seconds = block_seconds
+        self._failures: Dict[str, list] = {}
+        self._blocked: Dict[str, float] = {}
+
+    def blocked_for(self, ip: str, now: Optional[float] = None) -> int:
+        """还要锁多少秒；没锁返回 0。"""
+        now_ts = time.time() if now is None else now
+        until = self._blocked.get(ip)
+        if not until:
+            return 0
+        if until > now_ts:
+            return int(until - now_ts)
+        self._blocked.pop(ip, None)
+        return 0
+
+    def record_failure(self, ip: str, now: Optional[float] = None) -> None:
+        now_ts = time.time() if now is None else now
+        stamps = [t for t in self._failures.get(ip, []) if now_ts - t <= self.window_seconds]
+        stamps.append(now_ts)
+        if len(stamps) >= self.max_failures:
+            self._blocked[ip] = now_ts + self.block_seconds
+            self._failures[ip] = []
+            return
+        self._failures[ip] = stamps
+
+    def record_success(self, ip: str) -> None:
+        self._failures.pop(ip, None)
+        self._blocked.pop(ip, None)
+
+
+login_throttle = LoginThrottle()
 
 
 def status() -> Dict[str, Any]:
@@ -230,6 +293,9 @@ def status() -> Dict[str, Any]:
             "window_seconds": cfg["signature"]["window_seconds"],
             "secret_configured": bool(cfg["signature"]["secret"]),
             "exempt_cidrs": cfg["signature"]["exempt_cidrs"],
+            "previous_valid_for": max(
+                0, int(cfg["signature"]["previous_until"] - time.time())
+            ) if cfg["signature"]["previous_secret"] else 0,
         },
         "path": str(config_path()),
     }

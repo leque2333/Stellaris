@@ -162,6 +162,29 @@ hub-tools 薄壳（/api/tools/clean）  不在签名范围内（它自带客户�
 
 ---
 
+## 二·五、密钥轮换
+
+`signature.secret` 是当前密钥，`previous_secret` 是上一个，在 `previous_until` 之前仍然有效。
+
+```powershell
+# 换新密钥，旧密钥保留 30 分钟（分布式部署留出更新时间）
+python scripts\setup_security.py --rotate-secret --grace-minutes 30
+```
+
+控制台里点「轮换」也一样，**新密钥只在弹窗里显示一次**，记得复制。
+
+签名校验顺序：当前密钥 → 未过期的旧密钥 → 拒绝。
+
+## 二·六、登录失败限速
+
+`/api/auth/login` 按 IP 统计：10 分钟内输错 5 次，锁 10 分钟。
+
+```json
+{"success": false, "error": "too_many_attempts", "retry_after": 587}
+```
+
+HTTP 状态 429。锁定状态在内存里，重启中枢即清零；登录成功会立刻解除。
+
 ## 三、回滚
 
 改坏了最省事的办法：把 `data/api_security.json` 删掉（回到默认全关），或：
