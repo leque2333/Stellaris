@@ -33,7 +33,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("ToolShelves.Cleaner")
@@ -170,36 +170,6 @@ def _url_key(url: str) -> str:
     u = re.sub(r"^https?://", "", u, flags=re.I)
     u = u.split("#", 1)[0].split("?", 1)[0]
     return u.rstrip("/").lower()
-
-
-def guard_violation(output_text: str, guards: Dict[str, set], source_text: str = "") -> str:
-    """检查模型输出有没有凭空造出原文没有的 URL / BV / 具体数值。"""
-    raw_out = str(output_text or "")
-    raw_src = str(source_text or "")
-
-    fake_nums = set()
-    for token in strict_numbers(raw_out):
-        if token in raw_src:
-            continue
-        # 原文里以其他形式出现过（如 12.4万）也放过
-        if token.replace(".", "") in raw_src.replace(".", ""):
-            continue
-        fake_nums.add(token)
-
-    known_urls = {_url_key(u) for u in (guards.get("urls") or set())}
-    known_urls |= {_url_key(u) for u in _URL_RE.findall(raw_src)}
-    fake_urls = {u for u in _URL_RE.findall(raw_out) if _url_key(u) not in known_urls}
-
-    fake_bvs = {b for b in _BV_RE.findall(raw_out) if b not in (guards.get("bvs") or set())}
-
-    parts = []
-    if fake_nums:
-        parts.append(f"数值 {sorted(fake_nums)[:5]}")
-    if fake_urls:
-        parts.append(f"URL {sorted(fake_urls)[:3]}")
-    if fake_bvs:
-        parts.append(f"BV {sorted(fake_bvs)[:3]}")
-    return "；".join(parts)
 
 
 # ----------------------------------------------------------------------
@@ -399,99 +369,93 @@ def compress_tool_result(
     started = time.time()
     text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
     result = CompressionResult(tool=tool, raw_chars=len(text))
-
     try:
-        # 1) 安全快通道：简短数值/状态类工具绝不进模型
-        if tool in SAFE_SHORT_TOOLS:
-            limit = int(SAFE_SHORT_TOOLS[tool].get("max_chars") or 400)
-            out, cut = head_tail(text, limit)
-            result.text = out
-            result.truncated = cut
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        profile = _profile_for(tool, compression)
-        if not profile:
-            # 未配置的工具：只做超长截断，不改内容
-            limit = int(compression.get("max_raw_chars") or 24000)
-            out, cut = head_tail(text, limit)
-            result.text = out
-            result.truncated = cut
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        # 2) 代码粗筛
-        mode = str(profile.get("mode") or "model")
-        limit = int(profile.get("max_chars") or 1600)
-        strip_tags = bool(profile.get("strip_html", True))
-        model_limit = int(compression.get("max_raw_chars") or 24000)
-        cleaned, cut = pre_clean(text, model_limit, strip_tags=strip_tags)
-        result.truncated = cut
-
-        if mode == "code":
-            out, cut2 = head_tail(cleaned, limit)
-            result.text = out
-            result.truncated = result.truncated or cut2
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        # 3) 模型摘要（可选：短内容直接放过，省一次调用）
-        min_model_chars = int(compression.get("min_model_chars") or 1200)
-        if complete_once is None or len(cleaned) < min_model_chars:
-            out, cut2 = head_tail(cleaned, limit)
-            result.text = out
-            result.truncated = result.truncated or cut2
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        guards = extract_guards(cleaned)
-        system, user = build_cleaner_prompt(tool, args, cleaned, user_query)
-        output, p_in, p_out, err = complete_once(system, user, compression)
-        result.prompt_tokens = p_in
-        result.completion_tokens = p_out
-        if err or not output:
-            result.error = err or "empty"
-            out, cut2 = head_tail(cleaned, limit)
-            result.text = out
-            result.truncated = result.truncated or cut2
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        data, parse_err = parse_cleaner_output(output, guards, cleaned)
-        if data is None:
-            # 数字/URL 对不上或解析失败 → 整段作废，回退代码粗筛
-            result.error = parse_err
-            out, cut2 = head_tail(cleaned, limit)
-            result.text = out
-            result.truncated = result.truncated or cut2
-            result.clean_chars = len(out)
-            result.latency_ms = int((time.time() - started) * 1000)
-            return result
-
-        rendered = render_summary(data, guards, result.truncated or bool(data.get("truncated")))
-        out, cut2 = head_tail(rendered, limit)
-        result.text = out
-        result.truncated = result.truncated or cut2
-        result.used_model = True
-        result.dropped = str(data.get("dropped") or "")[:40]
-        result.clean_chars = len(out)
-        result.latency_ms = int((time.time() - started) * 1000)
-        return result
+        return _compress_stages(
+            result, text, tool, compression, args, user_query, complete_once, started
+        )
     except Exception as exc:
         logger.info("[ToolShelves] 清洗失败，原样放行 (%s): %s", tool, exc)
-        out, cut = head_tail(text, int(compression.get("max_raw_chars") or 24000))
-        result.text = out
-        result.truncated = cut
-        result.error = f"{type(exc).__name__}:{exc}"[:120]
-        result.clean_chars = len(out)
-        result.latency_ms = int((time.time() - started) * 1000)
-        return result
+        return _fallback_result(result, text, compression, started, f"{type(exc).__name__}:{exc}")
 
+
+def _compress_stages(result, text, tool, compression, args, user_query, complete_once, started):
+    """按 安全快通道 → 代码粗筛 → 模型摘要 三级走，先命中先返回。"""
+    if tool in SAFE_SHORT_TOOLS:
+        limit = int(SAFE_SHORT_TOOLS[tool].get("max_chars") or 400)
+        return _head_tail_result(result, text, limit, started)
+    profile = _profile_for(tool, compression)
+    if not profile:
+        return _head_tail_result(result, text, int(compression.get("max_raw_chars") or 24000), started)
+    limit = int(profile.get("max_chars") or 1600)
+    cleaned, cut = pre_clean(
+        text,
+        int(compression.get("max_raw_chars") or 24000),
+        strip_tags=bool(profile.get("strip_html", True)),
+    )
+    result.truncated = cut
+    if str(profile.get("mode") or "model") == "code":
+        return _head_tail_result(result, cleaned, limit, started)
+    return _model_stage(result, cleaned, tool, args, user_query, complete_once, compression, limit, started)
+
+
+def _model_stage(result, cleaned, tool, args, user_query, complete_once, compression, limit, started):
+    """短内容不调模型；调了也要校验数字/链接对得上。"""
+    min_model_chars = int(compression.get("min_model_chars") or 1200)
+    if complete_once is None or len(cleaned) < min_model_chars:
+        return _head_tail_result(result, cleaned, limit, started)
+    guards = extract_guards(cleaned)
+    output, err = _call_cleaner(complete_once, tool, args, cleaned, user_query, compression, result)
+    if err or not output:
+        result.error = err or "empty"
+        return _head_tail_result(result, cleaned, limit, started)
+    data, parse_err = parse_cleaner_output(output, guards, cleaned)
+    if data is None:
+        result.error = parse_err
+        return _head_tail_result(result, cleaned, limit, started)
+    return _render_result(result, data, guards, limit, started)
+
+
+def _call_cleaner(complete_once, tool, args, cleaned, user_query, compression, result):
+    """调一次清洗模型，顺手把 token 记到结果上。"""
+    system, user = build_cleaner_prompt(tool, args, cleaned, user_query)
+    output, p_in, p_out, err = complete_once(system, user, compression)
+    result.prompt_tokens = p_in
+    result.completion_tokens = p_out
+    return output, err
+
+
+def _render_result(result, data, guards, limit, started):
+    """模型给了结构化摘要：渲染成文本并标记用了模型。"""
+    rendered = render_summary(data, guards, result.truncated or bool(data.get("truncated")))
+    out, cut = head_tail(rendered, limit)
+    result.text = out
+    result.truncated = result.truncated or cut
+    result.used_model = True
+    result.dropped = str(data.get("dropped") or "")[:40]
+    result.clean_chars = len(out)
+    result.latency_ms = int((time.time() - started) * 1000)
+    return result
+
+
+def _head_tail_result(result, text, limit, started):
+    """截断收尾：正文、截断标记、字符数、耗时一次写全。"""
+    out, cut = head_tail(text, limit)
+    result.text = out
+    result.truncated = result.truncated or cut
+    result.clean_chars = len(out)
+    result.latency_ms = int((time.time() - started) * 1000)
+    return result
+
+
+def _fallback_result(result, text, compression, started, error):
+    """出任何异常都回原文，别让清洗把对话拖死。"""
+    out, cut = head_tail(text, int(compression.get("max_raw_chars") or 24000))
+    result.text = out
+    result.truncated = cut
+    result.error = error[:120]
+    result.clean_chars = len(out)
+    result.latency_ms = int((time.time() - started) * 1000)
+    return result
 
 def tool_call_index(messages: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """从历史里把 tool_call_id / 工具名 / 参数 对上号（tool 消息本身不带工具名）。"""

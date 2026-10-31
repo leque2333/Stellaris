@@ -9,10 +9,10 @@ Stellaris Core - 情境经历时间轴流 (Episodic Stream)
 存储细节已下沉到 agent_core.storage，这里只保留记忆语义。
 """
 
-import json
 import math
 import struct
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -20,6 +20,132 @@ import numpy as np
 from ..identity import IdentityResolver
 from ..models import RecallResult, TimelineEvent, get_cst_now_str
 from ..storage import Store
+
+
+@dataclass(frozen=True)
+class _RecallWeights:
+    """召回打分的权重与阈值，集中传，免得六七个参数满天飞。"""
+
+    alpha: float
+    beta: float
+    gamma: float
+    tau: float
+    threshold: float
+
+
+def _allowed_actor_ids(actor_id, person_id, include_all_actors):
+    """定了 person 或要求全量时不限 actor；主人同时认 master 和 QQ 号。"""
+    if person_id or include_all_actors or not actor_id:
+        return None
+    master_qq = IdentityResolver.get_master_qq()
+    return ["master", master_qq] if actor_id in ("master", master_qq) else [actor_id]
+
+
+def _query_vector(query_embedding):
+    """把查询向量转成 (np 数组, 模长)；没有就返回 (None, 0)。"""
+    if not query_embedding:
+        return None, 0.0
+    vector = np.array(query_embedding, dtype=np.float32)
+    return vector, float(np.linalg.norm(vector))
+
+
+def _score_candidates(candidates, query, query_embedding, weights: _RecallWeights) -> List[RecallResult]:
+    """逐条打分，低于阈值的直接丢。"""
+    now_ts = time.time()
+    vector, norm = _query_vector(query_embedding)
+    scored: List[RecallResult] = []
+    for event in candidates:
+        similarity = _similarity(event, query, vector, norm)
+        recency = math.exp(-max(0.0, now_ts - float(event.timestamp)) / weights.tau)
+        importance = min(max(float(event.importance or 1.0) / 5.0, 0.2), 1.0)
+        total = _total_score(similarity, recency, importance, weights, vector is not None or similarity > 0)
+        if total >= weights.threshold:
+            scored.append(RecallResult(
+                event=event,
+                score=round(total, 4),
+                similarity=round(similarity, 4),
+                recency_score=round(recency, 4),
+                importance_score=round(importance, 4),
+            ))
+    return scored
+
+
+def _similarity(event, query, vector, norm) -> float:
+    """向量余弦 + 字面重叠，取较大者。"""
+    similarity = _cosine(event, vector, norm)
+    if query and event.narrative:
+        similarity = max(similarity, _text_overlap(query, event.narrative))
+    return similarity
+
+
+def _cosine(event, vector, norm) -> float:
+    """向量对不上（旧数据没 embedding）就当 0 分。"""
+    if vector is None or norm <= 0 or not event.embedding:
+        return 0.0
+    try:
+        candidate = np.frombuffer(event.embedding, dtype=np.float32)
+        candidate_norm = np.linalg.norm(candidate)
+        if candidate_norm > 0:
+            return float(np.dot(vector, candidate) / (norm * candidate_norm))
+    except Exception:
+        pass
+    return 0.0
+
+
+def _text_overlap(query, narrative) -> float:
+    """整句命中给 0.95；否则按字符重叠比例打折，低于 0.4 不算相关。"""
+    query_clean = str(query).strip().lower()
+    narrative_clean = str(narrative).lower()
+    if query_clean in narrative_clean:
+        return 0.95
+    chars = [c for c in query_clean if c.strip() and c not in "，。！？,.!?“”：:"]
+    if not chars:
+        return 0.0
+    ratio = sum(1 for c in chars if c in narrative_clean) / len(chars)
+    return float(ratio * 0.9) if ratio >= 0.4 else 0.0
+
+
+def _total_score(similarity, recency, importance, weights: _RecallWeights, has_query: bool) -> float:
+    """有查询就三维加权；纯闲聊场景退化成近因 + 重要度。"""
+    if has_query:
+        return (
+            weights.alpha * max(0.0, similarity)
+            + weights.beta * recency
+            + weights.gamma * importance
+        )
+    return 0.7 * recency + 0.3 * importance
+
+
+def _apply_quota(results: List[RecallResult], limit: int, max_per_module: int) -> List[RecallResult]:
+    """单模块配额：先保多样性，不够再按分数补满。"""
+    if not max_per_module or max_per_module <= 0:
+        return results[:limit]
+    return _fill_remaining(results, _pick_diverse(results, limit, max_per_module), limit)
+
+
+def _pick_diverse(results, limit, max_per_module) -> List[RecallResult]:
+    """每个来源模块最多取 max_per_module 条，避免单一高频模块刷屏。"""
+    picked: List[RecallResult] = []
+    counts: Dict[str, int] = {}
+    for item in results:
+        module = item.event.source_module
+        if counts.get(module, 0) >= max_per_module:
+            continue
+        picked.append(item)
+        counts[module] = counts.get(module, 0) + 1
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _fill_remaining(results, picked: List[RecallResult], limit: int) -> List[RecallResult]:
+    """配额没填满时按分数顺序补齐。"""
+    for item in results:
+        if item not in picked:
+            picked.append(item)
+            if len(picked) >= limit:
+                break
+    return picked
 
 
 class EpisodicStream:
@@ -126,95 +252,29 @@ class EpisodicStream:
         exclude_group: bool = False,
     ) -> List[RecallResult]:
         """三维拟人召回：Score = α·Similarity + β·Recency + γ·Importance"""
-        now_ts = time.time()
-        tau = half_life_hours * 3600.0 / math.log(2)
+        candidates = self._recall_candidates(
+            person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group
+        )
+        if not candidates:
+            return []
+        weights = _RecallWeights(alpha, beta, gamma, half_life_hours * 3600.0 / math.log(2), threshold)
+        scored = _score_candidates(candidates, query, query_embedding, weights)
+        scored.sort(key=lambda item: item.score, reverse=True)
+        return _apply_quota(scored, limit, max_per_module)
 
-        allowed_actor_ids: Optional[List[str]] = None
-        if not person_id and not include_all_actors and actor_id:
-            master_qq = IdentityResolver.get_master_qq()
-            if actor_id in ("master", master_qq):
-                allowed_actor_ids = ["master", master_qq]
-            else:
-                allowed_actor_ids = [actor_id]
-
-        candidate_kwargs: Dict[str, Any] = {
-            "actor_ids": allowed_actor_ids,
+    def _recall_candidates(
+        self, person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group
+    ) -> list:
+        """先按 person / actor 把候选收敛到 200 条，再打分。"""
+        kwargs: Dict[str, Any] = {
+            "actor_ids": _allowed_actor_ids(actor_id, person_id, include_all_actors),
             "person_ids": [str(person_id)] if person_id else None,
             "exclude_group": exclude_group,
             "limit": 200,
         }
         if include_channel and channel_id:
-            candidate_kwargs["source_modules"] = [channel_id]
-        candidates = self.store.list_candidates(**candidate_kwargs)
-        if not candidates:
-            return []
-
-        results: List[RecallResult] = []
-        q_vec = np.array(query_embedding, dtype=np.float32) if query_embedding else None
-        q_norm = np.linalg.norm(q_vec) if q_vec is not None else 0.0
-
-        for evt in candidates:
-            sim = 0.0
-            if q_vec is not None and q_norm > 0 and evt.embedding:
-                try:
-                    c_vec = np.frombuffer(evt.embedding, dtype=np.float32)
-                    c_norm = np.linalg.norm(c_vec)
-                    if c_norm > 0:
-                        sim = float(np.dot(q_vec, c_vec) / (q_norm * c_norm))
-                except Exception:
-                    sim = 0.0
-
-            if query and evt.narrative:
-                q_clean = str(query).strip().lower()
-                narr_clean = str(evt.narrative).lower()
-                if q_clean in narr_clean:
-                    sim = max(sim, 0.95)
-                else:
-                    q_chars = [c for c in q_clean if c.strip() and c not in "，。！？,.!?“”：:"]
-                    if q_chars:
-                        overlap = sum(1 for c in q_chars if c in narr_clean)
-                        ratio = overlap / len(q_chars)
-                        if ratio >= 0.4:
-                            sim = max(sim, float(ratio * 0.9))
-
-            delta_t = max(0.0, now_ts - float(evt.timestamp))
-            recency_score = math.exp(-delta_t / tau)
-            importance_raw = float(evt.importance or 1.0)
-            importance_score = min(max(importance_raw / 5.0, 0.2), 1.0)
-
-            if q_vec is not None or (query and sim > 0):
-                total_score = (alpha * max(0.0, sim)) + (beta * recency_score) + (gamma * importance_score)
-            else:
-                total_score = (0.7 * recency_score) + (0.3 * importance_score)
-
-            if total_score >= threshold:
-                results.append(RecallResult(
-                    event=evt,
-                    score=round(total_score, 4),
-                    similarity=round(sim, 4),
-                    recency_score=round(recency_score, 4),
-                    importance_score=round(importance_score, 4),
-                ))
-
-        results.sort(key=lambda x: x.score, reverse=True)
-        if max_per_module and max_per_module > 0:
-            filtered: List[RecallResult] = []
-            module_counts: Dict[str, int] = {}
-            for res in results:
-                mod = res.event.source_module
-                if module_counts.get(mod, 0) < max_per_module:
-                    filtered.append(res)
-                    module_counts[mod] = module_counts.get(mod, 0) + 1
-                    if len(filtered) >= limit:
-                        break
-            if len(filtered) < limit:
-                for res in results:
-                    if res not in filtered:
-                        filtered.append(res)
-                        if len(filtered) >= limit:
-                            break
-            return filtered
-        return results[:limit]
+            kwargs["source_modules"] = [channel_id]
+        return self.store.list_candidates(**kwargs)
 
     def get_surrounding_events(
         self,

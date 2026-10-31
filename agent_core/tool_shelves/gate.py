@@ -294,108 +294,126 @@ class ToolGate:
         self, decision: Decision, messages, tools, channel_id, actor_id,
         client_id, platform, channel_type, client_perms=None, archive_id="",
     ) -> Decision:
+        self._prepare_decision(decision, tools, channel_id, actor_id)
+        client_perms = client_perms if isinstance(client_perms, dict) else {}
+        denied = self._resolve_denied(decision, tools, client_id, client_perms, archive_id, actor_id)
+        if not tools:
+            return self._skip(decision, "no_tools", 0)
+        if not self.cfg.enabled():
+            return self._gate_disabled(decision, tools, denied)
+        if self._is_exempt(client_id):
+            return self._gate_exempt(decision, tools, denied)
+        return self._trim_by_category(decision, messages, tools, denied, platform, channel_type)
+
+    def _prepare_decision(self, decision, tools, channel_id, actor_id) -> None:
+        """记录本轮入口状态：会话键、工具名、注册表。"""
         decision.session_key = self.sessions.key(channel_id, actor_id)
         decision.tools_in = catalog.tool_names(tools)
+        decision.tools_before = len(tools or [])
         try:
             from . import registry as _registry
 
             _registry.record(tools or [])
         except Exception:
             pass
-        decision.tools_before = len(tools or [])
-        client_perms = client_perms if isinstance(client_perms, dict) else {}
 
-        # 0) 权限硬拒绝：即使闸门关闭/客户端豁免，也必须生效
+    def _resolve_denied(self, decision, tools, client_id, client_perms, archive_id, actor_id) -> set:
+        """硬拒绝集合 = 客户端权限 + 档案策略；两层都生效。"""
         denied = self._denied_tools(decision, tools, client_id, client_perms)
-        # 档案级工具策略：不同档案可用不同工具；陌生访客走 _guest
         try:
             policy_denied = self._archive_policy_denied(archive_id, actor_id, tools)
-            if policy_denied:
-                denied |= policy_denied
-                decision.archive_policy = True
         except Exception:
-            pass
+            policy_denied = set()
+        if policy_denied:
+            denied |= policy_denied
+            decision.archive_policy = True
         decision.denied = sorted(denied)
+        return denied
 
-        # 1) 没有工具 / 闸门关闭
-        if not tools:
-            decision.path = "no_tools"
-            decision.tools_after = 0
-            return self._finalize(decision, None)
+    def _skip(self, decision, path, tools_after=None):
+        """不裁剪就收工：只记路径与最终条数。"""
+        decision.path = path
+        decision.tools_after = decision.tools_before if tools_after is None else tools_after
+        return self._finalize(decision, None)
 
-        if not self.cfg.enabled():
-            err = self.cfg.load_error() or ""
-            decision.path = "disabled"
-            decision.error = err[:120]
-            decision.tools_after = decision.tools_before
-            if denied:
-                # 闸门关着也要执行 deny：安全策略不随灰度开关失效
-                payload = [t for t in tools if catalog.tool_name(t) not in denied]
-                if len(payload) != len(tools):
-                    decision.payload_tools = payload
-                    decision.tools_out = catalog.tool_names(payload)
-                    decision.tools_after = len(payload)
-                    decision.applied = True
-                    decision.drop_tool_fields = len(payload) == 0
-            return self._finalize(decision, None)
-
-        settings = self.cfg.get()
-        gateway = self.cfg.gateway()
-
-        # 2) 豁免客户端
-        exempt = {str(x) for x in (gateway.get("exempt_clients") or [])}
-        if client_id and client_id in exempt:
-            decision.path = "exempt"
-            decision.tools_after = decision.tools_before
-            if denied:
-                payload = [t for t in tools if catalog.tool_name(t) not in denied]
-                decision.payload_tools = payload
-                decision.tools_out = catalog.tool_names(payload)
-                decision.tools_after = len(payload)
-                decision.applied = True
-                decision.drop_tool_fields = len(payload) == 0
-            return self._finalize(decision, None)
-
-        cats = self.cfg.categories()
-        if not cats:
-            decision.path = "empty_catalog"
-            decision.error = "categories 为空"
-            decision.tools_after = decision.tools_before
-            return self._finalize(decision, None)
-
-        category_by_tool = self.cfg.category_by_tool()
-        always = [t for t in self.cfg.always_available() if t in set(decision.tools_in)]
-        view = catalog.build_view(tools, category_by_tool, always)
-        decision.unknown_tools = view.unknown
-
-        # 3/4) 快判
-        route = fastpath.route(messages, settings)
-        used = self._from_fastpath(route, decision, view, cats, always, settings)
-
-        # 5) 问执行 AI
-        if not used:
-            used = self._from_classifier(
-                decision, messages, view, cats, always, settings,
-                channel_type=channel_type, platform=platform,
-            )
-
-        # 组装 payload（保持上游原始顺序）
-        allowed = (set(always) | set(used)) - denied
-        payload = [t for t in tools if catalog.tool_name(t) in allowed]
-
-        # max_tools 兜底：先保常驻，再按原顺序
-        max_tools = int(gateway.get("max_tools") or 0)
-        if max_tools > 0 and len(payload) > max_tools:
-            always_set = set(always)
-            head = [t for t in payload if catalog.tool_name(t) in always_set]
-            tail = [t for t in payload if catalog.tool_name(t) not in always_set]
-            payload = (head + tail)[:max_tools]
-
+    def _apply_deny(self, decision, tools, denied) -> None:
+        """没走裁剪也要把 deny 掉的摘掉；只有真摘掉了才算 applied。"""
+        if not denied:
+            return
+        payload = [t for t in tools if catalog.tool_name(t) not in denied]
+        if len(payload) == len(tools):
+            return
         decision.payload_tools = payload
         decision.tools_out = catalog.tool_names(payload)
         decision.tools_after = len(payload)
         decision.applied = True
-        decision.drop_tool_fields = len(payload) == 0
+        decision.drop_tool_fields = not payload
+
+    def _gate_disabled(self, decision, tools, denied):
+        """闸门关着也要执行 deny：安全策略不随灰度开关失效。"""
+        decision.path = "disabled"
+        decision.error = (self.cfg.load_error() or "")[:120]
+        decision.tools_after = decision.tools_before
+        self._apply_deny(decision, tools, denied)
+        return self._finalize(decision, None)
+
+    def _is_exempt(self, client_id) -> bool:
+        """客户端可以在配置里申请豁免，豁免也只免裁剪、不免 deny。"""
+        exempt = {str(x) for x in (self.cfg.gateway().get("exempt_clients") or [])}
+        return bool(client_id) and client_id in exempt
+
+    def _gate_exempt(self, decision, tools, denied):
+        decision.path = "exempt"
+        decision.tools_after = decision.tools_before
+        self._apply_deny(decision, tools, denied)
+        return self._finalize(decision, None)
+
+    def _trim_by_category(self, decision, messages, tools, denied, platform, channel_type):
+        """按类目裁剪：快判 → 分类器 → 组装 payload → max_tools 兜底。"""
+        cats = self.cfg.categories()
+        if not cats:
+            return self._skip(decision, "empty_catalog")
+        always, view = self._catalog_view(decision, tools)
+        used = self._pick_categories(decision, messages, view, cats, always, platform, channel_type)
+        return self._finish_payload(decision, self._cap_payload(tools, always, used, denied))
+
+    def _catalog_view(self, decision, tools):
+        """按配置把工具分成 常驻 / 类目 / 未归类 三份。"""
+        always = [t for t in self.cfg.always_available() if t in set(decision.tools_in)]
+        view = catalog.build_view(tools, self.cfg.category_by_tool(), always)
+        decision.unknown_tools = view.unknown
+        return always, view
+
+    def _pick_categories(self, decision, messages, view, cats, always, platform, channel_type):
+        """先走快判，判不出来再问执行 AI。"""
+        settings = self.cfg.get()
+        route = fastpath.route(messages, settings)
+        used = self._from_fastpath(route, decision, view, cats, always, settings)
+        if used:
+            return used
+        return self._from_classifier(
+            decision, messages, view, cats, always, settings,
+            channel_type=channel_type, platform=platform,
+        )
+
+    def _cap_payload(self, tools, always, used, denied):
+        """保持上游顺序组装；超过 max_tools 时先保常驻工具。"""
+        allowed = (set(always) | set(used)) - denied
+        payload = [t for t in tools if catalog.tool_name(t) in allowed]
+        max_tools = int(self.cfg.gateway().get("max_tools") or 0)
+        if max_tools <= 0 or len(payload) <= max_tools:
+            return payload
+        always_set = set(always)
+        head = [t for t in payload if catalog.tool_name(t) in always_set]
+        tail = [t for t in payload if catalog.tool_name(t) not in always_set]
+        return (head + tail)[:max_tools]
+
+    def _finish_payload(self, decision, payload):
+        decision.payload_tools = payload
+        decision.tools_out = catalog.tool_names(payload)
+        decision.tools_after = len(payload)
+        decision.applied = True
+        decision.drop_tool_fields = not payload
         return self._finalize(decision, None)
 
     @staticmethod

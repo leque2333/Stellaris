@@ -19,7 +19,7 @@
 
 ## 二、当前进度
 
-### 已完成（12 条）
+### 已完成（15 条）
 
 | 函数 | 原行数 | 现行数 | 拆出函数 | 所属文件 |
 |---|---|---|---|---|
@@ -35,6 +35,9 @@
 | `_handle_archive_post` | 110 | 10 | 8 个方法 + 1 个模块函数 | `console/server.py` |
 | `do_DELETE` | 97 | 10 | 11 个方法 | `console/server.py` |
 | `_handle_tool_clean` | 76 | 15 | 5 个方法 + 3 个模块函数 | `console/server.py` |
+| `gate._decide` | 107 | 15 | 12 个方法 | `agent_core/tool_shelves/gate.py` |
+| `recall_timeline` | 108 | 28（17 行是参数签名） | 1 个方法 + 10 个模块函数 | `agent_core/memory/episodic_stream.py` |
+| `compress_tool_result` | 104 | 17 | 7 个模块函数 | `agent_core/tool_shelves/cleaner.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 > 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
@@ -64,21 +67,23 @@
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   245 个
-超过 100 行的       8 个
+超过 20 行的函数   242 个
+超过 100 行的       5 个
 ```
 
 最狠的五个：
 
 ```text
 138 行  agent_core/llm.py  generate_with_tools             ← 主机识别 / 桥接推断在用
-120 行  agent_core/identity_scan.py  scan
+120 行  agent_core/identity_scan.py  scan                  ← 低频，功能清晰
 117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins   （一次性迁移，不拆）
 115 行  tests/test_tool_shelves.py  setUpClass               （测试夹具，不拆）
-108 行  agent_core/memory/episodic_stream.py  recall_timeline    ← 下一步
-107 行  agent_core/tool_shelves/gate.py  _decide
-104 行  agent_core/tool_shelves/cleaner.py  compress_tool_result
+102 行  tests/test_token_analytics.py  setUp                 （测试夹具，不拆）
 ```
+
+> 三个热路径（`_decide` / `recall_timeline` / `compress_tool_result`）已拆完，
+> 全项目 100 行以上的函数只剩 5 个，其中 3 个是「一次性迁移 / 测试夹具 / 低频脚本」。
+> `recall_timeline` 显示 28 行是因为 15 个参数占了一屏，函数体只有 8 行。
 
 ---
 
