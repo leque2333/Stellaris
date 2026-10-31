@@ -311,6 +311,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/access_control': '_get_access_control',
     '/api/audit': '_get_audit',
     '/api/deploy_check': '_get_deploy_check',
+    '/api/memory/timeline_curve': '_get_timeline_curve',
 }
 
 
@@ -704,6 +705,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _get_tool_policies(self):
         return self._send_json(self._tools_policies())
+
+    def _get_timeline_curve(self):
+        """预览时间轴记忆曲线：前 30% 完整、中 40% 轻压、后 30% 深压。"""
+        from agent_core.memory import timeline_curve
+
+        params = dict(part.split('=', 1) for part in urlparse(self.path).query.split('&') if '=' in part)
+        try:
+            budget = max(500, min(int(params.get('budget', '20000')), 200000))
+        except ValueError:
+            budget = 20000
+        store = self._memory_store()
+        events = store.list_candidates(limit=5000) if store else []
+        entries = timeline_curve.build_curve(events, budget_chars=budget)
+        return self._send_json({
+            "ok": True,
+            "budget": budget,
+            "summary": timeline_curve.summarize(entries),
+            "entries": [item.as_dict() for item in entries[:200]],
+        })
 
     def _get_deploy_check(self):
         """部署自检：端口 / docker 挂载 / 密钥 / 安全配置 / 审计日志。"""
