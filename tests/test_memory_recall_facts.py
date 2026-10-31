@@ -12,6 +12,37 @@ sys.path.insert(0, str(ROOT))
 import server  # noqa: E402
 
 
+class RecallCompressTest(unittest.TestCase):
+    class _Mgr:
+        def __init__(self, reply):
+            self.reply = reply
+            self.calls = 0
+
+        def chat_completion(self, slot, messages, **kwargs):
+            self.calls += 1
+            return self.reply, 10, 5
+
+    def _handler(self, mgr):
+        handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
+        return handler, {"compute_mgr": mgr}
+
+    def test_small_text_passthrough(self):
+        handler, ctx = self._handler(self._Mgr("不该被调用"))
+        self.assertEqual(handler._compress_recall_text(ctx, "短文本"), "短文本")
+        self.assertEqual(ctx["compute_mgr"].calls, 0)
+
+    def test_large_text_uses_execution_ai(self):
+        handler, ctx = self._handler(self._Mgr("精简后的要点"))
+        self.assertEqual(handler._compress_recall_text(ctx, "字" * 5000), "精简后的要点")
+        self.assertEqual(ctx["compute_mgr"].calls, 1)
+
+    def test_fallback_when_model_fails(self):
+        handler, ctx = self._handler(self._Mgr(""))
+        out = handler._compress_recall_text(ctx, "字" * 5000)
+        self.assertTrue(out.endswith("…"))
+        self.assertLessEqual(len(out), handler.RECALL_SOFT_LIMIT + 1)
+
+
 class RelatedFactsTest(unittest.TestCase):
     def _handler(self, facts):
         handler = server.ConsoleHandler.__new__(server.ConsoleHandler)

@@ -2955,7 +2955,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         _recall_writeback(store, ctx, kept, mode)
         lines = [f"\n\n【记忆库·按时间检索】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
-        return "\n".join(lines)
+        return self._compress_recall_text(ctx, "\n".join(lines))
 
     def _gateway_ctx_identity(self, session):
         """ctx 的身份部分：谁在说话、属于哪个档案。"""
@@ -3342,6 +3342,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         # 复答为空：首轮如果还有正文就用它，否则交给兜底话术
         return stripped if (stripped.get("content") or "").strip() else None
 
+    RECALL_SOFT_LIMIT = 3_000
+
+    def _compress_recall_text(self, ctx, text):
+        """检索结果太大：交执行 AI 压成要点；失败就截断兜底。"""
+        if len(text) <= self.RECALL_SOFT_LIMIT:
+            return text
+        manager = ctx.get("compute_mgr")
+        try:
+            reply, _, _ = manager.chat_completion(
+                "logic_slot",
+                [
+                    {"role": "system", "content":
+                     "把下面的记忆检索结果压成要点，保留时间、人物、关键事件与结论，"
+                     "不要编造、不要加入推测，控制在 300 字以内。"},
+                    {"role": "user", "content": text},
+                ],
+                current_port=PORT, timeout=60,
+            )
+            reply = (reply or "").strip()
+            if reply:
+                return reply
+        except Exception:
+            pass
+        return text[: self.RECALL_SOFT_LIMIT] + "…"
+
     def _rebuild_prompt_with_recall(self, ctx, found):
         """让出 found 的字数，重拼一次时间轴；失败就沿用原提示词。"""
         session = dict(ctx.get("_session") or {})
@@ -3391,7 +3416,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if facts:
             lines.append("【档案事实·相关】")
             lines.extend(f"- {fact}" for fact in facts)
-        return "\n".join(lines)
+        return self._compress_recall_text(ctx, "\n".join(lines))
 
     def _related_facts(self, ctx, terms):
         """在档案事实里找和检索词有交集的，最多 3 条。"""
