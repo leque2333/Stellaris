@@ -38,6 +38,7 @@
 | `gate._decide` | 107 | 15 | 12 个方法 | `agent_core/tool_shelves/gate.py` |
 | `recall_timeline` | 108 | 28（17 行是参数签名） | 1 个方法 + 10 个模块函数 | `agent_core/memory/episodic_stream.py` |
 | `compress_tool_result` | 104 | 17 | 7 个模块函数 | `agent_core/tool_shelves/cleaner.py` |
+| `SQLiteStore` 拆分（结构） | 2005 行 / 105 方法 | 88 行门面 + 10 个领域模块 | 10 个 mixin | `agent_core/storage/repos/` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 > 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
@@ -63,6 +64,13 @@
 > `agent_core/memory/memory_tools.py`、`启动CLI.bat`（`llm.py` / `tools.py` /
 > `execution/` 保留，因为 AI 主机识别和桥接推断还在用）。
 > 若将来要终端入口，按「走本地 /v1 的瘦客户端」重写，别再各写一套模型调用与工具循环。
+
+
+> 2026-10-31 追加：`sqlite_store.py` 从 2005 行 / 105 个方法拆成 88 行门面 + 10 个领域模块
+> （`storage/repos/`：timeline 292、profiles 184、facts 151、invocations 206、archives 218、
+> contexts 202、plugins 283、knowledge 111、components 130、ledger 214）。
+> 用 mixin 而不是改调用方：`get_store().list_events()` 这类调用点一处没动，305 个测试当安全网。
+> 连接与事务仍留在门面，`_json/_loads` 提到 `storage/jsonutil.py`。
 
 ### 全项目剩余
 

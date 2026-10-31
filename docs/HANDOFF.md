@@ -104,7 +104,7 @@ D:\Stellaris_test
 ├─ agent_core\                 # 记忆、人格、档案、模型、存储
 │  ├─ memory\                  # 时间轴/事实/图/embedding
 │  ├─ profile\                 # 档案、身份绑定
-│  ├─ storage\                 # SQLite schema / store
+│  ├─ storage\                 # SQLite schema / store 门面 / repos 领域模块
 │  ├─ compute_providers.py     # 模型路由
 │  ├─ persona.py               # 人格上下文
 │  ├─ identity.py              # 身份解析
@@ -1240,7 +1240,8 @@ input_price / cache_price / output_price / currency
 | `console/modules/model_service.py` | 凭证/定价/账本聚合 |
 | `console/modules/system_service.py` | 账本写入/归属推断/回填 |
 | `agent_core/storage/schema.py` | 数据库迁移（当前 v26） |
-| `agent_core/storage/sqlite_store.py` | SQLite 读写 |
+| `agent_core/storage/sqlite_store.py` | SQLite 连接与事务门面（88 行） |
+| `agent_core/storage/repos/` | 按领域拆开的 SQL：timeline / profiles / facts / invocations / archives / contexts / plugins / knowledge / components / ledger |
 | `agent_core/memory/__init__.py` | 记忆门面 |
 | `agent_core/profile/archives.py` | 档案/身份 |
 | `agent_core/access_policy.py` | 访客策略 |
