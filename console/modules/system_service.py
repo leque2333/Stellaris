@@ -251,162 +251,199 @@ _resources_cache = None
 _resources_cache_at = 0.0
 
 
-def get_system_resources_metrics(force: bool = False):
-    """仅统计与显示 AI 相关的专属资源占用(模型显存/算力、AI专属CPU、AI专属运行内存)"""
-    global _resources_cache, _resources_cache_at
-    if not force and _resources_cache is not None and time.time() - _resources_cache_at < 30:
-        return _resources_cache
-    try:
-        import psutil
-    except ImportError:
-        psutil = None
-    import subprocess
-
-    res = {
-        "timestamp": time.time(),
-        "cpu": {
-            "percent": 0.0,
-            "cores": 1,
-            "physical_cores": 1
-        },
-        "memory": {
-            "total_gb": 0.0,
-            "used_gb": 0.0,
-            "percent": 0.0
-        },
-        "gpu": None,
-        "services": [],
-        "ai_metrics": {
-            "cpu_percent": 0.0,
-            "memory_mb": 0.0,
-            "memory_gb": 0.0,
-            "service_count": 0,
-            "gpu_ready": False,
-            "gpu_name": "NVIDIA GeForce RTX 4070",
-            "gpu_memory_used_mb": 0,
-            "gpu_memory_total_mb": 12282,
-            "gpu_memory_percent": 0.0,
-            "gpu_temperature": None
-        }
+def _parse_nvidia_smi_line(raw: str) -> dict:
+    """nvidia-smi 输出是 "名字, 利用率, 总显存, 已用显存, 温度"。"""
+    parts = [item.strip() for item in raw.split(",")]
+    total = int(parts[2]) if parts[2].isdigit() else 1
+    used = int(parts[3]) if parts[3].isdigit() else 0
+    return {
+        "name": parts[0],
+        "util_percent": float(parts[1]) if parts[1].replace(".", "", 1).isdigit() else 0.0,
+        "memory_total_mb": total,
+        "memory_used_mb": used,
+        "memory_percent": round(used / total * 100, 1),
+        "temperature": int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None,
     }
 
-    # 1. 真实 GPU 监控 (NVIDIA 硬件加速)
+
+def _read_nvidia_gpu_metrics():
+    """读 N 卡显存 / 利用率 / 温度；没有 nvidia-smi 就返回 None。"""
+    import subprocess
+
     try:
-        smi = subprocess.check_output(
-            ['nvidia-smi', '--query-gpu=name,utilization.gpu,memory.total,memory.used,temperature.gpu', '--format=csv,noheader,nounits'],
-            encoding='utf-8', timeout=2
+        raw = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.total,memory.used,temperature.gpu",
+             "--format=csv,noheader,nounits"],
+            encoding="utf-8", timeout=2,
         ).strip()
-        if smi:
-            parts = [p.strip() for p in smi.split(',')]
-            tot = int(parts[2]) if parts[2].isdigit() else 1
-            used = int(parts[3]) if parts[3].isdigit() else 0
-            temp = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else None
-            res["gpu"] = {
-                "name": parts[0],
-                "util_percent": float(parts[1]) if parts[1].replace('.','',1).isdigit() else 0.0,
-                "memory_total_mb": tot,
-                "memory_used_mb": used,
-                "memory_percent": round(used / tot * 100, 1),
-                "temperature": temp
-            }
-            res["ai_metrics"]["gpu_ready"] = True
-            res["ai_metrics"]["gpu_name"] = parts[0]
-            res["ai_metrics"]["gpu_memory_used_mb"] = used
-            res["ai_metrics"]["gpu_memory_total_mb"] = tot
-            res["ai_metrics"]["gpu_memory_percent"] = round(used / tot * 100, 1)
-            res["ai_metrics"]["gpu_temperature"] = temp
     except Exception:
-        pass
+        return None
+    return _parse_nvidia_smi_line(raw) if raw else None
 
-    # 2. 专注识别与汇聚所有 AI 核心服务进程 (杜绝无关系统占用)
+
+def _apply_gpu_metrics(target: dict, gpu: dict) -> None:
+    """把 GPU 数据同时写进顶层 gpu 和 ai_metrics，前端两处都读。"""
+    target["gpu"] = gpu
+    ai = target["ai_metrics"]
+    ai["gpu_ready"] = True
+    ai["gpu_name"] = gpu["name"]
+    ai["gpu_memory_used_mb"] = gpu["memory_used_mb"]
+    ai["gpu_memory_total_mb"] = gpu["memory_total_mb"]
+    ai["gpu_memory_percent"] = gpu["memory_percent"]
+    ai["gpu_temperature"] = gpu["temperature"]
+
+
+def _build_ai_service_rules() -> list:
+    """本机可能出现的 AI 进程特征。命中即归类，不命中就不算。"""
+    return [
+        {"name": "Console Hub 控制台中枢", "match": lambda cmd, name: ("console" in cmd and "server.py" in cmd), "port": 18895},
+        {"name": "Antigravity Bridge 极速推理桥", "match": lambda cmd, name: "antigravity_bridge" in cmd, "port": 8765},
+        {"name": "AI Language Server 推理引擎", "match": lambda cmd, name: "language_server" in name or "language_server" in cmd, "port": None},
+        {"name": "Local Ollama 本地推理池", "match": lambda cmd, name: "ollama" in name or "ollama" in cmd, "port": 11434},
+        {"name": "AstrBot 机器人智能体核心", "match": lambda cmd, name: "astrbot" in cmd or "astrbot" in name, "port": None},
+    ]
+
+
+def _find_matching_rule(rules, seen_names, cmdline, process_name):
+    """找第一条命中且还没用过的规则；没命中返回 None。"""
+    for rule in rules:
+        if rule["name"] in seen_names:
+            continue
+        if rule["match"](cmdline, process_name):
+            return rule
+    return None
+
+
+def _describe_service(rule, info) -> dict:
+    return {
+        "name": rule["name"],
+        "pid": info["pid"],
+        "status": "online",
+        "memory_mb": round((info["memory_info"].rss or 0) / (1024 * 1024), 1),
+        "cpu_percent": round(info["cpu_percent"] or 0.0, 1),
+        "port": rule["port"],
+    }
+
+
+def _collect_ai_services(psutil) -> list:
+    """遍历进程，按规则归类；每个规则只取第一个命中的（防止包装进程重复计数）。"""
+    rules = _build_ai_service_rules()
+    seen_names = set()
+    matched = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline", "cpu_percent", "memory_info"]):
+        info = proc.info
+        cmdline = " ".join(info["cmdline"] or []).lower()
+        process_name = (info["name"] or "").lower()
+        # 跳过 powershell 包装层，抓背后真正的 python/exe
+        if "powershell" in process_name:
+            continue
+        rule = _find_matching_rule(rules, seen_names, cmdline, process_name)
+        if rule is None:
+            continue
+        seen_names.add(rule["name"])
+        matched.append(_describe_service(rule, info))
+    return matched
+
+
+def _build_cpu_block(cpu_sum: float, service_count: int, psutil) -> dict:
+    return {
+        "percent": cpu_sum,
+        "cores": psutil.cpu_count(logical=True) or 16,
+        "service_count": service_count,
+    }
+
+
+def _build_memory_block(memory_mb: float, memory_gb: float, psutil) -> dict:
+    total_ram_mb = round(psutil.virtual_memory().total / (1024 * 1024), 1)
+    return {
+        "ai_memory_mb": memory_mb,
+        "ai_memory_gb": memory_gb,
+        "total_gb": round(total_ram_mb / 1024, 1),
+        "percent": round(memory_mb / total_ram_mb * 100, 1) if total_ram_mb else 0.0,
+    }
+
+
+def _summarize_ai_totals(target: dict, services: list, psutil) -> None:
+    """把服务列表汇总成总和，并把 cpu/memory 结构改写成 AI 专属口径。"""
+    cpu_sum = round(sum(item["cpu_percent"] for item in services), 1)
+    memory_mb = round(sum(item["memory_mb"] for item in services), 1)
+    memory_gb = round(memory_mb / 1024.0, 2)
+
+    ai = target["ai_metrics"]
+    ai["cpu_percent"] = cpu_sum
+    ai["memory_mb"] = memory_mb
+    ai["memory_gb"] = memory_gb
+    ai["service_count"] = len(services)
+
+    target["cpu"] = _build_cpu_block(cpu_sum, len(services), psutil)
+    target["memory"] = _build_memory_block(memory_mb, memory_gb, psutil)
+
+
+_DEFAULT_CPU_BLOCK = {"percent": 0.0, "cores": 1, "physical_cores": 1}
+_DEFAULT_MEMORY_BLOCK = {"total_gb": 0.0, "used_gb": 0.0, "percent": 0.0}
+_DEFAULT_AI_METRICS = {
+    "cpu_percent": 0.0,
+    "memory_mb": 0.0,
+    "memory_gb": 0.0,
+    "service_count": 0,
+    "gpu_ready": False,
+    "gpu_name": "NVIDIA GeForce RTX 4070",
+    "gpu_memory_used_mb": 0,
+    "gpu_memory_total_mb": 12282,
+    "gpu_memory_percent": 0.0,
+    "gpu_temperature": None,
+}
+
+
+def _build_empty_resources() -> dict:
+    """先把结构搭好；采集失败时前端也能拿到完整字段，不用做空判断。"""
+    return {
+        "timestamp": time.time(),
+        "cpu": dict(_DEFAULT_CPU_BLOCK),
+        "memory": dict(_DEFAULT_MEMORY_BLOCK),
+        "gpu": None,
+        "services": [],
+        "ai_metrics": dict(_DEFAULT_AI_METRICS),
+    }
+
+
+def _take_cached_resources(force: bool):
+    """30 秒内的缓存直接复用，避免前端轮询把机器拖慢。"""
+    if force or _resources_cache is None:
+        return None
+    return _resources_cache if time.time() - _resources_cache_at < 30 else None
+
+
+def _import_psutil():
+    """没装 psutil 就返回 None，让调用方跳过进程统计而不是崩掉。"""
+    try:
+        import psutil
+        return psutil
+    except ImportError:
+        return None
+
+
+def _collect_resources_snapshot() -> dict:
+    """真正干活：建空结构 → 填 GPU → 填进程。"""
+    result = _build_empty_resources()
+    gpu = _read_nvidia_gpu_metrics()
+    if gpu:
+        _apply_gpu_metrics(result, gpu)
+
+    psutil = _import_psutil()
     if psutil:
-        ai_service_rules = [
-            {
-                "name": "Console Hub 控制台中枢",
-                "match": lambda c, n, p: ("console" in c and "server.py" in c) or (p == 18895),
-                "port": 18895
-            },
-            {
-                "name": "Antigravity Bridge 极速推理桥",
-                "match": lambda c, n, p: ("antigravity_bridge" in c) or (p == 8765),
-                "port": 8765
-            },
-            {
-                "name": "AI Language Server 推理引擎",
-                "match": lambda c, n, p: "language_server" in n or "language_server" in c,
-                "port": None
-            },
-            {
-                "name": "Local Ollama 本地推理池",
-                "match": lambda c, n, p: "ollama" in n or "ollama" in c or (p == 11434),
-                "port": 11434
-            },
-            {
-                "name": "AstrBot 机器人智能体核心",
-                "match": lambda c, n, p: "astrbot" in c or "astrbot" in n,
-                "port": None
-            }
-        ]
+        services = _collect_ai_services(psutil)
+        result["services"] = services
+        _summarize_ai_totals(result, services, psutil)
+    return result
 
-        seen_names = set()
-        matched_services = []
 
-        try:
-            # 优先遍历真实执行进程 (过滤纯 powershell 包装进程)
-            for p in psutil.process_iter(['pid', 'name', 'cmdline', 'cpu_percent', 'memory_info']):
-                cmd = " ".join(p.info['cmdline'] or []).lower()
-                pname = (p.info['name'] or '').lower()
-                if "powershell" in pname:
-                    # 跳过纯 wrapper powershell 进程，直接抓背后的真实 python/exe
-                    continue
-
-                for rule in ai_service_rules:
-                    if rule["name"] not in seen_names and rule["match"](cmd, pname, None):
-                        seen_names.add(rule["name"])
-                        mem_mb = round((p.info['memory_info'].rss or 0) / (1024 * 1024), 1)
-                        cpu = round(p.info['cpu_percent'] or 0.0, 1)
-                        matched_services.append({
-                            "name": rule["name"],
-                            "pid": p.info['pid'],
-                            "status": "online",
-                            "memory_mb": mem_mb,
-                            "cpu_percent": cpu,
-                            "port": rule["port"]
-                        })
-                        break
-        except Exception:
-            pass
-
-        res["services"] = matched_services
-
-        # 计算所有 AI 核心服务的专属资源总和
-        ai_cpu_sum = round(sum(s["cpu_percent"] for s in matched_services), 1)
-        ai_mem_sum = round(sum(s["memory_mb"] for s in matched_services), 1)
-        ai_mem_gb = round(ai_mem_sum / 1024.0, 2)
-
-        res["ai_metrics"]["cpu_percent"] = ai_cpu_sum
-        res["ai_metrics"]["memory_mb"] = ai_mem_sum
-        res["ai_metrics"]["memory_gb"] = ai_mem_gb
-        res["ai_metrics"]["service_count"] = len(matched_services)
-
-        # 同时也把 cpu 和 memory 结构重定向为 AI 专属数据，彻底剔除无关整机占用
-        res["cpu"] = {
-            "percent": ai_cpu_sum,
-            "cores": psutil.cpu_count(logical=True) or 16,
-            "service_count": len(matched_services)
-        }
-        total_ram = psutil.virtual_memory().total if psutil else (32 * 1024 * 1024 * 1024)
-        total_ram_gb = round(total_ram / (1024 * 1024 * 1024), 1)
-        total_ram_mb = round(total_ram / (1024 * 1024), 1)
-        ai_mem_percent = round((ai_mem_sum / total_ram_mb) * 100, 1) if total_ram_mb > 0 else 0.0
-
-        res["memory"] = {
-            "ai_memory_mb": ai_mem_sum,
-            "ai_memory_gb": ai_mem_gb,
-            "total_gb": total_ram_gb,
-            "percent": ai_mem_percent
-        }
-
-    _resources_cache = res
+def get_system_resources_metrics(force: bool = False):
+    """只统计 AI 相关占用。"""
+    global _resources_cache, _resources_cache_at
+    cached = _take_cached_resources(force)
+    if cached is not None:
+        return cached
+    _resources_cache = _collect_resources_snapshot()
     _resources_cache_at = time.time()
-    return res
+    return _resources_cache
