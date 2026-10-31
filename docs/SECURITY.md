@@ -91,8 +91,8 @@ HTTP 429，状态在内存里（重启清零），登录成功立刻解除。
 |---|---|---|---|
 | 1 | 18895 明文监听 `0.0.0.0` | 同网段可绕过 nginx 直连，跳过 TLS | 开 `local_only`，或用防火墙只放行本机/nginx |
 | 2 | 密码哈希是单轮 `SHA-256(salt:password)` | `auth_config.json` 泄露后离线爆破很快 | 换 PBKDF2/bcrypt，写迁移 |
-| 3 | 默认密码 `admin888`（未设 `HUB_AUTH_PASSWORD` 时） | 忘记改就是弱口令 | 部署后第一件事改密码；`check_no_secrets` 已覆盖源码层 |
-| 4 | `/v1` 没有限速 | 持有 Key 的客户端可以高频刷 | 按 Key 做令牌桶；账本已有用量数据 |
+| 3 | 默认密码 `admin888`（未设 `HUB_AUTH_PASSWORD` 时） | 忘记改就是弱口令 | 部署后第一件事改密码；用 `python -c "from agent_core.auth import AuthManager; print(AuthManager('.').verify_credentials('admin','admin888'))"` 自查 |
+| 4 | `require_key: false` 时匿名 `/v1` 按默认主控放行 | 任何能连到 18895 的进程都能用你的额度聊天、并以 master 身份写入时间轴 | 把 `data/clients.json` 的 `require_key` 设为 `true`（已认证客户端本来就有 120/60 次每分钟的限流） |
 | 5 | 审计日志是本机文件 | 拿到 root 可以改历史 | 需要时外发到远端 syslog/对象存储 |
 | 6 | 将来加 CDN 时 | CDN 回源 IP 会被当成客户端 | 把 CDN 网段加进 `trusted_proxies` |
 | 7 | 会话 7 天有效 | 没有"一键踢下线" | 改密码时轮换 `sessions` 表 |
