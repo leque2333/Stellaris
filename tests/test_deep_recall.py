@@ -17,18 +17,18 @@ from agent_core.storage import SQLiteStore  # noqa: E402
 
 class ModeTest(unittest.TestCase):
     def test_full(self):
-        self.assertEqual(deep_recall.choose_mode(1_500), "full")
+        self.assertEqual(deep_recall.choose_mode(500), "full")
 
     def test_narrative(self):
-        self.assertEqual(deep_recall.choose_mode(5_000), "narrative")
+        self.assertEqual(deep_recall.choose_mode(1_500), "narrative")
 
     def test_compressed(self):
-        self.assertEqual(deep_recall.choose_mode(20_000), "compressed")
+        self.assertEqual(deep_recall.choose_mode(5_000), "compressed")
 
     def test_boundaries(self):
-        self.assertEqual(deep_recall.choose_mode(2_000), "full")
-        self.assertEqual(deep_recall.choose_mode(8_000), "narrative")
-        self.assertEqual(deep_recall.choose_mode(8_001), "compressed")
+        self.assertEqual(deep_recall.choose_mode(700), "full")
+        self.assertEqual(deep_recall.choose_mode(2_700), "narrative")
+        self.assertEqual(deep_recall.choose_mode(2_701), "compressed")
 
 
 class TermsTest(unittest.TestCase):

@@ -81,7 +81,7 @@ class HandlerWiringTest(unittest.TestCase):
         handler = self._handler()
         handler._timeline_release({"person_id": "master"})
         rows = self.store.list_candidates(person_ids=["master"], limit=100)
-        self.assertLessEqual(sum(len(r.narrative) for r in rows), 12_000)
+        self.assertLessEqual(sum(len(r.narrative) for r in rows), 4_000)
         self.assertGreater(len(self.store.peek_buffer("master")), 0)
 
     def test_restore_only_when_room(self):

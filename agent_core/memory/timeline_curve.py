@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
-DEFAULT_BUDGET_CHARS = 9_000
+DEFAULT_BUDGET_CHARS = 3_000
 ENV_BUDGET = "HUB_TIMELINE_BUDGET"
 DEFAULT_TIER_SHARES = (0.30, 0.40, 0.30)
 DEFAULT_LEVELS = (1.00, 0.85, 0.60)
@@ -92,7 +92,7 @@ def budget_chars() -> int:
     import os
 
     try:
-        value = int(os.getenv(ENV_BUDGET, "") or 9000)
+        value = int(os.getenv(ENV_BUDGET, "") or 3000)
     except ValueError:
         value = 8000
     return max(500, min(value, 200_000))

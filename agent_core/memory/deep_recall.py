@@ -18,9 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-GATE_PASS_CHARS = 2_000
-GATE_NARRATIVE_CHARS = 8_000
-DEFAULT_BUDGET = 8_000
+GATE_PASS_CHARS = 700
+GATE_NARRATIVE_CHARS = 2_700
+DEFAULT_BUDGET = 3_000
 
 
 @dataclass

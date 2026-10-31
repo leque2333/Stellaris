@@ -112,9 +112,9 @@ def _prefetch_terms(user_query: str) -> list:
     return picked[:5]
 
 
-MIN_TIMELINE_CHARS = 2_000
-RECALL_MAX_CHARS = 6_000
-TIMELINE_KEEP_CHARS = 12_000  # 时间轴常驻字数，超出搬进缓冲区
+MIN_TIMELINE_CHARS = 700
+RECALL_MAX_CHARS = 2_000
+TIMELINE_KEEP_CHARS = 4_000  # 时间轴常驻字数，超出搬进缓冲区
 
 
 def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
@@ -3403,7 +3403,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         stripped = _strip_memory_directive(message)
         return stripped if (stripped.get("content") or "").strip() else None
 
-    RECALL_SOFT_LIMIT = 3_000
+    RECALL_SOFT_LIMIT = 1_000
 
     def _compress_recall_text(self, ctx, text, keywords=None):
         """超限时只压「与关键词无关」的部分，相关的原样留着。"""

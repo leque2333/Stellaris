@@ -19,16 +19,16 @@ from agent_core.storage import SQLiteStore  # noqa: E402
 
 class BudgetTest(unittest.TestCase):
     def test_no_reserved(self):
-        self.assertEqual(server._timeline_budget_with_reserved(0, total=8000), 8000)
+        self.assertEqual(server._timeline_budget_with_reserved(0, total=3000), 3000)
 
     def test_reserved_deducted(self):
-        self.assertEqual(server._timeline_budget_with_reserved(3000, total=8000), 5000)
+        self.assertEqual(server._timeline_budget_with_reserved(1000, total=3000), 2000)
 
     def test_floor(self):
-        self.assertEqual(server._timeline_budget_with_reserved(90_000, total=8000), 2000)
+        self.assertEqual(server._timeline_budget_with_reserved(90_000, total=3000), 700)
 
     def test_negative_reserved_ignored(self):
-        self.assertEqual(server._timeline_budget_with_reserved(-5, total=8000), 8000)
+        self.assertEqual(server._timeline_budget_with_reserved(-5, total=3000), 3000)
 
 
 class PrefetchTest(unittest.TestCase):
