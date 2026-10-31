@@ -96,7 +96,11 @@ class BufferOps:
                     "VALUES (?, ?, ?, ?)",
                     (str(person_id), str(row["event_id"]), _json(payload, "{}"), float(now)),
                 )
-                conn.execute("DELETE FROM agent_timeline WHERE event_id = ?", (row["event_id"],))
+                # 软归档：不删行，避免触发 FTS 删除触发器（历史索引不一致会报 malformed）
+                conn.execute(
+                    "UPDATE agent_timeline SET visibility = 'archived' WHERE event_id = ?",
+                    (row["event_id"],),
+                )
         return len(drop)
 
     def restore_buffer(self, person_id: str, limit: int = 50) -> int:
@@ -112,10 +116,14 @@ class BufferOps:
                 if not isinstance(payload, dict) or not payload.get("event_id"):
                     continue
                 conn.execute(
+                    "UPDATE agent_timeline SET visibility = 'private' WHERE event_id = ?",
+                    (payload.get("event_id"),),
+                )
+                conn.execute(
                     "INSERT OR IGNORE INTO agent_timeline "
                     "(event_id, timestamp, source_module, actor_id, actor_name, narrative, time_str, "
-                    "importance, detail_id, person_id, metadata) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "importance, detail_id, person_id, metadata, visibility) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'private')",
                     (
                         payload.get("event_id"), float(payload.get("timestamp") or 0),
                         payload.get("source_module") or "", payload.get("actor_id") or "",

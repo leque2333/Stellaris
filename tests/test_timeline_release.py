@@ -60,5 +60,38 @@ class ReleaseTailTest(unittest.TestCase):
         self.assertEqual(payload["person_id"], "master")
 
 
+class HandlerWiringTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="wire_"))
+        self.store = SQLiteStore(self.dir / "memory.db")
+        for index in range(8):
+            self.store.append_event(TimelineEvent(
+                event_id=f"w{index}", timestamp=1793000000 + index, source_module="qq",
+                actor_id="master", actor_name="乐阙", narrative="字" * 2000,
+                person_id="master",
+            ))
+
+    def _handler(self):
+        import server
+        handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
+        handler._memory_store = lambda: self.store
+        return handler
+
+    def test_release_keeps_timeline_bounded(self):
+        handler = self._handler()
+        handler._timeline_release({"person_id": "master"})
+        rows = self.store.list_candidates(person_ids=["master"], limit=100)
+        self.assertLessEqual(sum(len(r.narrative) for r in rows), 12_000)
+        self.assertGreater(len(self.store.peek_buffer("master")), 0)
+
+    def test_restore_only_when_room(self):
+        handler = self._handler()
+        handler._timeline_release({"person_id": "master"})
+        before = len(self.store.list_candidates(person_ids=["master"], limit=100))
+        handler._timeline_restore({"person_id": "master"})
+        after = len(self.store.list_candidates(person_ids=["master"], limit=100))
+        self.assertGreaterEqual(after, before)
+
+
 if __name__ == "__main__":
     unittest.main()

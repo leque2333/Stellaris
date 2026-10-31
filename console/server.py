@@ -114,6 +114,7 @@ def _prefetch_terms(user_query: str) -> list:
 
 MIN_TIMELINE_CHARS = 2_000
 RECALL_MAX_CHARS = 6_000
+TIMELINE_KEEP_CHARS = 12_000  # 时间轴常驻字数，超出搬进缓冲区
 
 
 def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
@@ -2926,6 +2927,49 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         ctx["sys_prompt"] += session.get("_memory_block") or ""
         return ctx
 
+    def _timeline_keep(self):
+        import os
+
+        try:
+            return int(os.getenv("HUB_TIMELINE_KEEP", "") or TIMELINE_KEEP_CHARS)
+        except ValueError:
+            return TIMELINE_KEEP_CHARS
+
+    def _person_of(self, ctx):
+        return str(ctx.get("person_id") or ctx.get("actor_id") or "")
+
+    def _timeline_release(self, ctx):
+        """每轮结束：超出常驻字数的旧事件搬进缓冲区。"""
+        store, person = self._memory_store(), self._person_of(ctx)
+        if not store or not person:
+            return 0
+        try:
+            return store.release_tail(person, self._timeline_keep())
+        except Exception:
+            return 0
+
+    def _timeline_restore(self, ctx):
+        """检索命中后：时间轴还有余量就把缓冲里的接回来。"""
+        store, person = self._memory_store(), self._person_of(ctx)
+        if not store or not person:
+            return 0
+        try:
+            rows = store.list_candidates(person_ids=[person], limit=5000)
+            used = sum(len(str(getattr(row, "narrative", "") or "")) for row in rows)
+            free = max(0, self._timeline_keep() - used)
+            if free <= 0:
+                return 0
+            count, taken = 0, 0
+            for row in store.peek_buffer(person, limit=100):
+                size = len(str(row.get("narrative") or ""))
+                if taken + size > free:
+                    break
+                taken += size
+                count += 1
+            return store.restore_buffer(person, limit=count) if count else 0
+        except Exception:
+            return 0
+
     def _prefetch_memory_block(self, ctx):
         """默认不预取：让模型自己判断要不要回忆，只在开了兜底时才查。"""
         import os
@@ -2954,6 +2998,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not kept:
             return ""
         _recall_writeback(store, ctx, kept, mode)
+        self._timeline_restore(ctx)
         lines = [f"\n\n【记忆库·按时间检索】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
         return self._compress_recall_text(ctx, "\n".join(lines), terms)
@@ -3223,6 +3268,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             tool_calls=out["tool_calls"],
         )
         self._complete_invocations(ctx, state, out, event_id)
+        self._timeline_release(ctx)
         self._send_json(
             self._complete_payload(ctx, out),
             extra_headers=self._hub_identity_headers(ctx),
@@ -3414,6 +3460,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not kept:
             return "【记忆库】没有匹配的旧记录。"
         _recall_writeback(store, ctx, kept, mode)
+        self._timeline_restore(ctx)
         lines = [f"【记忆库检索结果】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
         facts = self._related_facts(ctx, terms)
@@ -3596,6 +3643,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             detail_id=detail_id or "", tool_calls=out["tool_calls"],
         )
         self._complete_invocations(ctx, state, out, event_id, record_tools=False)
+        self._timeline_release(ctx)
 
     def _stream_prepare(self, ctx):
         """SSE 响应头：先发头，后面才能边生成边下推。"""

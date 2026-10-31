@@ -229,6 +229,8 @@ class TimelineOps:
                 "AND source_module NOT LIKE 'group:%'"
             )
             where = f"{where} AND {group_filter}" if where else f"WHERE {group_filter}"
+        archive_filter = "COALESCE(visibility, 'private') != 'archived'"
+        where = f"{where} AND {archive_filter}" if where else f"WHERE {archive_filter}"
         # 时间窗：不按条数截断，按「回看多少天」收敛
         if since_ts:
             clause = "timestamp >= ?"
@@ -264,7 +266,8 @@ class TimelineOps:
         if not terms:
             return []
         joiner = " AND " if match_all else " OR "
-        clauses = ["(" + joiner.join("narrative LIKE ?" for _ in terms) + ")"]
+        clauses = ["(" + joiner.join("narrative LIKE ?" for _ in terms) + ")",
+                   "COALESCE(visibility, 'private') != 'archived'"]
         params: List[Any] = [f"%{term}%" for term in terms]
         if start_ts is not None:
             clauses.append("timestamp >= ?")
