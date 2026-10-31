@@ -115,7 +115,9 @@ def build_curve(
         if not text or used + cost > budget_chars:
             break
         tier = _tier_for(used, boundaries)
-        kept = compress_narrative(text, levels[tier])
+        meta = getattr(event, "metadata", {}) or {}
+        already = bool(meta.get("compressed")) if isinstance(meta, dict) else False
+        kept = text if already else compress_narrative(text, levels[tier])
         entries.append(CurveEntry(
             event_id=str(getattr(event, "event_id", "")),
             tier=tier,

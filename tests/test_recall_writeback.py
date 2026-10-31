@@ -17,6 +17,22 @@ from agent_core.memory.deep_recall import Hit  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
 
 
+class NoDoubleCompressTest(unittest.TestCase):
+    def test_flagged_event_not_recompressed(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        from agent_core.memory import timeline_curve
+        from agent_core.models import TimelineEvent
+
+        event = TimelineEvent(
+            event_id="e1", timestamp=1, source_module="memory_recall",
+            actor_id="master", actor_name="乐阙", narrative="回忆：" + "字" * 400,
+            metadata={"compressed": True},
+        )
+        entries = timeline_curve.build_curve([event], budget_chars=10_000)
+        self.assertEqual(entries[0].kept_chars, entries[0].original_chars)
+
+
 class WritebackTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="writeback_"))

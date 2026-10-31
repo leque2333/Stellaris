@@ -127,7 +127,7 @@ RECALL_DEDUPE_SECONDS = 600
 
 
 def _recall_writeback(store, session, kept, mode) -> str:
-    """把这次检索回来的旧事压缩一次，写到时间轴最靠前的位置。"""
+    """把这次检索回来的旧事压缩一次，写到「此刻」的位置；之后和普通记忆一样被新的往后推。"""
     import time
 
     from agent_core.memory.timeline_curve import compress_narrative
@@ -148,7 +148,7 @@ def _recall_writeback(store, session, kept, mode) -> str:
         event_id="", timestamp=time.time(), source_module="memory_recall",
         actor_id=person, actor_name=str(session.get("actor_name") or person),
         narrative=text, person_id=person, importance=1.5,
-        metadata={"recall": True, "mode": mode, "hits": len(kept)},
+        metadata={"recall": True, "compressed": True, "mode": mode, "hits": len(kept)},
     ))
     return text
 
