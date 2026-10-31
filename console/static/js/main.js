@@ -18,6 +18,7 @@ async function startHubApp() {
         // 先拿账本统计，数字立即开始滚动
         if (typeof fetchTokenStats === 'function') await fetchTokenStats();
         if (typeof loadAccessPolicy === 'function') loadAccessPolicy();
+        if (typeof loadApiSecurity === 'function') loadApiSecurity();
         if (typeof fetchSystemResources === 'function') fetchSystemResources();
         // 时间轴/模块/模型配置较重，延后加载，避免阻塞首屏数字动画
         setTimeout(() => {
