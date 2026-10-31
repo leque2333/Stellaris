@@ -2884,6 +2884,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "tool_gate_state": {"decision": decision},
             "tool_compression": tools["compression"],
         }
+        ctx["_session"] = session
         ctx.update(self._gateway_ctx_identity(session))
         ctx.update(self._gateway_ctx_model(memory, compute, request["stream"]))
         ctx["sys_prompt"] += session.get("_memory_block") or ""
@@ -3296,6 +3297,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not request:
             return message
         found = self._run_memory_lookup(ctx, request)
+        active_msgs = self._rebuild_prompt_with_recall(ctx, found) or active_msgs
         extra = [{"role": "user", "content": found + "\n\n请根据以上检索结果回答我上一个问题。"}]
         retry_msgs = active_msgs + [message] + extra
         again, _, usage2, _ = self._persona_request(ctx, retry_msgs, dict(ctx.get("extra") or {}))
@@ -3304,6 +3306,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         stripped = _strip_memory_directive(message)
         # 复答为空：首轮如果还有正文就用它，否则交给兜底话术
         return stripped if (stripped.get("content") or "").strip() else None
+
+    def _rebuild_prompt_with_recall(self, ctx, found):
+        """让出 found 的字数，重拼一次时间轴；失败就沿用原提示词。"""
+        session = dict(ctx.get("_session") or {})
+        if not session:
+            return None
+        session["_memory_block"] = found
+        try:
+            memory = self._gateway_memory(session)
+        except Exception:
+            return None
+        ctx["sys_prompt"] = memory["sys_prompt"] + found
+        return [{"role": "system", "content": ctx["sys_prompt"]}] + [
+            m for m in ctx["messages"] if m.get("role") != "system"
+        ]
 
     def _run_memory_lookup(self, ctx, request):
         """执行检索并把结果压成一段提示；失败就告诉它没查到。"""
@@ -3335,7 +3352,29 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         _recall_writeback(store, ctx, kept, mode)
         lines = [f"【记忆库检索结果】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
+        facts = self._related_facts(ctx, terms)
+        if facts:
+            lines.append("【档案事实·相关】")
+            lines.extend(f"- {fact}" for fact in facts)
         return "\n".join(lines)
+
+    def _related_facts(self, ctx, terms):
+        """在档案事实里找和检索词有交集的，最多 3 条。"""
+        person_id = str(ctx.get("person_id") or "")
+        if not person_id or not terms:
+            return []
+        try:
+            from agent_core.memory.facts import FactStore
+
+            rows = FactStore().store.get_facts_for_prompt(person_id, limit=20)
+        except Exception:
+            return []
+        picked = []
+        for fact in rows:
+            text = str(fact or "")
+            if any(term in text for term in terms):
+                picked.append(text)
+        return picked[:3]
 
     def _gate_empty_reply(self, message):
         """既没正文也没 tool_calls：上游回了空，值得重试。"""
