@@ -104,6 +104,43 @@ HTTP 429，状态在内存里（重启清零），登录成功立刻解除。
 
 ---
 
+## 三·五、没有反向代理时
+
+直接访问 `http://<内网IP>:18895`（不经过 nginx）时，各层是否还生效：
+
+| 能力 | 有 nginx | 直连中枢 | 说明 |
+|---|---|---|---|
+| TLS | ✅ | ❌ | 中枢只监听明文，没有 TLS |
+| Cookie `Secure` | ✅ 自动 | ❌ 不会加 | 明文下加了反而登不上 |
+| `local_only` | ✅ 依赖 XFF | ✅ 直接看 peer | 直连时 XFF 一律忽略，伪造无效 |
+| 请求签名 | ✅ | ✅ | 与传输无关；内网仍按 `exempt_cidrs` 豁免 |
+| 登录限速 | ✅ 依赖 XFF | ✅ 直接看 peer | 直连的 IP 更准 |
+| CORS 同源 | ✅ | ✅ | 比对 Origin 与 Host |
+| 审计日志 | ✅ | ✅ | 与入口无关 |
+
+**结论：应用层（来源、签名、限速、CORS、审计）不依赖反代，全都生效；
+唯一失效的是传输加密。**
+
+所以没有反代时，按暴露范围选一种：
+
+```powershell
+# A. 只给本机用（最省事）：绑回环，外部根本连不上
+set HUB_BIND=127.0.0.1
+python console\server.py 18895
+
+# B. 要给 docker 里的 AstrBot 用：保持 0.0.0.0，但开本机/内网限制
+python scripts\setup_security.py --enable-local-only --lan
+
+# C. 要给外网用但没有 nginx：至少
+python scripts\setup_security.py --enable-local-only   # 只放行指定网段
+python scripts\setup_security.py --enable-signature    # 再把 exempt_cidrs 收窄
+```
+
+C 方案要额外注意：把 `signature.exempt_cidrs` 从默认的内网段改成只留 docker 网段，
+否则局域网客户端全部免签名。
+
+远程访问没有反代时，更稳的做法是走 SSH 隧道或 Tailscale，而不是把 18895 直接暴露。
+
 ## 四、开启顺序（新部署）
 
 ```powershell

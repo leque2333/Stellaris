@@ -3432,6 +3432,11 @@ def _warm_resource_cache():
         time.sleep(20)
 
 
+def _bind_host() -> str:
+    """监听地址：HUB_BIND 覆盖；默认 0.0.0.0（只给本机用就设 127.0.0.1）。"""
+    return (os.getenv("HUB_BIND") or "0.0.0.0").strip() or "0.0.0.0"
+
+
 def run_server():
     audit_log.migrate_legacy()
     _start_aggregator()
@@ -3440,7 +3445,7 @@ def run_server():
     threading.Thread(target=_warm_resource_cache, daemon=True, name="resource-warmup").start()
     while True:
         try:
-            server = ReusableThreadingServer(('0.0.0.0', PORT), ConsoleHandler)
+            server = ReusableThreadingServer((_bind_host(), PORT), ConsoleHandler)
             print(f"🚀 Stellaris 控制台已启动: http://localhost:{PORT}", flush=True)
             try:
                 from agent_core import messages as _msgs

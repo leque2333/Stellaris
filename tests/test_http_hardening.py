@@ -18,6 +18,35 @@ def _handler(headers):
     return handler
 
 
+class BindHostTest(unittest.TestCase):
+    def test_default_bind(self):
+        import os
+
+        from server import _bind_host  # noqa: PLC0415
+
+        old = os.environ.pop("HUB_BIND", None)
+        try:
+            self.assertEqual(_bind_host(), "0.0.0.0")
+        finally:
+            if old is not None:
+                os.environ["HUB_BIND"] = old
+
+    def test_env_override(self):
+        import os
+
+        from server import _bind_host  # noqa: PLC0415
+
+        old = os.environ.get("HUB_BIND")
+        os.environ["HUB_BIND"] = "127.0.0.1"
+        try:
+            self.assertEqual(_bind_host(), "127.0.0.1")
+        finally:
+            if old is None:
+                os.environ.pop("HUB_BIND", None)
+            else:
+                os.environ["HUB_BIND"] = old
+
+
 class CorsTest(unittest.TestCase):
     def test_same_origin_allowed(self):
         handler = _handler({
