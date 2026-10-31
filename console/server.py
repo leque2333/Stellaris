@@ -207,7 +207,7 @@ def _asset_version() -> int:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from agent_core import api_security, audit_log  # noqa: E402
+from agent_core import api_security, audit_log, deploy_check  # noqa: E402
 from agent_core.auth import AuthManager  # noqa: E402
 from agent_core.clients import client_registry  # noqa: E402
 
@@ -291,6 +291,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/messages': '_get_messages',
     '/api/access_control': '_get_access_control',
     '/api/audit': '_get_audit',
+    '/api/deploy_check': '_get_deploy_check',
 }
 
 
@@ -684,6 +685,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _get_tool_policies(self):
         return self._send_json(self._tools_policies())
+
+    def _get_deploy_check(self):
+        """部署自检：端口 / docker 挂载 / 密钥 / 安全配置 / 审计日志。"""
+        checks = deploy_check.run_checks(port=PORT)
+        return self._send_json({
+            "ok": True,
+            "summary": deploy_check.summarize(checks),
+            "checks": [item.as_dict() for item in checks],
+        })
 
     def _get_audit(self):
         """安全审计日志（最新在前），?limit= 控制条数。"""
@@ -3432,6 +3442,22 @@ def _warm_resource_cache():
         time.sleep(20)
 
 
+def _startup_deploy_check() -> None:
+    """启动后自检一次：有失败项才提醒，正常不打扰。"""
+    try:
+        checks = deploy_check.run_checks(port=PORT)
+        summary = deploy_check.summarize(checks)
+        if not summary["failed"]:
+            return
+        bad = [f"{item.name}: {item.detail}" for item in checks if item.status == "fail"]
+        from agent_core import messages as _msgs
+
+        _msgs.error("部署自检失败：" + "；".join(bad))
+        audit_log.record("deploy_check_failed", dedupe=False, detail="；".join(bad))
+    except Exception:
+        pass
+
+
 def _bind_host() -> str:
     """监听地址：环境变量 HUB_BIND > data/api_security.json 的 bind_host > 0.0.0.0。"""
     env = (os.getenv("HUB_BIND") or "").strip()
@@ -3449,6 +3475,7 @@ def run_server():
     _start_memory_maintenance()
     _start_discovery()
     threading.Thread(target=_warm_resource_cache, daemon=True, name="resource-warmup").start()
+    threading.Thread(target=_startup_deploy_check, daemon=True, name="deploy-check").start()
     while True:
         try:
             server = ReusableThreadingServer((_bind_host(), PORT), ConsoleHandler)

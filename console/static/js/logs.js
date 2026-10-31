@@ -86,6 +86,31 @@ async function loadAudit() {
     }
 }
 
+async function loadDeployCheck() {
+    const view = document.getElementById('logs-view');
+    const meta = document.getElementById('logs-meta');
+    if (!view) return;
+    view.textContent = '检查中…（docker 探测可能要几秒）';
+    try {
+        const resp = await fetch('/api/deploy_check', { cache: 'no-store' });
+        const data = await resp.json();
+        if (!data.ok) {
+            view.textContent = '检查失败：' + (data.error || '未知错误');
+            return;
+        }
+        view.textContent = (data.checks || []).map(function (item) {
+            const icon = item.status === 'ok' ? '✓' : (item.status === 'warn' ? '!' : '✗');
+            return icon + ' ' + item.name + '  ' + item.detail;
+        }).join('\n') || '（没有结果）';
+        const s = data.summary || {};
+        if (meta) {
+            meta.textContent = `${s.total || 0} 项 · ${s.ok || 0} 通过 / ${s.warn || 0} 警告 / ${s.fail || 0} 失败`;
+        }
+    } catch (e) {
+        view.textContent = '检查失败：' + (e.message || e);
+    }
+}
+
 function openLogsTab() {
     if (typeof openSettingsTab === 'function') openSettingsTab(document.getElementById('footer-settings-btn'));
     const btn = document.querySelector("#tab-settings .subtab-btn[onclick*='subtab-logs']");
@@ -99,4 +124,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.loadLogs = loadLogs;
 window.loadAudit = loadAudit;
+window.loadDeployCheck = loadDeployCheck;
 window.openLogsTab = openLogsTab;

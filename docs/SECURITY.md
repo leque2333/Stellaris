@@ -170,7 +170,13 @@ curl.exe "http://127.0.0.1:18895/api/audit?limit=50" -H "X-Session-Token: <token
 
 ## 四·五、部署自检
 
-换机器、改目录名、开完开关之后，跑一遍：
+三个入口：**控制台按钮**、**命令行**、**重启后自动跑一次**。
+
+```text
+控制台：设置 → 运行日志 → 部署自检   （结果直接显示在文本框里）
+命令行：python scripts\check_deploy.py
+启动时：中枢起来后后台跑一次，只在有失败项时弹错误消息并写审计
+```
 
 ```powershell
 python scripts\check_deploy.py
