@@ -30,11 +30,14 @@
 | `_gateway_complete` | 172 | 8 | 17 个 | `console/server.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
+> 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
+> 不是「待拆」而是死代码，已直接删除（server.py 少 269 行）。
+
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   265 个
-超过 100 行的       16 个
+超过 20 行的函数   264 个
+超过 100 行的       15 个
 ```
 
 最狠的五个：
@@ -42,9 +45,9 @@
 ```text
 1033 行  console/server.py  do_POST
  355 行  console/server.py  do_GET
- 268 行  console/server.py  _handle_universal_chat_completions_legacy
  113 行  console/server.py  _gateway_stream              ← 下一步
  112 行  console/server.py  _gateway_record
+ 110 行  console/server.py  _handle_archive_post
 ```
 
 ---
@@ -143,7 +146,7 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 第 1 步  合并代码分叉                                     ✅ 已完成（310 通过）
 第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（310 通过）
 第 3 步  _gateway_complete（172 行）                        ✅ 已完成（310 通过）
-第 4 步  _handle_universal_chat_completions_legacy（268 行）
+第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（310 通过）
 第 5 步  _gateway_record（112 行）+ _gateway_stream（113 行）
 第 6 步  do_GET（355 行）→ 路由表化
 第 7 步  do_POST（1033 行）→ 路由表化，工作量最大
