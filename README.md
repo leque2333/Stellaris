@@ -60,8 +60,8 @@ QQ / B站 / 群聊 / 其他客户端
 ### 方式一：本机 Python
 
 ```bash
-git clone https://github.com/leque2333/agent-.git
-cd agent-
+git clone https://github.com/leque2333/Stellaris.git
+cd Stellaris
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
