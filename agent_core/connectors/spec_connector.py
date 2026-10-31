@@ -62,7 +62,7 @@ def _parse_umo(umo: str):
     parts = str(umo or "").split(":")
     if len(parts) < 3:
         return "qq", "group", parts[-1] if parts else ""
-    prefix, kind, ident = parts[0], parts[1], parts[2]
+    kind, ident = parts[1], parts[2]
     if kind == "GroupMessage":
         return "qq", "group", ident
     if kind == "FriendMessage":

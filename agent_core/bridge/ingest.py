@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any, Dict
 
 from ..models import TimelineEvent, get_cst_now_str
 from ..storage import Store

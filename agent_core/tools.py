@@ -5,9 +5,8 @@ Stellaris Core - 统一工具总线 (Tool & Skill Engine)
 """
 
 import inspect
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger("AgentTools")

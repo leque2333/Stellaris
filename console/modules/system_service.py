@@ -4,21 +4,15 @@ Stellaris Console - System Service
 系统状态概览、自传时间轴与审计日志服务
 """
 
-import datetime
-import json
 import os
-import sqlite3
 import time
-import uuid
 
 from agent_core.memory.embedding import embed_text_bytes
 from agent_core.persona_identity import get_persona_name
 from agent_core.storage import classify_source, get_store
 
 from .common import (
-    get_db_connection,
     resolve_astrbot_cmd_config_path,
-    resolve_hub_db_path,
     sanitize_clean_text,
 )
 

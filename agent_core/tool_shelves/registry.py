@@ -17,7 +17,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable
 
 _LOCK = threading.Lock()
 _CACHE: Dict[str, Dict[str, Any]] = {}

@@ -154,8 +154,6 @@ class IdentityHiddenTest(unittest.TestCase):
     """隐藏 / 插件重扫：只影响展示，扫描能找回来。"""
 
     def setUp(self):
-        import os
-        import shutil
 
         from agent_core import identity_scan as mod
 

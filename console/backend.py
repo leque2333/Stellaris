@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# ruff: noqa: F401  —— 本文件是聚合转导出层，名字由 server.py 通过 backend.xxx 调用
 """
 Stellaris Console Backend (Modular Facade)
 控制台后端服务聚合模块（门面模式）
@@ -50,20 +51,12 @@ try:
         sync_models_from_upstream,
     )
     from modules.module_manager import (
-        delete_custom_module,
         get_custom_module_configs,
         get_module_permissions,
         get_module_states,
         get_modules_overview,
         get_topology_overview,
-        import_custom_module,
-        probe_all_modules,
-        probe_single_module,
-        save_module_permissions,
         save_topology_overview,
-        toggle_module_active,
-        update_module_custom_category,
-        validate_topology_overview,
     )
     from modules.persona_service import (
         clean_persona_reply,
@@ -109,20 +102,12 @@ except ImportError:
         sync_models_from_upstream,
     )
     from console.modules.module_manager import (
-        delete_custom_module,
         get_custom_module_configs,
         get_module_permissions,
         get_module_states,
         get_modules_overview,
         get_topology_overview,
-        import_custom_module,
-        probe_all_modules,
-        probe_single_module,
-        save_module_permissions,
         save_topology_overview,
-        toggle_module_active,
-        update_module_custom_category,
-        validate_topology_overview,
     )
     from console.modules.persona_service import (
         clean_persona_reply,

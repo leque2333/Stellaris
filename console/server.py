@@ -207,8 +207,8 @@ def _asset_version() -> int:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from agent_core.auth import AuthManager
-from agent_core.clients import client_registry
+from agent_core.auth import AuthManager  # noqa: E402
+from agent_core.clients import client_registry  # noqa: E402
 
 auth_mgr = AuthManager(PROJECT_ROOT)
 

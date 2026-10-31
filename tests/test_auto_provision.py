@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """陌生模块首次 /v1 接入：自动登记模块并抓一次信息卡/二级插件"""
 
-import os
 import sys
 import tempfile
 import time

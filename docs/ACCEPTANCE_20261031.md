@@ -2,7 +2,7 @@
 
 > 对象：测试端 `D:\Stellaris_test`（18895 运行实例）+ 开发端 `D:\Stellaris`
 > 范围：本轮重构（合并分叉、网关拆分、路由表化、死代码清理、热路径、存储拆分）
-> 结论：**P0 严重缺陷 0 项**；P1 待办 1 项（`module_manager.py` 仍有 236 行函数且大部分已无调用方）；
+> 结论：**P0 严重缺陷 0 项**；P1 已处理（`module_manager.py` 拆分完成，236 行函数消除）；
 > 305 个测试两端通过，21 项运行时接口验收全绿。
 
 ---
@@ -123,7 +123,7 @@
 
 ### P1 · 应尽快处理（1 项）
 
-**`console/modules/module_manager.py` 仍是最大的单体**
+**~~`console/modules/module_manager.py` 仍是最大的单体~~（2026-10-31 当日已解决）**
 
 ```text
 236 行  scan_real_system_topology      （/api/modules/topology 路由早已 404）

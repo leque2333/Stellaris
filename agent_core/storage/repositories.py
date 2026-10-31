@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from ..models import RecallResult, TimelineEvent
+from ..models import TimelineEvent
 
 
 class Store(ABC):

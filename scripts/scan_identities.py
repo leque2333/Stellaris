@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent_core.identity_scan import default_roots, scan  # noqa: E402
+from agent_core.identity_scan import scan  # noqa: E402
 
 
 def _open_store(db_path: str = ""):

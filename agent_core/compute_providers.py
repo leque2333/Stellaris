@@ -190,7 +190,6 @@ class ComputeManager:
         base_url = provider.get("base_url", "").rstrip("/")
         api_key = provider.get("api_key", "")
         model = provider.get("model", "default")
-        auth_type = provider.get("auth_type", "official_api")
 
         endpoint = f"{base_url}/chat/completions"
         if "models" in base_url or base_url.endswith("/models"):
@@ -220,7 +219,7 @@ class ComputeManager:
             with urllib.request.urlopen(req, timeout=8) as resp:
                 status = resp.status
                 cost_ms = int((time.time() - t0) * 1000)
-                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                json.loads(resp.read().decode("utf-8", errors="ignore"))  # 顺便校验响应是合法 JSON
                 return {
                     "ok": True,
                     "status_code": status,

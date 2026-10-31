@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .engine import BridgeEngine
 from .models import BridgeSpec

@@ -50,6 +50,10 @@ ignore = ["E501"]  # 行长交给 formatter
 [tool.ruff.format]
 quote-style = "preserve"
 
+[tool.ruff.lint.per-file-ignores]
+# 测试要先 patch sys.path 再 import，E402 是有意为之
+"tests/*" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

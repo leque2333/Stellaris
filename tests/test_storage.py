@@ -5,10 +5,9 @@
 不修改生产库：所有用例都先复制到临时目录再迁移。
 """
 
-import json
+import os
 import shutil
 import sqlite3
-import os
 import sys
 import tempfile
 import time
@@ -20,7 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_core.models import TimelineEvent  # noqa: E402
-from agent_core.storage import get_store, reset_stores  # noqa: E402
+from agent_core.storage import reset_stores  # noqa: E402
 from agent_core.storage.schema import (  # noqa: E402
     MIGRATIONS,  # noqa: E402
     apply_migrations,

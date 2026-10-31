@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "console"))
 sys.path.insert(0, str(ROOT))
 
-from server import _StreamAccumulator, _join_tool_names  # noqa: E402
+from server import _join_tool_names, _StreamAccumulator  # noqa: E402
 
 
 def _chunk(payload: dict) -> bytes:

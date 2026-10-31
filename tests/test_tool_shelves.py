@@ -417,8 +417,8 @@ class ClassifierParseTest(unittest.TestCase):
         self.assertEqual(result.error, "no_json")
 
     def test_real_classify_uses_mocked_deepseek(self):
-        from agent_core.tool_shelves import classifier as cls_mod
         from agent_core.compute_providers import compute_manager
+        from agent_core.tool_shelves import classifier as cls_mod
 
         fake = {
             "choices": [{"message": {"content": '{"need_tools":true,"categories":["media"],"confidence":0.88}'}}],
@@ -436,8 +436,8 @@ class ClassifierParseTest(unittest.TestCase):
         self.assertEqual(result.prompt_tokens, 210)
 
     def test_real_classify_timeout_falls_back(self):
-        from agent_core.tool_shelves import classifier as cls_mod
         from agent_core.compute_providers import compute_manager
+        from agent_core.tool_shelves import classifier as cls_mod
 
         with mock.patch.object(compute_manager, "_candidate_providers",
                                return_value=[{"name": "DeepSeek", "model": "deepseek-chat"}]):

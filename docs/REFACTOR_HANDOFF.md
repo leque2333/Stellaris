@@ -39,6 +39,7 @@
 | `recall_timeline` | 108 | 28（17 行是参数签名） | 1 个方法 + 10 个模块函数 | `agent_core/memory/episodic_stream.py` |
 | `compress_tool_result` | 104 | 17 | 7 个模块函数 | `agent_core/tool_shelves/cleaner.py` |
 | `SQLiteStore` 拆分（结构） | 2005 行 / 105 方法 | 88 行门面 + 10 个领域模块 | 10 个 mixin | `agent_core/storage/repos/` |
+| `module_manager.py` 拆分 | 621 行 / 236 + 123 两个大函数 | 510 行 / 最长 20 行 | 14 个方法 | `console/modules/module_manager.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 > 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
@@ -75,21 +76,24 @@
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   276 个
-超过 100 行的       7 个
+超过 20 行的函数   271 个
+超过 100 行的       5 个
 ```
 
 最狠的五个：
 
 ```text
-236 行  console/modules/module_manager.py  scan_real_system_topology   ← 下一轮首要项
 138 行  agent_core/llm.py  generate_with_tools                       主机识别 / 桥接推断在用
-123 行  console/modules/module_manager.py  execute_module_probe
 120 行  agent_core/identity_scan.py  scan                            低频，功能清晰
 117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins       一次性迁移，不拆
 115 行  tests/test_tool_shelves.py  setUpClass                       测试夹具，不拆
 102 行  tests/test_token_analytics.py  setUp                         测试夹具，不拆
 ```
+
+> 2026-10-31 追加：`module_manager.py` 已拆完（621 行 → 510 行，最长函数 236 → 20），
+> 同时删掉 9 个只被已下线路由使用的函数（toggle / import / delete / probe_* / validate…），
+> `console/backend.py` 的导入同步收敛，并补了 `# ruff: noqa: F401` 说明它是转发层。
+> 现在 **ruff 全树 0 错误**。
 
 > 2026-10-31 修正：此前统计漏算 8 个带 UTF-8 BOM 的文件（`ast.parse` 直接报错被跳过），
 > 其中就有 `module_manager.py` 的 236 行函数。清掉 BOM 后重测，真实基线是
