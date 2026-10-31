@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,16 @@ from ..identity import IdentityResolver
 from ..storage import Store, classify_source
 
 logger = logging.getLogger("SegmentAggregator")
+
+
+def _readable_context(seg) -> str:
+    """片段上下文标签：uuid 这类机器 id 不进叙述，换成人能读的。"""
+    name = str(seg.get("context_name") or seg.get("context_id") or seg["plugin_id"])
+    if re.fullmatch(r"[0-9a-fA-F-]{32,36}", name):
+        kind = str(seg.get("context_kind") or "对话")
+        label = {"group": "群聊", "private": "私聊"}.get(kind, "对话")
+        return f"{seg['plugin_id']} {label}"
+    return name
 
 
 class SegmentAggregator:
@@ -77,9 +88,10 @@ class SegmentAggregator:
         session_id = str(meta.get("session_id") or "").strip()
         channel_type = str(meta.get("channel_type") or "").strip().lower()
         if group_id:
-            return channel, "group", group_id, f"group:{group_id}"
+            return channel, "group", group_id, f"{channel} 群聊 {group_id}"
         if session_id:
-            return channel, channel_type or "private", session_id, session_id
+            kind = "私聊" if channel_type == "private" else "对话"
+            return channel, channel_type or "conversation", session_id, f"{channel} {kind}"
         context_kind = "channel" if inv.get("channel_id") else "module"
         context_id = str(inv.get("actor_id") or channel)
         return channel, context_kind, context_id, context_id
@@ -186,7 +198,7 @@ class SegmentAggregator:
             if obj or outcome:
                 highlights.append(f"{obj}（{outcome}）" if obj and outcome else (obj or outcome))
 
-        context = seg.get("context_name") or seg.get("context_id") or seg["plugin_id"]
+        context = _readable_context(seg)
         parts = [f"{context}"]
         if modules:
             parts.append("模块：" + "、".join(modules[:4]))

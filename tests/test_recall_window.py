@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "console"))
 sys.path.insert(0, str(ROOT))
 
-from agent_core.memory.aggregator import SegmentAggregator  # noqa: E402
+from agent_core.memory.aggregator import SegmentAggregator, _readable_context  # noqa: E402
 from agent_core.memory.episodic_stream import _recall_window, _trim_to_budget  # noqa: E402
 from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
@@ -150,6 +150,64 @@ class SegmentKeyTest(unittest.TestCase):
             "channel_id": "qq", "actor_id": "master", "metadata": {},
         })
         self.assertEqual(key[2], "master")
+
+    def test_group_label_is_readable(self):
+        key = SegmentAggregator._key_from_invocation({
+            "channel_id": "qq", "actor_id": "master",
+            "metadata": {"group_id": "784826874", "channel_type": "group"},
+        })
+        self.assertEqual(key[3], "qq 群聊 784826874")
+
+    def test_conversation_label_hides_uuid(self):
+        uuid = "eee4b2e1-be5f-4914-bcbe-a0487e293b1d"
+        key = SegmentAggregator._key_from_invocation({
+            "channel_id": "qq", "actor_id": "master",
+            "metadata": {"session_id": uuid, "channel_type": "conversation"},
+        })
+        self.assertEqual(key[3], "qq 对话")
+        self.assertNotIn(uuid, key[3])
+
+    def test_readable_context_replaces_uuid(self):
+        uuid = "eee4b2e1-be5f-4914-bcbe-a0487e293b1d"
+        label = _readable_context({
+            "plugin_id": "qq", "context_name": uuid, "context_kind": "conversation",
+        })
+        self.assertEqual(label, "qq 对话")
+
+    def test_readable_context_keeps_plain_name(self):
+        self.assertEqual(
+            _readable_context({"plugin_id": "qq", "context_name": "qq 群聊 784826874"}),
+            "qq 群聊 784826874",
+        )
+
+    def test_composed_narrative_hides_uuid(self):
+        uuid = "eee4b2e1-be5f-4914-bcbe-a0487e293b1d"
+        aggregator = SegmentAggregator.__new__(SegmentAggregator)
+        seg = {
+            "segment_id": "seg_test", "plugin_id": "qq", "context_kind": "conversation",
+            "context_id": uuid, "context_name": uuid,
+            "started_at": 1793000000.0, "last_at": 1793000060.0,
+        }
+        event = aggregator._compose_event(
+            seg,
+            [{"invocation_id": "inv_test", "actor_id": "master", "module_id": "llm.persona"}],
+            [],
+            1793000060.0,
+        )
+        self.assertNotIn(uuid, event.narrative)
+        self.assertIn("qq 对话", event.narrative)
+
+    def test_composed_narrative_keeps_group_label(self):
+        aggregator = SegmentAggregator.__new__(SegmentAggregator)
+        seg = {
+            "segment_id": "seg_test", "plugin_id": "qq", "context_kind": "group",
+            "context_id": "784826874", "context_name": "qq 群聊 784826874",
+            "started_at": 1793000000.0, "last_at": 1793000060.0,
+        }
+        event = aggregator._compose_event(
+            seg, [{"invocation_id": "inv_test", "actor_id": "master", "module_id": "llm.persona"}], [], 1793000060.0,
+        )
+        self.assertIn("qq 群聊 784826874", event.narrative)
 
     def test_bad_metadata_does_not_crash(self):
         key = SegmentAggregator._key_from_invocation({
