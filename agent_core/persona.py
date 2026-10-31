@@ -75,6 +75,24 @@ DEFAULT_RULES: Dict[str, Any] = {
 }
 
 
+def _trim_if_needed(content: str) -> str:
+    """人格卡裁剪：对话范例不动，其余压到 HUB_PERSONA_LIMIT（默认 1000 字）。"""
+    import os
+
+    try:
+        limit = int(os.getenv("HUB_PERSONA_LIMIT", "") or 1000)
+    except ValueError:
+        limit = 1000
+    if limit <= 0:
+        return content
+    from .persona_trim import compact_prompt
+
+    try:
+        return compact_prompt(content, limit)
+    except Exception:
+        return content
+
+
 class PersonaManager:
     """
     智能体核心人设与规则管理器
@@ -101,7 +119,7 @@ class PersonaManager:
                     with open(p, "r", encoding="utf-8") as f:
                         content = f.read().strip()
                     if content and content != "你是一个严谨高效的智能体助手。":
-                        self._cached_prompt = content
+                        self._cached_prompt = _trim_if_needed(content)
                         return
                 except Exception:
                     pass
