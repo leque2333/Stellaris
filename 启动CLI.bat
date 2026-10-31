@@ -4,7 +4,10 @@ title Stellaris CLI
 cd /d "%~dp0"
 
 echo 正在连接中枢...
-python -m agent_core.cli
+set PY=py
+where py >nul 2>nul
+if errorlevel 1 set PY=python
+"%PY%" -m agent_core.cli
 
 if errorlevel 1 (
     echo.
