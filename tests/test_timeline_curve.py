@@ -87,6 +87,23 @@ class CompressTest(unittest.TestCase):
         self.assertLessEqual(len(out), len(text))
 
 
+class TailByCharsTest(unittest.TestCase):
+    def test_tail_entry_capped_by_chars(self):
+        events = [_Event(f"e{index}", timestamp=100 - index, narrative="字" * 100) for index in range(10)]
+        entries = curve.build_curve(events, budget_chars=1000)
+        tail = [e for e in entries if e.tier >= 2]
+        self.assertTrue(tail)
+        for item in tail:
+            self.assertLessEqual(item.kept_chars, curve.TAIL_ENTRY_CHARS + 1)
+
+    def test_middle_still_ratio(self):
+        events = [_Event(f"m{index}", timestamp=100 - index, narrative="字" * 100) for index in range(10)]
+        entries = curve.build_curve(events, budget_chars=1000)
+        middle = [e for e in entries if e.tier == 1]
+        self.assertTrue(middle)
+        self.assertLess(middle[0].kept_chars, middle[0].original_chars)
+
+
 class SummaryTest(unittest.TestCase):
     def test_summarize(self):
         entries = curve.build_curve(_events(10, 10), budget_chars=100)

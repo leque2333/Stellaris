@@ -20,6 +20,7 @@ DEFAULT_BUDGET_CHARS = 9_000
 ENV_BUDGET = "HUB_TIMELINE_BUDGET"
 DEFAULT_TIER_SHARES = (0.30, 0.40, 0.30)
 DEFAULT_LEVELS = (1.00, 0.85, 0.60)
+TAIL_ENTRY_CHARS = 80  # 尾段按字数压：一条最多 80 字，不再按比例
 _CLAUSE_ENDS = "。！？；\n"
 MIN_COMPRESS_CHARS = 100   # 短句本来就是一句话，压它只会压出歧义
 _QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ('"', '"'))
@@ -124,7 +125,12 @@ def build_curve(
         tier = _tier_for(used, boundaries)
         meta = getattr(event, "metadata", {}) or {}
         already = bool(meta.get("compressed")) if isinstance(meta, dict) else False
-        kept = text if already else compress_narrative(text, levels[tier])
+        if already:
+            kept = text
+        elif tier >= len(boundaries):
+            kept = _cut_at_boundary(text, TAIL_ENTRY_CHARS)  # 尾段按字数
+        else:
+            kept = compress_narrative(text, levels[tier])  # 中段按比例
         entries.append(CurveEntry(
             event_id=str(getattr(event, "event_id", "")),
             tier=tier,

@@ -75,7 +75,7 @@ class BufferOps:
         payload: Optional[Dict[str, Any]] = _loads(row["payload"], {})
         return payload if isinstance(payload, dict) else {}
 
-    def release_tail(self, person_id: str, keep_chars: int, limit: int = 500) -> int:
+    def release_tail(self, person_id: str, keep_chars: int, limit: int = 5000) -> int:
         """把超出 keep_chars 的旧事件从时间轴搬进缓冲区（时间轴因此有界）。"""
         with self._tx() as conn:
             rows = conn.execute(
@@ -141,11 +141,13 @@ class BufferOps:
     def _split_by_chars(rows, keep_chars: int):
         """按字数切：前面的留、后面的搬。"""
         keep, drop, used = [], [], 0
-        for row in rows:
+        limit = max(0, int(keep_chars))
+        for index, row in enumerate(rows):
             size = len(str(row["narrative"] or ""))
-            if used + size <= max(0, int(keep_chars)):
+            if used + size <= limit:
                 keep.append(row)
                 used += size
-            else:
-                drop.append(row)
+                continue
+            drop = list(rows[index:])  # 放不下就停，剩下的全部搬走
+            break
         return keep, drop
