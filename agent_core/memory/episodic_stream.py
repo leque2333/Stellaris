@@ -10,6 +10,7 @@ Stellaris Core - 情境经历时间轴流 (Episodic Stream)
 """
 
 import math
+import os
 import struct
 import time
 from dataclasses import dataclass
@@ -39,6 +40,40 @@ def _allowed_actor_ids(actor_id, person_id, include_all_actors):
         return None
     master_qq = IdentityResolver.get_master_qq()
     return ["master", master_qq] if actor_id in ("master", master_qq) else [actor_id]
+
+
+RECALL_DEFAULT_DAYS = 180.0
+RECALL_DEFAULT_LIMIT = 3000
+RECALL_DEFAULT_EXCLUDE = (
+    "verify", "acceptance", "sec-live", "archcheck", "keycheck", "sig-probe", "kb_test",
+)
+
+
+def _recall_window():
+    """回看窗口（天）、候选上限、排除来源；可用环境变量覆盖。"""
+    try:
+        days = float(os.getenv("HUB_RECALL_DAYS", "") or RECALL_DEFAULT_DAYS)
+    except ValueError:
+        days = RECALL_DEFAULT_DAYS
+    try:
+        limit = int(os.getenv("HUB_RECALL_CANDIDATES", "") or RECALL_DEFAULT_LIMIT)
+    except ValueError:
+        limit = RECALL_DEFAULT_LIMIT
+    raw = os.getenv("HUB_RECALL_EXCLUDE", "")
+    excluded = tuple(item.strip() for item in raw.split(",") if item.strip()) if raw else RECALL_DEFAULT_EXCLUDE
+    return days, limit, excluded
+
+
+RECALL_DEFAULT_HALF_LIFE = 168.0  # 7 天：旧记忆也够得着，不至于被 36h 衰减压死
+
+
+def _recall_half_life() -> float:
+    """近因半衰期（小时）；HUB_RECALL_HALF_LIFE_HOURS 覆盖。"""
+    try:
+        value = float(os.getenv("HUB_RECALL_HALF_LIFE_HOURS", "") or RECALL_DEFAULT_HALF_LIFE)
+    except ValueError:
+        value = RECALL_DEFAULT_HALF_LIFE
+    return max(1.0, value)
 
 
 def _query_vector(query_embedding):
@@ -244,7 +279,7 @@ class EpisodicStream:
         alpha: float = 0.45,           # 语义相关度权重
         beta: float = 0.35,            # 艾宾浩斯时间近因权重
         gamma: float = 0.20,           # 重要度权重
-        half_life_hours: float = 36.0, # 记忆近因半衰期 (小时)
+        half_life_hours: Optional[float] = None,  # 记忆近因半衰期；None 用配置值
         max_per_module: int = 1,       # 单模块配额上限 (防单一高频刷屏淹没)
         include_all_actors: bool = False,
         channel_id: Optional[str] = None,
@@ -252,25 +287,33 @@ class EpisodicStream:
         exclude_group: bool = False,
     ) -> List[RecallResult]:
         """三维拟人召回：Score = α·Similarity + β·Recency + γ·Importance"""
+        days, candidate_limit, excluded = _recall_window()
+        since_ts = time.time() - days * 86400 if days > 0 else None
         candidates = self._recall_candidates(
-            person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group
+            person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group,
+            since_ts=since_ts, limit=candidate_limit, exclude_sources=excluded,
         )
         if not candidates:
             return []
+        if half_life_hours is None:
+            half_life_hours = _recall_half_life()
         weights = _RecallWeights(alpha, beta, gamma, half_life_hours * 3600.0 / math.log(2), threshold)
         scored = _score_candidates(candidates, query, query_embedding, weights)
         scored.sort(key=lambda item: item.score, reverse=True)
         return _apply_quota(scored, limit, max_per_module)
 
     def _recall_candidates(
-        self, person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group
+        self, person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group,
+        *, since_ts=None, limit: int = 3000, exclude_sources=None,
     ) -> list:
-        """先按 person / actor 把候选收敛到 200 条，再打分。"""
+        """按 person / actor + 时间窗取候选，再打分；不按条数截断。"""
         kwargs: Dict[str, Any] = {
             "actor_ids": _allowed_actor_ids(actor_id, person_id, include_all_actors),
             "person_ids": [str(person_id)] if person_id else None,
             "exclude_group": exclude_group,
-            "limit": 200,
+            "since_ts": since_ts,
+            "exclude_sources": list(exclude_sources or ()),
+            "limit": limit,
         }
         if include_channel and channel_id:
             kwargs["source_modules"] = [channel_id]

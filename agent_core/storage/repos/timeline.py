@@ -203,6 +203,8 @@ class TimelineOps:
         person_ids: Optional[Iterable[str]] = None,
         source_modules: Optional[Iterable[str]] = None,
         exclude_group: bool = False,
+        since_ts: Optional[float] = None,
+        exclude_sources: Optional[Iterable[str]] = None,
         limit: int = 200,
     ) -> List[TimelineEvent]:
         params: List[Any] = []
@@ -227,6 +229,18 @@ class TimelineOps:
                 "AND source_module NOT LIKE 'group:%'"
             )
             where = f"{where} AND {group_filter}" if where else f"WHERE {group_filter}"
+        # 时间窗：不按条数截断，按「回看多少天」收敛
+        if since_ts:
+            clause = "timestamp >= ?"
+            where = f"{where} AND {clause}" if where else f"WHERE {clause}"
+            params.append(float(since_ts))
+        # 来源过滤：测试/探针通道不进召回候选
+        if exclude_sources:
+            sources = [str(item) for item in exclude_sources if str(item)]
+            if sources:
+                clause = f"source_module NOT IN ({','.join('?' for _ in sources)})"
+                where = f"{where} AND {clause}" if where else f"WHERE {clause}"
+                params.extend(sources)
         params.append(int(limit))
         with self._connect() as conn:
             rows = conn.execute(

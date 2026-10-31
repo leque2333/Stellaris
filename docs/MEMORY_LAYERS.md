@@ -236,3 +236,67 @@ CREATE INDEX idx_detail_inv ON memory_details(invocation_id);
 1. **L1 粒度**：每次工具调用一条（默认），还是每次“模块被使用”一条？内部模型调用算不算 L1？
 2. **L3 保留策略**：永久 / 90 天 / 按大小滚动？私聊全文是否加密、是否只留本地？
 
+## 4. 召回窗口与聚合分段（2026-10-31 调整）
+
+### 4.1 时间轴怎么写
+
+两条写入路径并存：
+
+```text
+L1 invocations / plugin_activities
+      │ 聚合器：同一通道 + 同一会话对象，静默 10 分钟切段
+      ▼
+L2 agent_timeline   一条摘要：`master；模块：llm.persona、qq（共 6 个片段）`
+
+对话本身（另一条）
+每次成功回复 → 一条对话行：`某说：「…」；安桉回答：「…」` + detail_id
+      ▼
+L3 memory_details   原文（941 条）
+```
+
+对话行默认**不折叠**（`session_window_seconds=0`）；只有聚合器会把一串模型调用压成一条。
+
+### 4.2 召回不再按条数
+
+以前候选是「最新 200 条」，实测只能覆盖 14.9 小时，而且大半是测试流量。
+现在改成**时间窗 + 来源过滤 + 高上限**：
+
+| 参数 | 默认 | 环境变量 |
+|---|---|---|
+| 回看天数 | 180 | `HUB_RECALL_DAYS` |
+| 候选上限（安全阀） | 3000 | `HUB_RECALL_CANDIDATES` |
+| 排除来源 | verify/acceptance/sec-live/archcheck/keycheck/sig-probe/kb_test | `HUB_RECALL_EXCLUDE` |
+| 近因半衰期 | 168 小时（7 天） | `HUB_RECALL_HALF_LIFE_HOURS` |
+
+半衰期原来写死 36 小时，等于「两天前的记忆基本放弃」；拉到 7 天后，
+旧记忆靠语义相似度仍然能召回到，不至于被时间项压死。
+
+实测（测试库 598 条事件）：
+
+```text
+旧口径  最新 200 条      覆盖 14.9 小时
+新口径  时间窗 + 过滤     395 条，覆盖 240 小时（10 天）
+```
+
+### 4.3 聚合按「群聊 / 私聊」分段
+
+分段键 `(channel, context_kind, context_id)`：
+
+```text
+群聊    (qq, group,   群号)
+私聊    (qq, private, 会话 id)
+兜底    (qq, channel, 人物 uid)
+```
+
+身份画像仍归到同一个 `person_id`，只是**摘要按会话切**。
+前提是请求里带上下文头：`X-Group-Id` / `X-Session-Id` / `X-Channel-Type`。
+
+> 现状：AstrBot 的 OpenAI provider 只发静态头，群聊和私聊在 hub 侧都长成
+> `channel=qq / actor=master`，所以这两类暂时还是并成一段。要真正分开，
+> 需要 AstrBot 侧在每次请求里带上会话 id（插件钩子），hub 这边已经准备好了。
+
+### 4.4 上下文占用
+
+召回注入是硬上限：8 条 + 前 2 条原话（各 ≤280 字），折算 **700~900 tokens**；
+QQ 通道实测平均 8,874 tokens，记忆占 6~10%。数据库增长不影响这个数——
+它由注入上限决定，不由时间轴条数决定。

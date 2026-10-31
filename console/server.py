@@ -2343,8 +2343,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "client_id": profile.id,
             "channel_id": channel_id,
             "channel_type": channel_type,
+            **self._conversation_context(),
         })
         return actor
+
+    def _conversation_context(self):
+        """群聊/私聊的会话标识；插件没传就留空，聚合器会退化成按人分。"""
+        return {
+            "group_id": _header_text(self.headers.get("X-Group-Id")),
+            "session_id": _header_text(self.headers.get("X-Session-Id")),
+        }
 
     def _gateway_ids(self, body, messages, channel_id):
         """用户原话、平台 UID、平台名：后面到处都要用的三个值。"""
@@ -2708,6 +2716,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not store:
             return None
         try:
+            kwargs.setdefault("metadata", {
+                "channel_type": ctx.get("channel_type", ""),
+                "group_id": ctx.get("group_id", ""),
+                "session_id": ctx.get("session_id", ""),
+            })
             return store.record_invocation(
                 ctx["trace_id"], layer, module_id,
                 channel_id=ctx["channel_id"], actor_id=ctx["actor_id"], **kwargs
@@ -2770,6 +2783,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "person_id": ctx.get("person_id") or ctx["actor_id"],
             "importance": 2.0 if ctx["actor_id"] == "master" else 1.0,
             "channel": ctx["channel_id"],
+            "channel_type": ctx.get("channel_type", ""),
+            "group_id": ctx.get("group_id", ""),
+            "session_id": ctx.get("session_id", ""),
             "detail_id": detail_id,
         }
 

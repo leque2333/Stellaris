@@ -63,11 +63,21 @@ class SegmentAggregator:
     # ------------------------------------------------------------------
     @staticmethod
     def _key_from_invocation(inv: Dict[str, Any]):
+        """分段键：群聊按群 id，私聊/其他按人；身份画像仍归到同一个人。"""
         channel = inv.get("channel_id") or inv.get("module_id") or "unknown"
+        meta = inv.get("metadata") or {}
+        if isinstance(meta, str):
+            meta = {}
+        group_id = str(meta.get("group_id") or "").strip()
+        session_id = str(meta.get("session_id") or "").strip()
+        channel_type = str(meta.get("channel_type") or "").strip().lower()
+        if group_id:
+            return channel, "group", group_id, f"group:{group_id}"
+        if session_id:
+            return channel, channel_type or "private", session_id, session_id
         context_kind = "channel" if inv.get("channel_id") else "module"
         context_id = str(inv.get("actor_id") or channel)
-        context_name = str(inv.get("actor_id") or channel)
-        return channel, context_kind, context_id, context_name
+        return channel, context_kind, context_id, context_id
 
     def _segment_for(
         self,
