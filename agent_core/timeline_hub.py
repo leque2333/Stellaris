@@ -14,7 +14,6 @@ from .memory import (
     ReflectionEngine,
     StorageDAL,
     TimelineHub,
-    register_memory_tools,
 )
 
 __all__ = [
@@ -26,5 +25,4 @@ __all__ = [
     "ReflectionEngine",
     "MemoryHub",
     "TimelineHub",
-    "register_memory_tools",
 ]

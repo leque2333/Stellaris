@@ -55,17 +55,23 @@
 > 这也是为什么「超 100 行」从 10 个降到 8 个：`validate_handshake`(122) 和
 > `build_connection_tree`(103) 直接消失了，不需要拆。
 
+
+> 2026-10-31 追加：CLI 链路已整条删除 —— `agent_core/cli.py`、`agent_core/agent.py`、
+> `agent_core/memory/memory_tools.py`、`启动CLI.bat`（`llm.py` / `tools.py` /
+> `execution/` 保留，因为 AI 主机识别和桥接推断还在用）。
+> 若将来要终端入口，按「走本地 /v1 的瘦客户端」重写，别再各写一套模型调用与工具循环。
+
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   249 个
+超过 20 行的函数   245 个
 超过 100 行的       8 个
 ```
 
 最狠的五个：
 
 ```text
-138 行  agent_core/llm.py  generate_with_tools             ← CLI 老链路，待定去留
+138 行  agent_core/llm.py  generate_with_tools             ← 主机识别 / 桥接推断在用
 120 行  agent_core/identity_scan.py  scan
 117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins   （一次性迁移，不拆）
 115 行  tests/test_tool_shelves.py  setUpClass               （测试夹具，不拆）

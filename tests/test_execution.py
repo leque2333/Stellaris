@@ -62,16 +62,6 @@ class ExecutionAgentTest(unittest.TestCase):
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_main_agent_registers_delegate_tool(self):
-        from agent_core.agent import AnanAgent
-        tmp = Path(tempfile.mkdtemp(prefix="anan_agent_"))
-        try:
-            agent = AnanAgent(db_path=tmp / "memory.db")
-            self.assertIsNotNone(agent.tools.get_tool("delegate_execution"))
-        finally:
-            import shutil
-            shutil.rmtree(tmp, ignore_errors=True)
-
 
 if __name__ == "__main__":
     unittest.main()

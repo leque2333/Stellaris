@@ -25,7 +25,6 @@ from ..storage import DEFAULT_DB_PATH, Store, get_store
 from .episodic_stream import EpisodicStream
 from .fact_manager import FactManager
 from .library import MemoryLibrary
-from .memory_tools import register_memory_tools
 from .reflection_engine import ReflectionEngine
 from .storage import StorageDAL
 
@@ -275,5 +274,4 @@ __all__ = [
     "ReflectionEngine",
     "MemoryHub",
     "TimelineHub",
-    "register_memory_tools",
 ]
