@@ -30,7 +30,7 @@ from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]
 
-FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\机器人_完整版\data\memory.db"))
+FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\Stellaris_test\data\memory.db"))
 
 
 class StorageTestBase(unittest.TestCase):

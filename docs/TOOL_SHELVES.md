@@ -464,7 +464,7 @@ $cfg | ConvertTo-Json -Depth 10 | Set-Content 'data/tool_shelves.json' -Encoding
 ## 13. 测试
 
 ```powershell
-cd D:\机器人
+cd D:\Stellaris
 python -m unittest tests.test_tool_shelves -v
 ```
 

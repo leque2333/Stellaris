@@ -2,7 +2,7 @@
 """把管理员档案从“QQ 号”迁到独立 archive_id。
 
 用法：
-    python scripts/migrate_master_archive.py [--data-dir D:\\机器人_完整版\\data]
+    python scripts/migrate_master_archive.py [--data-dir D:\\Stellaris_test\\data]
 """
 
 from __future__ import annotations

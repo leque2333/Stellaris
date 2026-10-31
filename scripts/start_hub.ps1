@@ -6,11 +6,11 @@
 
 用法：
     powershell -ExecutionPolicy Bypass -File scripts\start_hub.ps1
-    powershell -ExecutionPolicy Bypass -File scripts\start_hub.ps1 -Root "D:\机器人_完整版" -Port 18895
+    powershell -ExecutionPolicy Bypass -File scripts\start_hub.ps1 -Root "D:\Stellaris_test" -Port 18895
 #>
 
 param(
-    [string]$Root = "D:\机器人_完整版",
+    [string]$Root = "D:\Stellaris_test",
     [int]$Port = 18895,
     [string]$Python = ""
 )

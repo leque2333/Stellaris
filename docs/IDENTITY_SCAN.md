@@ -29,7 +29,7 @@ AstrBot 数据库            data_v4.db → umo_aliases / conversations / platfo
 python scripts\scan_identities.py
 
 # 用生产库判断"哪些已经配过"
-python scripts\scan_identities.py --db "D:\机器人_完整版\data\memory.db"
+python scripts\scan_identities.py --db "D:\Stellaris_test\data\memory.db"
 
 # 只看指定目录，多个用分号
 python scripts\scan_identities.py --roots "D:\AstrBot\data;D:\my_plugin"
@@ -51,7 +51,7 @@ GET /api/identity/scan?roots=...  # 指定扫描目录
 ```json
 {
   "ok": true,
-  "roots": ["D:\\机器人\\modules", "..."],
+  "roots": ["D:\\Stellaris\\modules", "..."],
   "scanned_files": 25,
   "total_sources": 27,
   "total_uids": 11,

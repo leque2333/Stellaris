@@ -305,7 +305,7 @@ def default_roots() -> List[Path]:
         project / "modules",
         project / "astrbot" / "data",
         project / "astrbot_plugins",
-        project.parent / "机器人_完整版" / "astrbot" / "data",
+        project.parent / "Stellaris_test" / "astrbot" / "data",
         Path("/AstrBot/data"),
     ]
     for path in candidates:

@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from agent_core.identity import IdentityResolver  # noqa: E402
 
-FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\机器人_完整版\data\memory.db"))
+FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\Stellaris_test\data\memory.db"))
 
 
 def free_port():

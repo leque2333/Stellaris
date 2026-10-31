@@ -6,7 +6,7 @@
     python scripts/deploy_p4.py --restart  # 同步后重启中枢与 AstrBot
 
 同步内容：
-    1. console/server.py            → D:\\机器人_完整版\\console\\
+    1. console/server.py            → D:\\Stellaris_test\\console\\
     2. console/mcp_hub_tools.py     → 生产 console\\ 与 AstrBot 挂载卷
     3. agent_core/tool_shelves/*    → 生产 agent_core\\
     4. astrbot_plugin_hub_tool_executor/* → AstrBot 插件目录
@@ -23,8 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-SRC = Path(r"D:\机器人")
-DST = Path(r"D:\机器人_完整版")
+SRC = Path(r"D:\Stellaris")
+DST = Path(r"D:\Stellaris_test")
 ASTRBOT_DATA = DST / "astrbot" / "data"
 
 FILES = [

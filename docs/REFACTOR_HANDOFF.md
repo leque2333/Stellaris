@@ -2,7 +2,7 @@
 
 > 更新：2026-10-31（第 1 步「合并代码分叉」已完成）
 > 目标：拒绝屎山。四个硬指标见下。
-> 状态：**进行中，未推远端**。开发端与生产端源码已重新对齐，两端都是 310 测试通过。
+> 状态：**进行中，未推远端**。开发端与测试端源码已重新对齐，两端都是 310 测试通过。
 
 ---
 
@@ -49,11 +49,11 @@
 
 ## 三、代码分叉已合并（2026-10-31）
 
-**结论：开发端（`D:\机器人`）与生产端（`D:\机器人_完整版`）的源码已完全一致**，
+**结论：开发端（`D:\Stellaris`）与测试端（`D:\Stellaris_test`）的源码已完全一致**，
 逐文件 hash 比对：142 个 .py 全部相同，59 个前端/文档文件只有 `docker-compose.yml` 不同
-（生产端那份多了它自己的服务定义，故意的）。
+（测试端那份多了它自己的服务定义，故意的）。
 
-### 3.1 生产端 → 开发端（补功能）
+### 3.1 测试端 → 开发端（补功能）
 
 | 内容 | 落点 |
 |---|---|
@@ -63,7 +63,7 @@
 | 账本「来源」列（通道 + 本轮调用的工具） | `sqlite_store.py`（`tools` 列）、`system_service.py`、`server.py`（`_gateway_record`）、`ledger.js`、`ledger.css`、`model_service.py` |
 | `attitude_hint` 去掉句末标点 | `persona.py` |
 
-### 3.2 开发端 → 生产端（补重构与卫生）
+### 3.2 开发端 → 测试端（补重构与卫生）
 
 - `system_service.py` / `model_service.py` 的拆分版本
 - 测试全套更新（E2E 裁剪断言改冒烟、fixture 不读真实配置、`test_ledger_migrated` 自造旧库）
@@ -73,7 +73,7 @@
 
 ### 3.3 顺带修掉的 bug（重要）
 
-1. **工具闸门在生产端其实一直没生效**：
+1. **工具闸门在测试端其实一直没生效**：
    `_gateway_context` 里把 `archive_id` 传成了 `ctx.get("archive_id")`，而 `ctx` 这时还没构建，
    抛 `NameError` 后被闸门的 fail-open 吞掉 → 每轮都"全量透传"。
    现在改成传本地变量 `archive_id`，并加了 E2E 断言：策略命中时上游工具表必须被裁剪。
@@ -94,11 +94,11 @@
 ### 测试
 
 ```powershell
-cd D:\机器人
+cd D:\Stellaris
 python -m unittest discover -s tests -t .
 # 期望：310 通过，1 skip（test_bilibili_module，模块已归档）
 
-cd D:\机器人_完整版
+cd D:\Stellaris_test
 python -m unittest discover -s tests -t .
 # 期望：同上，310 通过
 ```
@@ -190,10 +190,20 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 ## 七、开发约定
 
 1. **开发端先行，再复刻到测试端**：
-   所有拆分、改动**先在 `D:\机器人` 做**，跑通测试后再整文件复刻到
-   `D:\机器人_完整版`。
-   **禁止在生产端直接改代码**——那样开发端会落后，最后两边合不回来。
-   上一轮 `_gateway_context` 就是反例：改在了生产端，所以补了一次整树合并。
+   所有拆分、改动**先在 `D:\Stellaris` 做**，跑通测试后再整文件复刻到
+   `D:\Stellaris_test`。
+   **禁止在测试端直接改代码**——那样开发端会落后，最后两边合不回来。
+   上一轮 `_gateway_context` 就是反例：改在了测试端，所以补了一次整树合并。
+
+   复刻用 robocopy（不要 `Copy-Item -Recurse`，它曾把包拷空）：
+
+   ```powershell
+   foreach ($d in 'agent_core','console','scripts','tests','docs') {
+     robocopy "D:\Stellaris\$d" "D:\Stellaris_test\$d" /E /XD __pycache__
+   }
+   # 复刻后比对关键文件 hash，两端一致才算同步完成
+   Get-FileHash 'D:\Stellaris\console\server.py','D:\Stellaris_test\console\server.py'
+   ```
 2. **迁移必备份**：`apply_migrations` 自动快照到 `backups/`。
 3. **失败降级**：工具裁剪、模型路由、好感度评估都走 fail-open。
 4. **不加启发式判断**：身份、角色、关系一律显式配置。

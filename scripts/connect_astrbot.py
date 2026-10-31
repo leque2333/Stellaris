@@ -193,7 +193,7 @@ def detect_astrbot_data(explicit: str = "") -> Optional[Path]:
                         return cand
         except Exception:
             continue
-    # 最后再扫一层：同级目录里的子项目（如 D:\机器人_完整版\astrbot\data）
+    # 最后再扫一层：同级目录里的子项目（如 D:\Stellaris_test\astrbot\data）
     for parent in (PROJECT_ROOT.parent,):
         try:
             for child in parent.iterdir():

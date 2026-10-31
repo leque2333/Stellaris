@@ -37,7 +37,7 @@ from agent_core.tool_shelves.config import ShelfConfig, default_settings  # noqa
 from agent_core.tool_shelves.gate import ToolGate  # noqa: E402
 from agent_core.tool_shelves.session import SessionStore  # noqa: E402
 
-FIXTURE_DB = Path(r"D:\机器人_完整版\data\memory.db")
+FIXTURE_DB = Path(r"D:\Stellaris_test\data\memory.db")
 
 
 # ----------------------------------------------------------------------

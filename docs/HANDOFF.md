@@ -2,10 +2,13 @@
 
 > 项目名：**Stellaris**（原“助手记忆中枢 / Agent Hub”）；当前人格卡角色：助手（数据，可随时替换）  
 > 交接时间：2026-10-30（追加：工具按需加载 P1–P2 已上线）  
-> 生产目录：`D:\机器人_完整版`  
-> 开发目录：`D:\机器人`  
+> 开发端：`D:\Stellaris`（唯一改代码的地方）  
+> 测试端：`D:\Stellaris_test`（跑测试 + 跑 18895，不在里面改代码）  
 > 生产数据库 schema：**26**  
 > 当前测试：**310 项**（全部通过）
+
+> 目录命名：2026-10-31 起两个目录都改用项目名，不再叫「机器人 / 机器人_完整版」。
+> 代码一律先在 `D:\Stellaris` 改完、跑通测试，再整目录复刻到 `D:\Stellaris_test` 验证。
 
 ---
 
@@ -74,15 +77,15 @@ D:\nginx-1.31.3\conf\nginx.conf
 Python: C:\Users\user\AppData\Local\Python\bin\python.exe
 Python 版本: 3.14.5
 启动命令: python console\server.py 18895
-工作目录: D:\机器人_完整版
+工作目录: D:\Stellaris_test
 PID: 23400（交接时，重启后会变化）
 ```
 
 日志：
 
 ```text
-D:\机器人_完整版\logs\hub-18895.out.log
-D:\机器人_完整版\logs\hub-18895.err.log
+D:\Stellaris_test\logs\hub-18895.out.log
+D:\Stellaris_test\logs\hub-18895.err.log
 ```
 
 ### 2.3 重要提醒
@@ -90,14 +93,14 @@ D:\机器人_完整版\logs\hub-18895.err.log
 - **不要**在 `18895` 再启动第二个中枢；nginx 已经反代到这里。
 - `18890` 不是另一个实例，只是 nginx 兼容入口。
 - AstrBot / NapCat 当前没有监听，需要时单独启动；中枢本身不负责 QQ/B站协议。
-- `D:\机器人` 是开发目录，`D:\机器人_完整版` 是生产目录；不要把开发数据库直接覆盖生产数据库。
+- `D:\Stellaris` 是开发端（只在这里改代码），`D:\Stellaris_test` 是测试端（跑测试、也跑着 18895）；不要把开发数据库直接覆盖测试端数据库。
 
 ---
 
 ## 3. 目录说明
 
 ```text
-D:\机器人_完整版
+D:\Stellaris_test
 ├─ agent_core\                 # 记忆、人格、档案、模型、存储
 │  ├─ memory\                  # 时间轴/事实/图/embedding
 │  ├─ profile\                 # 档案、身份绑定
@@ -167,10 +170,10 @@ $py = 'C:\Users\user\AppData\Local\Python\bin\python.exe'
 
 Start-Process -FilePath $py `
   -ArgumentList 'console\server.py','18895' `
-  -WorkingDirectory 'D:\机器人_完整版' `
+  -WorkingDirectory 'D:\Stellaris_test' `
   -WindowStyle Hidden `
-  -RedirectStandardOutput 'D:\机器人_完整版\logs\hub-18895.out.log' `
-  -RedirectStandardError  'D:\机器人_完整版\logs\hub-18895.err.log'
+  -RedirectStandardOutput 'D:\Stellaris_test\logs\hub-18895.out.log' `
+  -RedirectStandardError  'D:\Stellaris_test\logs\hub-18895.err.log'
 ```
 
 验证：
@@ -214,14 +217,14 @@ cd 'D:\nginx-1.31.3'
 开发端：
 
 ```powershell
-cd 'D:\机器人'
+cd 'D:\Stellaris'
 python -m unittest discover -s tests -t .
 ```
 
-生产端：
+测试端：
 
 ```powershell
-cd 'D:\机器人_完整版'
+cd 'D:\Stellaris_test'
 python -m unittest discover -s tests -t .
 ```
 
@@ -831,8 +834,8 @@ token_usage 记录 credential_id
 建议清空前手动备份：
 
 ```powershell
-Copy-Item 'D:\机器人_完整版\data\memory.db' `
-  'D:\机器人_完整版\backups\memory_before_clear_$(Get-Date -Format yyyyMMdd_HHmmss).db'
+Copy-Item 'D:\Stellaris_test\data\memory.db' `
+  'D:\Stellaris_test\backups\memory_before_clear_$(Get-Date -Format yyyyMMdd_HHmmss).db'
 ```
 
 ### 11.4 停用凭证的语义
@@ -866,7 +869,7 @@ gemini_embedding_inst.enable=false
 不要：
 
 ```text
-Copy-Item D:\机器人\data\memory.db D:\机器人_完整版\data\memory.db
+Copy-Item D:\Stellaris\data\memory.db D:\Stellaris_test\data\memory.db
 ```
 
 ### 11.8 遗留兼容层
@@ -891,9 +894,9 @@ agent_core/knowledge.py
 ### 11.9 tool_shelves 的依赖与既有测试失败
 
 **依赖**：执行 AI 分类器走 `logic_slot` 的第一个候选凭证（当前 DeepSeek）。
-开发目录 `data/models_config.json` 没有 `function_credentials`，分类器会因缺 Key 报
+开发端 `data/models_config.json` 没有 `function_credentials`，分类器会因缺 Key 报
 `request_failed:HTTPError` 并全量放行——这是预期的降级，不是 bug。
-生产目录有执行凭证，闸门正常工作。
+测试端有执行凭证，闸门正常工作。
 
 ### 11.9.1 P4 薄壳的坑（务必看）
 
@@ -915,9 +918,9 @@ agent_core/knowledge.py
 
 ```powershell
 # 1) 包内文件数（应为 10）
-(Get-ChildItem 'D:\机器人_完整版\agent_core\tool_shelves' -File).Count
+(Get-ChildItem 'D:\Stellaris_test\agent_core\tool_shelves' -File).Count
 # 2) 开发/生产关键文件 hash 一致
-Get-FileHash 'D:\机器人\console\server.py','D:\机器人_完整版\console\server.py'
+Get-FileHash 'D:\Stellaris\console\server.py','D:\Stellaris_test\console\server.py'
 ```
 
 2. **同步必须单向 dev → prod**。曾误用反向覆盖，把生产旧版 `server.py` 冲回开发目录。
@@ -1109,7 +1112,7 @@ $files = @(
 )
 
 foreach ($f in $files) {
-  Copy-Item "D:\机器人\$f" "D:\机器人_完整版\$f" -Force
+  Copy-Item "D:\Stellaris\$f" "D:\Stellaris_test\$f" -Force
 }
 ```
 
@@ -1117,10 +1120,10 @@ foreach ($f in $files) {
 
 ```powershell
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-Copy-Item 'D:\机器人_完整版\data\memory.db' `
-  "D:\机器人_完整版\backups\memory_before_migration_$stamp.db"
-Copy-Item 'D:\机器人_完整版\data\memory_graph.db' `
-  "D:\机器人_完整版\backups\graph_before_migration_$stamp.db"
+Copy-Item 'D:\Stellaris_test\data\memory.db' `
+  "D:\Stellaris_test\backups\memory_before_migration_$stamp.db"
+Copy-Item 'D:\Stellaris_test\data\memory_graph.db' `
+  "D:\Stellaris_test\backups\graph_before_migration_$stamp.db"
 ```
 
 迁移会在服务启动时自动执行；`apply_migrations` 也会尝试自动备份。
@@ -1151,7 +1154,7 @@ cost_breakdown
 
 ```powershell
 Get-NetTCPConnection -LocalPort 18895 -State Listen
-Get-Content 'D:\机器人_完整版\logs\hub-18895.err.log' -Tail 50
+Get-Content 'D:\Stellaris_test\logs\hub-18895.err.log' -Tail 50
 ```
 
 然后：

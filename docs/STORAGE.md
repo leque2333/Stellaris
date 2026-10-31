@@ -1,4 +1,4 @@
-# 存储层说明（Storage Layer）
+﻿# 存储层说明（Storage Layer）
 
 > 目标是让「数据库」不再和中枢业务代码焊死：SQL 只出现在 `agent_core/storage/`，
 > 业务层只依赖 `Store` 接口，未来可平滑换 PostgreSQL 或独立数据库服务。
@@ -21,13 +21,13 @@ agent_core/storage/
 
 ```powershell
 # 指定库文件
-$env:HUB_STORAGE_URL = "sqlite:///D:/机器人/data/memory.db"
+$env:HUB_STORAGE_URL = "sqlite:///D:/Stellaris/data/memory.db"
 
 # 只读模式（控制台/分析进程）
-$env:HUB_STORAGE_URL = "sqlite:///D:/机器人/data/memory.db?mode=ro"
+$env:HUB_STORAGE_URL = "sqlite:///D:/Stellaris/data/memory.db?mode=ro"
 
 # 兼容旧变量（仅当 HUB_STORAGE_URL 未设置时生效）
-$env:MEMORY_HUB_DB_PATH = "D:/机器人/data/memory.db"
+$env:MEMORY_HUB_DB_PATH = "D:/Stellaris/data/memory.db"
 ```
 
 业务代码不要自己拼 SQLite 路径，统一：
@@ -86,11 +86,11 @@ store.append_event(...)
 ## 7. 测试
 
 ```powershell
-cd D:\机器人
+cd D:\Stellaris
 python -m unittest tests.test_storage -v
 ```
 
-用例全部先复制 `D:\机器人_完整版\data\memory.db` 到临时目录再迁移，不会改动生产库。
+用例全部先复制 `D:\Stellaris_test\data\memory.db` 到临时目录再迁移，不会改动生产库。
 
 ## 8. 换后端（预留）
 
