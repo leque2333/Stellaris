@@ -3625,11 +3625,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         )
 
     def _gateway_complete(self, ctx):
-        message = None
-        finish_reason = "stop"
-        usage = {}
-        compute_mgr = ctx["compute_mgr"]
+        state = self._complete_begin(ctx)
+        out = self._complete_output(ctx, self._complete_reply(ctx))
+        detail_id = self._complete_audit(ctx, state, out)
+        event_id = self._gateway_record(
+            ctx, out["message"]["content"], out["in"], out["out"],
+            bool(out["tool_calls"]), detail_id=detail_id or "",
+            tool_calls=out["tool_calls"],
+        )
+        self._complete_invocations(ctx, state, out, event_id)
+        self._send_json(
+            self._complete_payload(ctx, out),
+            extra_headers=self._hub_identity_headers(ctx),
+        )
 
+    def _complete_begin(self, ctx):
+        """开一轮调用：通道级 invocation + 留档真正发给模型的请求。"""
         store = self._memory_store()
         inv_channel = self._l1_start(
             store, ctx, "channel", ctx["channel_id"],
@@ -3644,158 +3655,217 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "tools": ctx["extra"].get("tools"),
             "model": ctx["req_model"],
         }, invocation_id=inv_channel)
-        inv_model = None
-        if store and compute_mgr and ctx["user_query"]:
-            inv_model = self._l1_start(
-                store, ctx, "model", "llm.persona",
-                parent_id=inv_channel, summary="人格模型调用",
+        inv_model = self._complete_model_invocation(ctx, store, inv_channel)
+        return {"store": store, "inv_channel": inv_channel, "inv_model": inv_model}
+
+    def _complete_model_invocation(self, ctx, store, inv_channel):
+        """真有人格模型调用才开子 invocation，空记录不进时间轴。"""
+        if not (store and ctx["compute_mgr"] and ctx["user_query"]):
+            return None
+        return self._l1_start(
+            store, ctx, "model", "llm.persona",
+            parent_id=inv_channel, summary="人格模型调用",
+        )
+
+    def _complete_reply(self, ctx):
+        """真去调模型；拿不到回复返回 None，由上层走兜底话术。"""
+        if not (ctx["compute_mgr"] and ctx["user_query"]):
+            return None
+        if ctx["is_logic_task"] and not ctx["has_tools"]:
+            return self._complete_logic_worker(ctx)
+        return self._complete_persona(ctx)
+
+    def _complete_logic_worker(self, ctx):
+        """逻辑重活：先让幕后工兵推导，再用人格口吻把结论交出去。"""
+        worker_msgs = [
+            {"role": "system", "content": "You are a top-tier software engineer and logical reasoning engine. Solve the problem directly, rigorously and clearly. Output clean markdown and code with zero fluff."},
+            {"role": "user", "content": ctx["user_query"]},
+        ]
+        worker_out, w_in, w_out = ctx["compute_mgr"].chat_completion(
+            "logic_slot", worker_msgs, current_port=PORT, timeout=90
+        )
+        if not worker_out:
+            return None
+        self._record_logic_usage(ctx, w_in, w_out)
+        return self._complete_logic_handoff(ctx, worker_out)
+
+    def _record_logic_usage(self, ctx, tokens_in, tokens_out):
+        """工兵那一笔也要记账；失败不影响主流程。"""
+        try:
+            backend.record_token_usage_event(
+                ctx["compute_mgr"].resolve_model("logic_slot") or "logic_slot",
+                tokens_in, tokens_out, source=ctx["channel_id"],
             )
+        except Exception:
+            pass
 
-        if compute_mgr and ctx["user_query"]:
-            if ctx["is_logic_task"] and not ctx["has_tools"]:
-                worker_msgs = [
-                    {"role": "system", "content": "You are a top-tier software engineer and logical reasoning engine. Solve the problem directly, rigorously and clearly. Output clean markdown and code with zero fluff."},
-                    {"role": "user", "content": ctx["user_query"]},
-                ]
-                worker_out, win, wout = compute_mgr.chat_completion(
-                    "logic_slot", worker_msgs, current_port=PORT, timeout=90
-                )
-                if worker_out:
-                    try:
-                        backend.record_token_usage_event(
-                            compute_mgr.resolve_model("logic_slot") or "logic_slot",
-                            win, wout, source=ctx["channel_id"],
-                        )
-                    except Exception:
-                        pass
-                    synth_query = (
-                        f"幕后工兵已推导解决完毕，技术产物与结论如下：\n{worker_out}\n\n"
-                        f"请以{_persona_name()}特有的从容、通透随性、至善而微厌世的口吻，把结论和改动交付给{_master_name()}（句末绝不带句号，纯口语）。"
-                    )
-                    synth_out, sin, sout = compute_mgr.chat_completion(
-                        "persona_slot",
-                        [{"role": "system", "content": ctx["sys_prompt"]},
-                         {"role": "user", "content": synth_query}],
-                        current_port=PORT, timeout=90,
-                    )
-                    text = synth_out or worker_out
-                    message = {"role": "assistant", "content": text}
-                    usage = {"prompt_tokens": sin, "completion_tokens": sout}
-            else:
-                active_msgs = [{"role": "system", "content": ctx["sys_prompt"]}] + [
-                    m for m in ctx["messages"] if m.get("role") != "system"
-                ]
-                extra = dict(ctx.get("extra") or {})
-                # 工具由 AstrBot 负责：透传 tools，模型返回 tool_calls，AstrBot 执行
-                message, finish_reason, usage, used_model = self._persona_request(
-                    ctx, active_msgs, extra
-                )
-                # enforce_soft：裁剪后拿到空响应（既无正文也无 tool_calls）时，
-                # 用上游全量工具重试一次，避免误裁把动作卡死。
-                if (
-                    message is not None
-                    and not (message.get("content") or "").strip()
-                    and not message.get("tool_calls")
-                    and self._gate_auto_expand_allowed(ctx, self._gate_live(ctx))
-                ):
-                    self._gate_expand(ctx)
-                    message, finish_reason, usage, used_model = self._persona_request(
-                        ctx, active_msgs, dict(ctx.get("extra") or {})
-                    )
-                if used_model:
-                    ctx["actual_model"] = used_model
+    def _complete_logic_handoff(self, ctx, worker_out):
+        """让工兵只出结论，人格模型负责口吻；交付物仍以工兵原文兜底。"""
+        synth_query = (
+            f"幕后工兵已推导解决完毕，技术产物与结论如下：\n{worker_out}\n\n"
+            f"请以{_persona_name()}特有的从容、通透随性、至善而微厌世的口吻，把结论和改动交付给{_master_name()}（句末绝不带句号，纯口语）。"
+        )
+        synth_out, s_in, s_out = ctx["compute_mgr"].chat_completion(
+            "persona_slot",
+            [{"role": "system", "content": ctx["sys_prompt"]},
+             {"role": "user", "content": synth_query}],
+            current_port=PORT, timeout=90,
+        )
+        return {
+            "message": {"role": "assistant", "content": synth_out or worker_out},
+            "finish_reason": "stop",
+            "usage": {"prompt_tokens": s_in, "completion_tokens": s_out},
+        }
 
-        used_fallback = message is None
+    def _complete_persona(self, ctx):
+        """常规人格对话；被裁得太狠导致空回复时，用全量工具重试一次。"""
+        active_msgs = [{"role": "system", "content": ctx["sys_prompt"]}] + [
+            m for m in ctx["messages"] if m.get("role") != "system"
+        ]
+        message, finish, usage, used_model = self._persona_request(
+            ctx, active_msgs, dict(ctx.get("extra") or {})
+        )
+        # enforce_soft：既无正文也无 tool_calls，多半是被裁没了工具
+        if self._gate_empty_reply(message) and self._gate_auto_expand_allowed(ctx, self._gate_live(ctx)):
+            self._gate_expand(ctx)
+            message, finish, usage, used_model = self._persona_request(
+                ctx, active_msgs, dict(ctx.get("extra") or {})
+            )
+        if used_model:
+            ctx["actual_model"] = used_model
+        return {"message": message, "finish_reason": finish, "usage": usage}
+
+    def _gate_empty_reply(self, message):
+        """既没正文也没 tool_calls：上游回了空，值得重试。"""
         if message is None:
-            message = {"role": "assistant", "content": self._gateway_fallback(ctx)}
+            return False
+        return not (message.get("content") or "").strip() and not message.get("tool_calls")
 
+    def _complete_output(self, ctx, reply):
+        """整理要发回去的消息 + token 估算。"""
+        reply = reply or {}
+        message = reply.get("message")
+        fallback = message is None
+        if fallback:
+            message = {"role": "assistant", "content": self._gateway_fallback(ctx)}
+        out_message = self._out_message(message)
+        usage = reply.get("usage") or {}
+        p_in, p_out = self._estimate_tokens(ctx, out_message["content"], usage)
+        return {
+            "message": out_message,
+            "tool_calls": out_message.get("tool_calls"),
+            "finish_reason": reply.get("finish_reason") or "stop",
+            "usage": usage,
+            "fallback": fallback,
+            "in": p_in,
+            "out": p_out,
+        }
+
+    def _out_message(self, message):
+        """发回去的那一条：只留 role/content/tool_calls/refusal。"""
         content = message.get("content") or ""
         tool_calls = message.get("tool_calls")
         if content and not tool_calls:
             content = backend.clean_persona_reply(content)
-
-        out_message = {"role": "assistant", "content": content}
+        out = {"role": "assistant", "content": content}
         if tool_calls:
-            out_message["tool_calls"] = tool_calls
+            out["tool_calls"] = tool_calls
         if message.get("refusal"):
-            out_message["refusal"] = message["refusal"]
+            out["refusal"] = message["refusal"]
+        return out
 
-        p_in = int(usage.get("prompt_tokens") or max(10, len(ctx["user_query"]) * 2 + len(ctx["sys_prompt"]) // 4))
+    def _estimate_tokens(self, ctx, content, usage):
+        """上游没给 usage 时按字数估，宁可偏高也别显示 0。"""
+        p_in = int(usage.get("prompt_tokens")
+                   or max(10, len(ctx["user_query"]) * 2 + len(ctx["sys_prompt"]) // 4))
         p_out = int(usage.get("completion_tokens") or max(5, len(content) // 2))
+        return p_in, p_out
 
-        # 工具货架：记录回复上下文、误裁统计与逐轮明细
-        self._gate_note(ctx, content, tool_calls)
+    def _complete_audit(self, ctx, state, out):
+        """闸门留痕 + 记忆库留档；返回 detail_id 给账本关联。"""
+        self._gate_note(ctx, out["message"]["content"], out["tool_calls"])
+        self._log_gate_decision(ctx, out)
+        if not state["store"]:
+            return None
+        return self._l3(state["store"], "llm_response", {
+            "message": out["message"],
+            "usage": out["usage"],
+            "finish_reason": out["finish_reason"],
+            "fallback": out["fallback"],
+            "tool_gate": ctx.get("tool_gate"),
+        }, invocation_id=state["inv_model"] or state["inv_channel"])
+
+    def _log_gate_decision(self, ctx, out):
+        """工具货架逐轮明细：只有真过了闸门才记。"""
         gate_info = ctx.get("tool_gate")
-        if gate_info:
-            self._gate_log(ctx, dict(
-                gate_info,
-                trace=ctx.get("trace_id"),
-                channel=ctx.get("channel_id"),
-                actor=ctx.get("actor_id"),
-                platform=ctx.get("platform"),
-                tool_calls=[((tc.get("function") or {}).get("name")) for tc in (tool_calls or [])],
-                expanded=bool(ctx.get("tool_expanded")),
-                compression=ctx.get("tool_compression"),
-            ))
+        if not gate_info:
+            return
+        self._gate_log(ctx, dict(
+            gate_info,
+            trace=ctx.get("trace_id"),
+            channel=ctx.get("channel_id"),
+            actor=ctx.get("actor_id"),
+            platform=ctx.get("platform"),
+            tool_calls=[((tc.get("function") or {}).get("name")) for tc in (out["tool_calls"] or [])],
+            expanded=bool(ctx.get("tool_expanded")),
+            compression=ctx.get("tool_compression"),
+        ))
 
-        detail_id = None
-        if store:
-            detail_id = self._l3(store, "llm_response", {
-                "message": out_message,
-                "usage": usage,
-                "finish_reason": finish_reason,
-                "fallback": used_fallback,
-                "tool_gate": gate_info,
-            }, invocation_id=inv_model or inv_channel)
-        event_id = self._gateway_record(
-            ctx, content, p_in, p_out, bool(tool_calls), detail_id=detail_id or "",
-            tool_calls=tool_calls,
+    def _complete_invocations(self, ctx, state, out, event_id):
+        """工具与调用收尾：工具请求一条条记，再统一 finish。"""
+        store = state["store"]
+        if not store:
+            return
+        for tool_call in out["tool_calls"] or []:
+            self._record_tool_call(ctx, state, tool_call)
+        status = "fallback" if out["fallback"] else "ok"
+        tokens = f"{out['in']}+{out['out']} tokens"
+        for inv in (state["inv_model"], state["inv_channel"]):
+            self._finish_invocation(store, inv, status, event_id, tokens)
+
+    def _record_tool_call(self, ctx, state, tool_call):
+        """客户端要调工具：开一条 tool invocation，参数原样存下来。"""
+        store = state["store"]
+        fn_name = ((tool_call.get("function") or {}).get("name")) or "unknown"
+        inv_tool = self._l1_start(
+            store, ctx, "tool", fn_name,
+            parent_id=state["inv_model"] or state["inv_channel"],
+            summary="客户端请求工具",
         )
+        self._l3(store, "tool_args", tool_call, invocation_id=inv_tool)
+        try:
+            store.finish_invocation(inv_tool, status="requested")
+        except Exception:
+            pass
 
-        if store:
-            for tc in tool_calls or []:
-                fn_name = ((tc.get("function") or {}).get("name")) or "unknown"
-                inv_tool = self._l1_start(
-                    store, ctx, "tool", fn_name,
-                    parent_id=inv_model or inv_channel,
-                    summary="客户端请求工具",
-                )
-                self._l3(store, "tool_args", tc, invocation_id=inv_tool)
-                try:
-                    store.finish_invocation(inv_tool, status="requested")
-                except Exception:
-                    pass
+    def _finish_invocation(self, store, inv_id, status, event_id, tokens):
+        """模型 / 通道 invocation 收尾；写失败也不让对话失败。"""
+        if not inv_id:
+            return
+        try:
+            store.finish_invocation(inv_id, status=status, event_id=event_id, summary=tokens)
+        except Exception:
+            pass
 
-            status = "fallback" if used_fallback else "ok"
-            for inv in (inv_model, inv_channel):
-                if not inv:
-                    continue
-                try:
-                    store.finish_invocation(
-                        inv, status=status, event_id=event_id,
-                        summary=f"{p_in}+{p_out} tokens",
-                    )
-                except Exception:
-                    pass
-
-        resp = {
+    def _complete_payload(self, ctx, out):
+        """OpenAI 格式响应体。"""
+        return {
             "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
             "created": int(time.time()),
             "model": ctx["req_model"],
             "choices": [{
                 "index": 0,
-                "message": out_message,
-                "finish_reason": finish_reason,
+                "message": out["message"],
+                "finish_reason": out["finish_reason"],
             }],
             "usage": {
-                "prompt_tokens": p_in,
-                "completion_tokens": p_out,
-                "total_tokens": p_in + p_out,
+                "prompt_tokens": out["in"],
+                "completion_tokens": out["out"],
+                "total_tokens": out["in"] + out["out"],
             },
             "hub": self._hub_identity_payload(ctx),
         }
-        self._send_json(resp, extra_headers=self._hub_identity_headers(ctx))
 
     def _gateway_stream(self, ctx):
         self.close_connection = True

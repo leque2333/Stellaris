@@ -19,7 +19,7 @@
 
 ## 二、当前进度
 
-### 已完成（5 条）
+### 已完成（6 条）
 
 | 函数 | 原行数 | 现行数 | 拆出函数 | 所属文件 |
 |---|---|---|---|---|
@@ -27,13 +27,14 @@
 | `get_token_analytics` | 244 | 15 | 16 个 | `console/modules/model_service.py` |
 | `_gateway_context`（前半） | 336 | 220 | 12 个 | `console/server.py` |
 | `_gateway_context`（剩余 220 行） | 220 | 9 | 25 个方法 + 2 个工具函数 | `console/server.py` |
+| `_gateway_complete` | 172 | 8 | 17 个 | `console/server.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   266 个
-超过 100 行的       17 个
+超过 20 行的函数   265 个
+超过 100 行的       16 个
 ```
 
 最狠的五个：
@@ -42,8 +43,8 @@
 1033 行  console/server.py  do_POST
  355 行  console/server.py  do_GET
  268 行  console/server.py  _handle_universal_chat_completions_legacy
- 172 行  console/server.py  _gateway_complete            ← 下一步
- 113 行  console/server.py  _gateway_stream
+ 113 行  console/server.py  _gateway_stream              ← 下一步
+ 112 行  console/server.py  _gateway_record
 ```
 
 ---
@@ -141,7 +142,7 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 ```text
 第 1 步  合并代码分叉                                     ✅ 已完成（310 通过）
 第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（310 通过）
-第 3 步  _gateway_complete（172 行）
+第 3 步  _gateway_complete（172 行）                        ✅ 已完成（310 通过）
 第 4 步  _handle_universal_chat_completions_legacy（268 行）
 第 5 步  _gateway_record（112 行）+ _gateway_stream（113 行）
 第 6 步  do_GET（355 行）→ 路由表化
