@@ -1,4 +1,4 @@
-﻿<#
+<#
 启动中枢：日志轮转（重启不丢历史）。
 
 每轮启动前把上一份日志改名成 *.prev，再重定向到主日志。
@@ -12,13 +12,29 @@
 param(
     [string]$Root = "D:\机器人_完整版",
     [int]$Port = 18895,
-    [string]$Python = "C:\Users\user\AppData\Local\Python\bin\python.exe"
+    [string]$Python = ""
 )
 
 $ErrorActionPreference = "Stop"
 
+# 解释器：优先用 py 启动器解析，其次 PATH 里的 python（跳过商店占位符）
+function Resolve-Python([string]$Given) {
+    if ($Given) { return $Given }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $resolved = & py -c "import sys; print(sys.executable)" 2>$null
+        if ($resolved -and (Test-Path $resolved)) { return $resolved }
+    }
+    foreach ($name in @('python', 'python3')) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd -and $cmd.Source -and $cmd.Source -notlike '*WindowsApps*') { return $cmd.Source }
+    }
+    return ""
+}
+
+$Python = Resolve-Python $Python
+
 if (-not (Test-Path $Root)) { Write-Error "目录不存在：$Root" }
-if (-not (Test-Path $Python)) { Write-Error "Python 不存在：$Python" }
+if (-not $Python -or -not (Test-Path $Python)) { Write-Error "找不到 Python，请用 -Python 指定解释器路径" }
 
 $logDir = Join-Path $Root "logs"
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
