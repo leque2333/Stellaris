@@ -88,10 +88,48 @@ _MEMORY_TOOL_BLOCK = (
 )
 
 
-def _memory_tool_prompt() -> str:
+_TIME_ANCHORS = ("前天", "昨天", "上次", "上回", "之前", "那次", "记得", "说过", "聊过", "前阵子")
+
+
+def _time_anchor_query(text) -> bool:
+    """用户话里有没有「翻旧账」的信号；命中就先查一次记忆库。"""
+    value = str(text or "")
+    return any(word in value for word in _TIME_ANCHORS)
+
+
+_STOP_WORDS = {
+    "记得", "说过", "聊过", "什么", "怎么", "那个", "这个", "上次", "之前", "前天", "昨天",
+    "那事", "的事", "事情", "还有", "我们", "你", "我", "吗", "呢", "的", "了", "吧", "啊",
+}
+
+
+def _prefetch_terms(user_query: str) -> list:
+    """把「还记得小鱼干那事吗」变成 [小鱼干, 那事] 这类可检索的词。"""
+    text = str(user_query or "")
+    for word in _TIME_ANCHORS:
+        text = text.replace(word, " ")
+    try:
+        import jieba
+
+        tokens = [token.strip() for token in jieba.cut(text)]
+    except Exception:
+        tokens = text.split()
+    picked = []
+    for token in tokens:
+        if len(token) < 2 or token in _STOP_WORDS:
+            continue
+        if token not in picked:
+            picked.append(token)
+    return picked[:5]
+
+
+def _memory_tool_prompt(stream: bool = False) -> str:
+    """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
     import os
 
-    return "" if os.getenv("HUB_MEMORY_TOOL", "1") == "0" else _MEMORY_TOOL_BLOCK
+    if stream or os.getenv("HUB_MEMORY_TOOL", "1") == "0":
+        return ""
+    return _MEMORY_TOOL_BLOCK
 
 
 def _parse_memory_directive(text) -> dict:
@@ -2814,8 +2852,38 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "tool_compression": tools["compression"],
         }
         ctx.update(self._gateway_ctx_identity(session))
-        ctx.update(self._gateway_ctx_model(memory, compute))
+        ctx.update(self._gateway_ctx_model(memory, compute, request["stream"]))
+        ctx["sys_prompt"] += self._prefetch_memory_block(ctx)
         return ctx
+
+    def _prefetch_memory_block(self, ctx):
+        """用户话里带了时间锚点就先翻库：流式/非流式都能用。"""
+        if not _time_anchor_query(ctx.get("user_query") or ""):
+            return ""
+        from agent_core.memory import deep_recall
+
+        store = self._memory_store()
+        if store is None:
+            return ""
+        terms = _prefetch_terms(ctx.get("user_query") or "")
+        rows = store.search_narratives(
+            terms, person_ids=[ctx["person_id"]] if ctx.get("person_id") else None,
+            limit=200, match_all=False,
+        ) if terms else []
+        if not rows:
+            return ""
+        hits = [
+            deep_recall.Hit(str(getattr(row, "event_id", "")), str(getattr(row, "time_str", "")),
+                            float(getattr(row, "timestamp", 0) or 0),
+                            str(getattr(row, "narrative", "") or ""))
+            for row in rows
+        ]
+        kept, mode = deep_recall.trim_hits(hits, 2_000)
+        if not kept:
+            return ""
+        lines = [f"\n\n【记忆库·按时间检索】mode={mode}，共 {len(kept)} 条："]
+        lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
+        return "\n".join(lines)
 
     def _gateway_ctx_identity(self, session):
         """ctx 的身份部分：谁在说话、属于哪个档案。"""
@@ -2839,10 +2907,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "bound_by": session["bound_by"],
         }
 
-    def _gateway_ctx_model(self, memory, compute):
+    def _gateway_ctx_model(self, memory, compute, stream=False):
         """ctx 的模型 / 提示词部分。"""
         return {
-            "sys_prompt": memory["sys_prompt"] + _memory_tool_prompt(),
+            "sys_prompt": memory["sys_prompt"] + _memory_tool_prompt(stream),
             "compute_mgr": compute["compute_mgr"],
             "is_logic_task": compute["is_logic_task"],
             "actual_model": compute["actual_model"],

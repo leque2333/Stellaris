@@ -56,6 +56,10 @@ class PromptMountTest(unittest.TestCase):
         os.environ.pop("HUB_MEMORY_TOOL", None)
         self.assertIn("记忆检索", server._memory_tool_prompt())
 
+    def test_stream_never_mounted(self):
+        os.environ.pop("HUB_MEMORY_TOOL", None)
+        self.assertEqual(server._memory_tool_prompt(stream=True), "")
+
     def test_can_disable(self):
         os.environ["HUB_MEMORY_TOOL"] = "0"
         try:

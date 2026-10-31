@@ -307,6 +307,8 @@ def patch_cmd_config(cfg: Dict[str, Any], base_url: str, key: str, model: str) -
     })
 
     settings = out.setdefault("provider_settings", {})
+    # 记忆检索要等整轮回复才能查库重答，流式下做不了，接入时统一关掉
+    settings["streaming_response"] = False
     pool = settings.get("provider_pool")
     if not isinstance(pool, list) or not pool:
         settings["provider_pool"] = [PROVIDER_NAME]
