@@ -28,7 +28,6 @@ def create_store(
     migrate: bool = True,
 ) -> Store:
     """显式创建一个独立 Store（测试、多库场景）"""
-    from .sqlite_store import SQLiteStore
 
     config = load_storage_config() if db_path is None else None
     if db_path is None and config and config.backend != "sqlite":

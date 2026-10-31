@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """档案 API：创建 / 列表 / 解析 / 改人格 / 挂平台账号（不依赖真实模型）"""
 
 import json

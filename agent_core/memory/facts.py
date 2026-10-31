@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """长期事实层：把人说过的事实存成可查询、可失效的记录。
 
 参考 Graphiti 的 episode → entity/fact + 双时间模型，但先落在 SQLite。

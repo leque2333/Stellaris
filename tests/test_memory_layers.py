@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """三层记忆底座：L1 调用索引 + L3 详情库"""
 
 import json

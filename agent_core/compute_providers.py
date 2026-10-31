@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Stellaris Core - 全合规双池算力矩阵与调度中枢 (Compute Providers & Dual-Pool Dispatcher)
 支持：

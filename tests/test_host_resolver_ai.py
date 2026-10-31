@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """宿主识别：一次 AI 调查同时补身份与二级插件，并写入身份映射"""
 
 import asyncio

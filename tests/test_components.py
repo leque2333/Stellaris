@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """二级插件扫描：标准 metadata 与无 metadata 目录"""
 
 import asyncio

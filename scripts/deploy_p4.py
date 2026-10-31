@@ -148,7 +148,7 @@ def main() -> int:
     for rel_src, rel_dst in FILES:
         copy_file(rel_src, rel_dst)
 
-    print(f"[2/3] 同步目录")
+    print("[2/3] 同步目录")
     for rel_src, rel_dst in PKG_DIRS:
         copy_dir(rel_src, rel_dst)
 

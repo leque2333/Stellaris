@@ -75,19 +75,26 @@
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   242 个
-超过 100 行的       5 个
+超过 20 行的函数   276 个
+超过 100 行的       7 个
 ```
 
 最狠的五个：
 
 ```text
-138 行  agent_core/llm.py  generate_with_tools             ← 主机识别 / 桥接推断在用
-120 行  agent_core/identity_scan.py  scan                  ← 低频，功能清晰
-117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins   （一次性迁移，不拆）
-115 行  tests/test_tool_shelves.py  setUpClass               （测试夹具，不拆）
-102 行  tests/test_token_analytics.py  setUp                 （测试夹具，不拆）
+236 行  console/modules/module_manager.py  scan_real_system_topology   ← 下一轮首要项
+138 行  agent_core/llm.py  generate_with_tools                       主机识别 / 桥接推断在用
+123 行  console/modules/module_manager.py  execute_module_probe
+120 行  agent_core/identity_scan.py  scan                            低频，功能清晰
+117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins       一次性迁移，不拆
+115 行  tests/test_tool_shelves.py  setUpClass                       测试夹具，不拆
+102 行  tests/test_token_analytics.py  setUp                         测试夹具，不拆
 ```
+
+> 2026-10-31 修正：此前统计漏算 8 个带 UTF-8 BOM 的文件（`ast.parse` 直接报错被跳过），
+> 其中就有 `module_manager.py` 的 236 行函数。清掉 BOM 后重测，真实基线是
+> 1518 个函数 / 297 个 >20 / 18 个 >100 / 最长 1021；现在 1711 / 276 / 7 / 236。
+> 验收结论见 [ACCEPTANCE_20261031.md](ACCEPTANCE_20261031.md)。
 
 > 三个热路径（`_decide` / `recall_timeline` / `compress_tool_result`）已拆完，
 > 全项目 100 行以上的函数只剩 5 个，其中 3 个是「一次性迁移 / 测试夹具 / 低频脚本」。

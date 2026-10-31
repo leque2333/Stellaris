@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Stellaris Core - 数据模型与契约规范
 定义时间轴生命流事件 (TimelineEvent)、用户画像 (UserProfile) 及多维召回结果

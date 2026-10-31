@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Stellaris Console - Module & Topology Manager
 模组生态总线、层级树状图、探针检测与权限控制 (RBAC)
