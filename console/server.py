@@ -56,6 +56,25 @@ def _master_name() -> str:
     return IdentityResolver.get_master_name()
 
 
+def _split_conversation_id(raw):
+    """把 AstrBot 的会话标识拆成 (类型, 群号, 会话 id)。
+
+    兼容 `platform:GroupMessage:784826874`、`platform:FriendMessage:2986371638`
+    以及纯 UUID / 纯 session id 三种形态。
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return "", "", ""
+    parts = value.split(":")
+    tail = parts[-1] if parts else value
+    lowered = value.lower()
+    if "groupmessage" in lowered or ":group:" in lowered:
+        return "group", tail, value
+    if "friendmessage" in lowered or "privatemessage" in lowered:
+        return "private", "", tail
+    return "conversation", "", value
+
+
 def _header_text(value) -> str:
     """HTTP 头只保证 ASCII；中文名称由客户端 URL 编码，这里还原。"""
     text = str(value or "")
@@ -2348,10 +2367,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return actor
 
     def _conversation_context(self):
-        """群聊/私聊的会话标识；插件没传就留空，聚合器会退化成按人分。"""
+        """群聊/私聊的会话标识：优先显式头，其次 AstrBot 自带的会话头。"""
+        group_id = _header_text(self.headers.get("X-Group-Id"))
+        session_id = _header_text(self.headers.get("X-Session-Id"))
+        raw = session_id or _header_text(self.headers.get("x-astrbot-conversation-id"))
+        kind, parsed_group, parsed_session = _split_conversation_id(raw)
         return {
-            "group_id": _header_text(self.headers.get("X-Group-Id")),
-            "session_id": _header_text(self.headers.get("X-Session-Id")),
+            "group_id": group_id or parsed_group,
+            "session_id": session_id or parsed_session,
+            "conversation_type": kind,
         }
 
     def _gateway_ids(self, body, messages, channel_id):
@@ -2665,6 +2689,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return {
             "channel_id": session["channel_id"],
             "channel_type": session["channel_type"],
+            "conversation_type": session.get("conversation_type", ""),
+            "group_id": session.get("group_id", ""),
+            "session_id": session.get("session_id", ""),
             "actor_id": session["actor_id"],
             "actor_name": session["actor_name"],
             "role_type": session["role_type"],
@@ -2716,11 +2743,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not store:
             return None
         try:
-            kwargs.setdefault("metadata", {
-                "channel_type": ctx.get("channel_type", ""),
-                "group_id": ctx.get("group_id", ""),
-                "session_id": ctx.get("session_id", ""),
-            })
+            metadata = dict(kwargs.get("metadata") or {})
+            metadata.setdefault("channel_type", ctx.get("conversation_type") or ctx.get("channel_type", ""))
+            metadata.setdefault("group_id", ctx.get("group_id", ""))
+            metadata.setdefault("session_id", ctx.get("session_id", ""))
+            kwargs["metadata"] = metadata
             return store.record_invocation(
                 ctx["trace_id"], layer, module_id,
                 channel_id=ctx["channel_id"], actor_id=ctx["actor_id"], **kwargs
@@ -2783,7 +2810,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "person_id": ctx.get("person_id") or ctx["actor_id"],
             "importance": 2.0 if ctx["actor_id"] == "master" else 1.0,
             "channel": ctx["channel_id"],
-            "channel_type": ctx.get("channel_type", ""),
+            "channel_type": ctx.get("conversation_type") or ctx.get("channel_type", ""),
             "group_id": ctx.get("group_id", ""),
             "session_id": ctx.get("session_id", ""),
             "detail_id": detail_id,

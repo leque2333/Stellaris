@@ -12,32 +12,85 @@ sys.path.insert(0, str(ROOT / "console"))
 sys.path.insert(0, str(ROOT))
 
 from agent_core.memory.aggregator import SegmentAggregator  # noqa: E402
-from agent_core.memory.episodic_stream import _recall_window  # noqa: E402
+from agent_core.memory.episodic_stream import _recall_window, _trim_to_budget  # noqa: E402
 from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
 
 
+def _fake_event(event_id, narrative):
+    return TimelineEvent(
+        event_id=event_id, timestamp=0, source_module="qq", actor_id="master",
+        actor_name="master", narrative=narrative,
+    )
+
+
+class ConversationHeaderTest(unittest.TestCase):
+    def setUp(self):
+        sys.path.insert(0, str(ROOT / "console"))
+
+    def test_group_message(self):
+        from server import _split_conversation_id
+
+        self.assertEqual(
+            _split_conversation_id("aiocqhttp:GroupMessage:784826874"),
+            ("group", "784826874", "aiocqhttp:GroupMessage:784826874"),
+        )
+
+    def test_friend_message(self):
+        from server import _split_conversation_id
+
+        kind, group, session = _split_conversation_id("aiocqhttp:FriendMessage:2986371638")
+        self.assertEqual((kind, group, session), ("private", "", "2986371638"))
+
+    def test_uuid_falls_back_to_conversation(self):
+        from server import _split_conversation_id
+
+        kind, group, session = _split_conversation_id("eee4b2e1-be5f-4914-bcbe-a0487e293b1d")
+        self.assertEqual(kind, "conversation")
+        self.assertEqual(session, "eee4b2e1-be5f-4914-bcbe-a0487e293b1d")
+
+    def test_empty(self):
+        from server import _split_conversation_id
+
+        self.assertEqual(_split_conversation_id(""), ("", "", ""))
+
+
 class RecallWindowTest(unittest.TestCase):
     def test_defaults(self):
-        for key in ("HUB_RECALL_DAYS", "HUB_RECALL_CANDIDATES", "HUB_RECALL_EXCLUDE"):
+        for key in ("HUB_RECALL_CHARS", "HUB_RECALL_DAYS", "HUB_RECALL_CANDIDATES",
+                    "HUB_RECALL_EXCLUDE", "HUB_RECALL_HALF_LIFE_HOURS"):
             os.environ.pop(key, None)
-        days, limit, excluded = _recall_window()
-        self.assertEqual(days, 180.0)
+        chars, days, limit, excluded = _recall_window()
+        self.assertEqual(chars, 300_000)
+        self.assertEqual(days, 0.0)  # 默认不按时间窗，按字数预算
         self.assertEqual(limit, 3000)
         self.assertIn("verify", excluded)
 
     def test_env_override(self):
+        os.environ["HUB_RECALL_CHARS"] = "1000"
         os.environ["HUB_RECALL_DAYS"] = "7"
         os.environ["HUB_RECALL_CANDIDATES"] = "50"
         os.environ["HUB_RECALL_EXCLUDE"] = "a,b"
         try:
-            days, limit, excluded = _recall_window()
+            chars, days, limit, excluded = _recall_window()
+            self.assertEqual(chars, 1000)
             self.assertEqual(days, 7.0)
             self.assertEqual(limit, 50)
             self.assertEqual(excluded, ("a", "b"))
         finally:
-            for key in ("HUB_RECALL_DAYS", "HUB_RECALL_CANDIDATES", "HUB_RECALL_EXCLUDE"):
+            for key in ("HUB_RECALL_CHARS", "HUB_RECALL_DAYS", "HUB_RECALL_CANDIDATES",
+                        "HUB_RECALL_EXCLUDE"):
                 os.environ.pop(key, None)
+
+    def test_trim_to_budget(self):
+        events = [
+            _fake_event("a", "x" * 100),
+            _fake_event("b", "y" * 100),
+            _fake_event("c", "z" * 100),
+        ]
+        self.assertEqual([e.event_id for e in _trim_to_budget(events, 250)], ["a", "b"])
+        self.assertEqual(len(_trim_to_budget(events, 0)), 3)
+        self.assertEqual(len(_trim_to_budget(events, 50)), 1)  # 至少留一条
 
 
 class CandidateFilterTest(unittest.TestCase):

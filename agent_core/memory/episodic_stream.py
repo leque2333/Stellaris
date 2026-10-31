@@ -42,7 +42,8 @@ def _allowed_actor_ids(actor_id, person_id, include_all_actors):
     return ["master", master_qq] if actor_id in ("master", master_qq) else [actor_id]
 
 
-RECALL_DEFAULT_DAYS = 180.0
+RECALL_DEFAULT_DAYS = 0.0          # 0 = 不按时间窗，改按字数预算
+RECALL_DEFAULT_CHARS = 300_000     # 候选池总字数上限（约 3500 条平均长度的记忆）
 RECALL_DEFAULT_LIMIT = 3000
 RECALL_DEFAULT_EXCLUDE = (
     "verify", "acceptance", "sec-live", "archcheck", "keycheck", "sig-probe", "kb_test",
@@ -50,7 +51,11 @@ RECALL_DEFAULT_EXCLUDE = (
 
 
 def _recall_window():
-    """回看窗口（天）、候选上限、排除来源；可用环境变量覆盖。"""
+    """候选池参数：字数预算、时间窗（可选）、条数上限、排除来源。"""
+    try:
+        chars = int(os.getenv("HUB_RECALL_CHARS", "") or RECALL_DEFAULT_CHARS)
+    except ValueError:
+        chars = RECALL_DEFAULT_CHARS
     try:
         days = float(os.getenv("HUB_RECALL_DAYS", "") or RECALL_DEFAULT_DAYS)
     except ValueError:
@@ -61,7 +66,22 @@ def _recall_window():
         limit = RECALL_DEFAULT_LIMIT
     raw = os.getenv("HUB_RECALL_EXCLUDE", "")
     excluded = tuple(item.strip() for item in raw.split(",") if item.strip()) if raw else RECALL_DEFAULT_EXCLUDE
-    return days, limit, excluded
+    return chars, days, limit, excluded
+
+
+def _trim_to_budget(events, budget: int):
+    """从新到旧累计字数，超过预算就停；保证候选池大小可预期。"""
+    if budget <= 0:
+        return events
+    kept = []
+    used = 0
+    for event in events:
+        length = len(getattr(event, "narrative", "") or "")
+        if kept and used + length > budget:
+            break
+        kept.append(event)
+        used += length
+    return kept
 
 
 RECALL_DEFAULT_HALF_LIFE = 168.0  # 7 天：旧记忆也够得着，不至于被 36h 衰减压死
@@ -287,12 +307,13 @@ class EpisodicStream:
         exclude_group: bool = False,
     ) -> List[RecallResult]:
         """三维拟人召回：Score = α·Similarity + β·Recency + γ·Importance"""
-        days, candidate_limit, excluded = _recall_window()
+        char_budget, days, candidate_limit, excluded = _recall_window()
         since_ts = time.time() - days * 86400 if days > 0 else None
         candidates = self._recall_candidates(
             person_id, actor_id, include_all_actors, channel_id, include_channel, exclude_group,
             since_ts=since_ts, limit=candidate_limit, exclude_sources=excluded,
         )
+        candidates = _trim_to_budget(candidates, char_budget)
         if not candidates:
             return []
         if half_life_hours is None:

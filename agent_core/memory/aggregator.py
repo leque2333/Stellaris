@@ -67,6 +67,11 @@ class SegmentAggregator:
         channel = inv.get("channel_id") or inv.get("module_id") or "unknown"
         meta = inv.get("metadata") or {}
         if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+        if not isinstance(meta, dict):
             meta = {}
         group_id = str(meta.get("group_id") or "").strip()
         session_id = str(meta.get("session_id") or "").strip()
