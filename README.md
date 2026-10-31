@@ -63,6 +63,7 @@ curl http://127.0.0.1:18895/v1/chat/completions \
 - [工具货架](docs/TOOL_SHELVES.md)
 - [档案画像](docs/ARCHIVE_PROFILE.md)
 - [AstrBot 接入](docs/ASTRBOT_SETUP.md)
+- [安全总览](docs/SECURITY.md)（信任边界 / 六层防护 / 已知短板）
 - [API 安全](docs/API_SECURITY.md)（本机访问限制 / 请求签名）
 - [后续开发规范](docs/DEV_RULES.md)（改代码前先看这个）
 

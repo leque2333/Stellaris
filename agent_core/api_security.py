@@ -157,13 +157,19 @@ def _in_networks(ip: str, networks) -> bool:
 
 
 def client_ip(peer_ip: str, forwarded_for: str, config: Optional[Dict[str, Any]] = None) -> str:
-    """真实客户端 IP：只有可信反代（默认本机 nginx）才认 X-Forwarded-For。"""
+    """真实客户端 IP：从右往左跳过可信反代，取第一个不可信的地址。
+
+    nginx 用 $proxy_add_x_forwarded_for 会在**末尾**追加真实来源，
+    所以最左边那一节可能是客户端自己伪造的，不能直接用。
+    """
     cfg = config or load_config()
     peer = str(peer_ip or "").strip()
-    if peer and _in_networks(peer, cfg["trusted_proxies"]):
-        first = str(forwarded_for or "").split(",")[0].strip()
-        if first:
-            return first
+    if not peer or not _in_networks(peer, cfg["trusted_proxies"]):
+        return peer
+    hops = [item.strip() for item in str(forwarded_for or "").split(",") if item.strip()]
+    for hop in reversed(hops + [peer]):
+        if hop and not _in_networks(hop, cfg["trusted_proxies"]):
+            return hop
     return peer
 
 

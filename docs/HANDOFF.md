@@ -1256,6 +1256,7 @@ input_price / cache_price / output_price / currency
 | `agent_core/api_security.py` | 本机访问限制 + 请求签名（HMAC/防重放） |
 | `scripts/setup_security.py` | 初始化安全配置（生成密钥、开开关、--lan 放行内网） |
 | `agent_core/audit_log.py` | 安全审计日志（登录/配置变更/签名拒绝）→ logs/audit.log |
+| `docs/SECURITY.md` | 安全总览：信任边界、六层防护、已知短板 |
 | `docs/API_SECURITY.md` | 两个安全开关的用法与客户端签名示例 |
 | `docs/DEV_RULES.md` | 后续开发规范：四条硬指标、改动流程、踩坑清单 |
 | `scripts/merge_legacy_identities.py` | 合并旧 QQ 号画像到档案 ID |

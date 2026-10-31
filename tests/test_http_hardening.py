@@ -1,0 +1,60 @@
+# -*- coding: utf-8 -*-
+"""HTTP 层加固：CORS 只认同源、会话 Cookie 带 HttpOnly/Secure。"""
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "console"))
+sys.path.insert(0, str(ROOT))
+
+
+def _handler(headers):
+    from server import ConsoleHandler  # noqa: PLC0415
+
+    handler = ConsoleHandler.__new__(ConsoleHandler)
+    handler.headers = headers
+    return handler
+
+
+class CorsTest(unittest.TestCase):
+    def test_same_origin_allowed(self):
+        handler = _handler({
+            "Origin": "https://leque233.xyz:49257",
+            "Host": "leque233.xyz:49257",
+        })
+        self.assertEqual(handler._allowed_origin(), "https://leque233.xyz:49257")
+
+    def test_cross_origin_blocked(self):
+        handler = _handler({"Origin": "https://evil.example", "Host": "leque233.xyz:49257"})
+        self.assertEqual(handler._allowed_origin(), "")
+
+    def test_no_origin_header(self):
+        handler = _handler({"Host": "leque233.xyz:49257"})
+        self.assertEqual(handler._allowed_origin(), "")
+
+    def test_origin_without_host(self):
+        handler = _handler({"Origin": "https://leque233.xyz:49257"})
+        self.assertEqual(handler._allowed_origin(), "")
+
+
+class CookieTest(unittest.TestCase):
+    def test_httponly_always(self):
+        handler = _handler({})
+        cookie = handler._session_cookie("tok123", 3600)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Lax", cookie)
+        self.assertNotIn("Secure", cookie)
+
+    def test_secure_behind_tls(self):
+        handler = _handler({"X-Forwarded-Proto": "https"})
+        self.assertIn("Secure", handler._session_cookie("tok123", 3600))
+
+    def test_plain_http_no_secure(self):
+        handler = _handler({"X-Forwarded-Proto": "http"})
+        self.assertNotIn("Secure", handler._session_cookie("tok123", 3600))
+
+
+if __name__ == "__main__":
+    unittest.main()

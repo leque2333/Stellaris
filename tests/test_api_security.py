@@ -101,8 +101,18 @@ class LocalOnlyTest(unittest.TestCase):
         self.assertFalse(api_security.ip_allowed("8.8.8.8"))
 
     def test_forwarded_for_used_only_from_trusted_proxy(self):
-        self.assertEqual(api_security.client_ip("127.0.0.1", "8.8.8.8, 10.0.0.1"), "8.8.8.8")
+        # nginx 在末尾追加真实来源，所以取最右边那个不可信地址
+        self.assertEqual(api_security.client_ip("127.0.0.1", "8.8.8.8, 10.0.0.1"), "10.0.0.1")
         self.assertEqual(api_security.client_ip("192.168.1.9", "8.8.8.8"), "192.168.1.9")
+
+    def test_spoofed_forwarded_for_is_ignored(self):
+        # 客户端自己塞一个 8.8.8.8 在左边，真实来源由 nginx 追加在右边
+        self.assertEqual(
+            api_security.client_ip("127.0.0.1", "8.8.8.8, 203.0.113.9"), "203.0.113.9"
+        )
+
+    def test_private_forwarded_for_still_used(self):
+        self.assertEqual(api_security.client_ip("127.0.0.1", "172.17.0.2"), "172.17.0.2")
 
     def test_custom_cidr(self):
         self.cfg.write({"local_only": True, "allow_cidrs": ["192.168.3.0/24"]})

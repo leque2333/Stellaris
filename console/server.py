@@ -369,6 +369,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _is_authenticated(self):
         return auth_mgr.validate_session(self._get_token()) is not None
 
+    def _allowed_origin(self):
+        """只有 Origin 与本次请求同源才回 CORS 头；跨站请求一律不给。"""
+        origin = (self.headers.get('Origin') or '').strip()
+        if not origin:
+            return ''
+        host = (self.headers.get('Host') or '').strip()
+        try:
+            return origin if urlparse(origin).netloc == host else ''
+        except ValueError:
+            return ''
+
+    def _session_cookie(self, token, max_age):
+        """会话 Cookie：HttpOnly 防脚本读取，HTTPS 下再加 Secure。"""
+        parts = [f'anan_session={token}', 'Path=/', 'SameSite=Lax',
+                 f'Max-Age={max_age}', 'HttpOnly']
+        if (self.headers.get('X-Forwarded-Proto') or '').lower() == 'https':
+            parts.append('Secure')
+        return '; '.join(parts)
+
     def _send_json(self, data, status=200, extra_headers=None):
         if int(status or 200) >= 500:
             try:
@@ -378,11 +397,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 _msgs.error(f"{self.path.split('?')[0]} -> {status} {detail or ''}".strip())
             except Exception:
                 pass
-        origin = self.headers.get('Origin', '*')
+        origin = self._allowed_origin()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
-        self.send_header('Access-Control-Allow-Credentials', 'true')
+        if origin:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Token, X-Channel, X-Channel-Type, X-User-Id, X-User-Name')
         for key, value in (extra_headers or {}).items():
@@ -393,10 +413,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         if self._access_blocked():
             return
-        origin = self.headers.get('Origin', '*')
+        origin = self._allowed_origin()
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
-        self.send_header('Access-Control-Allow-Credentials', 'true')
+        if origin:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Token, X-Channel, X-Channel-Type, X-User-Id, X-User-Name')
         self.end_headers()
@@ -1394,7 +1415,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         audit_log.record("login_ok", dedupe=False, ip=ip, username=username)
         token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
         max_age = 604800 if remember else 86400
-        cookie = f'anan_session={token}; Path=/; SameSite=Lax; Max-Age={max_age}'
+        cookie = self._session_cookie(token, max_age)
         return self._send_json_with_cookie(
             {"success": True, "token": token, "username": username}, cookie
         )
@@ -1403,7 +1424,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         auth_mgr.revoke_session(self._get_token())
         return self._send_json_with_cookie(
             {"success": True},
-            'anan_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+            'anan_session=; Path=/; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
         )
 
     def _post_change_password(self, body):
@@ -1414,13 +1435,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _send_json_with_cookie(self, payload, cookie):
         """登录态要顺手写 Set-Cookie，_send_json 不够用。"""
-        origin = self.headers.get('Origin', '*')
+        origin = self._allowed_origin()
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Set-Cookie', cookie)
-        self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
-        self.send_header('Access-Control-Allow-Credentials', 'true')
+        if origin:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
         self.end_headers()
         self.wfile.write(data)
 
