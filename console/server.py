@@ -2551,8 +2551,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                                  reserved: int = 0):
         """时间轴整段注入：按记忆曲线压缩，不再切 8 条。"""
         from agent_core.memory import timeline_curve
+        from agent_core.memory.episodic_stream import _drop_empty_summaries
 
-        events = self._timeline_events(timeline_hub, actor_id, person_id, channel_id, channel_type)
+        events = _drop_empty_summaries(
+            self._timeline_events(timeline_hub, actor_id, person_id, channel_id, channel_type)
+        )
         entries = timeline_curve.build_curve(
             events, budget_chars=_timeline_budget_with_reserved(reserved), line_overhead=22,
         )
@@ -3376,12 +3379,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not message:
             return message
         messages = list(active_msgs)
-        used = 0
-        for _ in range(3):
+        used, last_request = 0, None
+        for _ in range(10):  # 只是防死循环，不是次数限制
             request = _parse_memory_directive(message.get("content") or "")
-            if not request or used >= RECALL_MAX_CHARS:
+            if not request or request == last_request:
                 break
             found = self._run_memory_lookup(ctx, request)
+            if used + len(found) > RECALL_MAX_CHARS:
+                break  # 这一段会撑爆回忆上限，整段丢弃
+            last_request = request
             used += len(found)
             rebuilt = self._rebuild_prompt_with_recall(ctx, found)
             if rebuilt:
