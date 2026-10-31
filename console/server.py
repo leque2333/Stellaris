@@ -2955,7 +2955,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         _recall_writeback(store, ctx, kept, mode)
         lines = [f"\n\n【记忆库·按时间检索】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
-        return self._compress_recall_text(ctx, "\n".join(lines))
+        return self._compress_recall_text(ctx, "\n".join(lines), terms)
 
     def _gateway_ctx_identity(self, session):
         """ctx 的身份部分：谁在说话、属于哪个档案。"""
@@ -3344,18 +3344,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     RECALL_SOFT_LIMIT = 3_000
 
-    def _compress_recall_text(self, ctx, text):
-        """检索结果太大：交执行 AI 压成要点；失败就截断兜底。"""
+    def _compress_recall_text(self, ctx, text, keywords=None):
+        """超限时只压「与关键词无关」的部分，相关的原样留着。"""
         if len(text) <= self.RECALL_SOFT_LIMIT:
             return text
+        words = [str(item) for item in (keywords or []) if str(item).strip()]
+        hint = ("、".join(words)) if words else "（未提供关键词）"
         manager = ctx.get("compute_mgr")
         try:
             reply, _, _ = manager.chat_completion(
                 "logic_slot",
                 [
                     {"role": "system", "content":
-                     "把下面的记忆检索结果压成要点，保留时间、人物、关键事件与结论，"
-                     "不要编造、不要加入推测，控制在 300 字以内。"},
+                     f"用户在查：{hint}。下面是从记忆库检索到的记录。"
+                     "凡是与这些关键词相关的条目，**原样保留时间与内容，禁止改写**；"
+                     "只把无关的条目压成一句话。不要编造、不要推测，总长控制在 300 字以内。"},
                     {"role": "user", "content": text},
                 ],
                 current_port=PORT, timeout=60,
@@ -3416,7 +3419,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if facts:
             lines.append("【档案事实·相关】")
             lines.extend(f"- {fact}" for fact in facts)
-        return self._compress_recall_text(ctx, "\n".join(lines))
+        return self._compress_recall_text(ctx, "\n".join(lines), terms)
 
     def _related_facts(self, ctx, terms):
         """在档案事实里找和检索词有交集的，最多 3 条。"""

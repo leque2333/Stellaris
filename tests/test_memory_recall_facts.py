@@ -20,6 +20,7 @@ class RecallCompressTest(unittest.TestCase):
 
         def chat_completion(self, slot, messages, **kwargs):
             self.calls += 1
+            self.last_messages = messages
             return self.reply, 10, 5
 
     def _handler(self, mgr):
@@ -30,6 +31,15 @@ class RecallCompressTest(unittest.TestCase):
         handler, ctx = self._handler(self._Mgr("不该被调用"))
         self.assertEqual(handler._compress_recall_text(ctx, "短文本"), "短文本")
         self.assertEqual(ctx["compute_mgr"].calls, 0)
+
+    def test_keywords_reach_the_prompt(self):
+        mgr = self._Mgr("要点")
+        handler, ctx = self._handler(mgr)
+        handler._compress_recall_text(ctx, "字" * 5000, ["小鱼干", "B站"])
+        system = mgr.last_messages[0]["content"]
+        self.assertIn("小鱼干", system)
+        self.assertIn("B站", system)
+        self.assertIn("原样保留", system)
 
     def test_large_text_uses_execution_ai(self):
         handler, ctx = self._handler(self._Mgr("精简后的要点"))
