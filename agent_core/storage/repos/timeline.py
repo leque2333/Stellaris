@@ -255,6 +255,7 @@ class TimelineOps:
         start_ts: Optional[float] = None,
         end_ts: Optional[float] = None,
         person_ids: Optional[Iterable[str]] = None,
+        sources: Optional[Iterable[str]] = None,
         limit: int = 200,
         match_all: bool = True,
     ) -> List[TimelineEvent]:
@@ -275,6 +276,11 @@ class TimelineOps:
             ids = [str(item) for item in person_ids]
             clauses.append(f"person_id IN ({','.join('?' for _ in ids)})")
             params.extend(ids)
+        if sources:
+            picked = [str(item) for item in sources if str(item)]
+            if picked:
+                clauses.append(f"source_module IN ({','.join('?' for _ in picked)})")
+                params.extend(picked)
         params.append(int(limit))
         sql = (
             "SELECT * FROM agent_timeline WHERE " + " AND ".join(clauses)

@@ -78,6 +78,50 @@ def _split_conversation_id(raw):
 _IMAGE_MARK = "[图片]"
 
 
+MEMORY_TAG = "[[记忆检索:"
+_MEMORY_TOOL_BLOCK = (
+    "\n\n【记忆检索】如果你需要更早的记忆（时间轴只覆盖最近十几小时），"
+    "可以在回复开头单独写一行：\n"
+    "[[记忆检索: 关键词1 关键词2 | 起始日期 可选 | 结束日期 可选 | 工具名 可选]]\n"
+    "写完这一行后，继续正常回答用户（不要只写这一行）；中枢会查记忆库，"
+    "把结果补给你再让你重答一次。这一行不会发给用户。"
+)
+
+
+def _memory_tool_prompt() -> str:
+    import os
+
+    return "" if os.getenv("HUB_MEMORY_TOOL", "1") == "0" else _MEMORY_TOOL_BLOCK
+
+
+def _parse_memory_directive(text) -> dict:
+    """解析 [[记忆检索: 关键词 | 起 | 止 | 工具]]；没有就返回空。"""
+    import re
+
+    match = re.search(r"\[\[记忆检索[:：]([^\]]*)\]\]", str(text or ""))
+    if not match:
+        return {}
+    parts = [item.strip() for item in match.group(1).split("|")]
+    result = {"keywords": parts[0] if parts else ""}
+    if len(parts) > 1 and parts[1]:
+        result["start"] = parts[1]
+    if len(parts) > 2 and parts[2]:
+        result["end"] = parts[2]
+    if len(parts) > 3 and parts[3]:
+        result["source"] = parts[3]
+    return result
+
+
+def _strip_memory_directive(message):
+    """把指令行从最终回复里去掉，用户看不到。"""
+    import re
+
+    if not message:
+        return message
+    content = re.sub(r"^\s*\[\[记忆检索[:：][^\]]*\]\]\s*\n?", "", str(message.get("content") or ""))
+    return {**message, "content": content}
+
+
 def _summarize_parts(parts) -> str:
     """多模态内容 → 纯文本 + 图片短语（图片数量记下来，二进制丢掉）。"""
     texts = []
@@ -2798,7 +2842,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _gateway_ctx_model(self, memory, compute):
         """ctx 的模型 / 提示词部分。"""
         return {
-            "sys_prompt": memory["sys_prompt"],
+            "sys_prompt": memory["sys_prompt"] + _memory_tool_prompt(),
             "compute_mgr": compute["compute_mgr"],
             "is_logic_task": compute["is_logic_task"],
             "actual_model": compute["actual_model"],
@@ -3135,9 +3179,58 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             message, finish, usage, used_model = self._persona_request(
                 ctx, active_msgs, dict(ctx.get("extra") or {})
             )
+        message = self._complete_with_memory_lookup(ctx, active_msgs, message, usage)
         if used_model:
             ctx["actual_model"] = used_model
         return {"message": message, "finish_reason": finish, "usage": usage}
+
+    def _complete_with_memory_lookup(self, ctx, active_msgs, message, usage):
+        """模型要求查旧记忆时：查一次、把结果追加进消息、再让它答。"""
+        if not message:
+            return message
+        request = _parse_memory_directive(message.get("content") or "")
+        if not request:
+            return message
+        found = self._run_memory_lookup(ctx, request)
+        extra = [{"role": "user", "content": found + "\n\n请根据以上检索结果回答我上一个问题。"}]
+        retry_msgs = active_msgs + [message] + extra
+        again, _, usage2, _ = self._persona_request(ctx, retry_msgs, dict(ctx.get("extra") or {}))
+        if again and (again.get("content") or "").strip():
+            return _strip_memory_directive(again)
+        stripped = _strip_memory_directive(message)
+        # 复答为空：首轮如果还有正文就用它，否则交给兜底话术
+        return stripped if (stripped.get("content") or "").strip() else None
+
+    def _run_memory_lookup(self, ctx, request):
+        """执行检索并把结果压成一段提示；失败就告诉它没查到。"""
+        from agent_core.memory import deep_recall
+
+        store = self._memory_store()
+        if store is None:
+            return "【记忆库】不可用。"
+        common = {
+            "start_ts": deep_recall.parse_time_bound(request.get("start")),
+            "end_ts": deep_recall.parse_time_bound(request.get("end")),
+            "person_ids": [ctx["person_id"]] if ctx.get("person_id") else None,
+            "sources": [request["source"]] if request.get("source") else None,
+            "limit": 500,
+        }
+        terms = deep_recall.parse_terms(request.get("keywords") or "")
+        rows = store.search_narratives(terms, **common) if terms else []
+        if not rows and terms and len(terms) > 1:
+            rows = store.search_narratives(terms, match_all=False, **common)
+        hits = [
+            deep_recall.Hit(str(getattr(row, "event_id", "")), str(getattr(row, "time_str", "")),
+                            float(getattr(row, "timestamp", 0) or 0),
+                            str(getattr(row, "narrative", "") or ""))
+            for row in rows
+        ]
+        kept, mode = deep_recall.trim_hits(hits, deep_recall.DEFAULT_BUDGET // 2)
+        if not kept:
+            return "【记忆库】没有匹配的旧记录。"
+        lines = [f"【记忆库检索结果】mode={mode}，共 {len(kept)} 条："]
+        lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
+        return "\n".join(lines)
 
     def _gate_empty_reply(self, message):
         """既没正文也没 tool_calls：上游回了空，值得重试。"""
@@ -3153,6 +3246,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if fallback:
             message = {"role": "assistant", "content": self._gateway_fallback(ctx)}
         out_message = self._out_message(message)
+        if not (out_message.get("content") or "").strip() and not out_message.get("tool_calls"):
+            out_message = {"role": "assistant", "content": self._gateway_fallback(ctx)}
+            fallback = True
         usage = reply.get("usage") or {}
         p_in, p_out = self._estimate_tokens(ctx, out_message["content"], usage)
         return {
