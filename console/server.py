@@ -2303,57 +2303,30 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return result
 
     def _collect_recall_memories(self, timeline_hub, user_query, actor_id, person_id, channel_id, channel_type):
-        """向量召回 + FTS5 精确子串补充。"""
-        from agent_core.memory.embedding import embed_text_list
+        """时间轴整段注入：按记忆曲线压缩，不再切 8 条。"""
+        from agent_core.memory import timeline_curve
 
-        group_chat = channel_type == "group" or "group" in channel_id.lower()
-        is_master = str(actor_id) in ("master", "master")
-        recalls = timeline_hub.recall_timeline(
-            actor_id=actor_id, query=user_query, person_id=person_id,
-            query_embedding=embed_text_list(user_query),
-            limit=(8 if (group_chat or is_master) else 2),
-            include_all_actors=False, channel_id=channel_id,
-            include_channel=(group_chat and not is_master),
-            exclude_group=(not group_chat and not is_master),
+        events = self._timeline_events(timeline_hub, actor_id, person_id, channel_id, channel_type)
+        entries = timeline_curve.build_curve(
+            events, budget_chars=timeline_curve.budget_chars(), line_overhead=22,
         )
-        lines = self._format_recall_lines(timeline_hub, recalls)
-        lines.extend(self._recall_exact_hits(timeline_hub, user_query, person_id, recalls))
-        return lines
-
-    def _format_recall_lines(self, timeline_hub, recalls):
-        """前两条带上原话，后面只给摘要。"""
+        by_id = {getattr(event, "event_id", ""): event for event in events}
         lines = []
-        for index, recall in enumerate(recalls):
-            line = f"[{recall.event.time_str}] {recall.event.narrative}"
-            if index < 2 and getattr(recall.event, "detail_id", ""):
-                original = self._read_recall_detail(timeline_hub, recall.event.detail_id)
-                if original:
-                    line += f"\n原话：{str(original)[:280]}"
-            lines.append(line)
+        for item in entries:
+            event = by_id.get(item.event_id)
+            when = getattr(event, "time_str", "") if event else ""
+            lines.append(f"[{when}] {item.text}")
         return lines
 
-    def _read_recall_detail(self, timeline_hub, detail_id):
-        try:
-            row = timeline_hub.store.get_detail(detail_id)
-            data = json.loads(row["content"]) if row and row.get("content") else {}
-            message = data.get("message") or {}
-            return message.get("content") or data.get("content") or ""
-        except Exception:
-            return ""
-
-    def _recall_exact_hits(self, timeline_hub, user_query, person_id, recalls):
-        """FTS5 兜底：人名、标题、暗号这类精确词，向量召回容易漏。"""
-        try:
-            from agent_core.memory.facts import FactStore
-
-            seen_ids = {item.event.event_id for item in recalls}
-            rows = FactStore(timeline_hub.store).search_episodes(user_query, person_id=person_id, limit=4)
-            return [
-                f"[{row.get('time_str') or ''}] {row.get('narrative') or ''}（精确命中）"
-                for row in rows if row["event_id"] not in seen_ids
-            ]
-        except Exception:
-            return []
+    def _timeline_events(self, timeline_hub, actor_id, person_id, channel_id, channel_type):
+        """取这个人的时间轴事件（按人收敛，群聊不串到别人）。"""
+        group_chat = channel_type == "group" or "group" in channel_id.lower()
+        return timeline_hub.store.list_candidates(
+            person_ids=[person_id] if person_id else None,
+            actor_ids=[actor_id] if actor_id else None,
+            exclude_group=(not group_chat and str(actor_id) != "master"),
+            limit=5000,
+        )
 
     def _gateway_context(self, body):
         request = self._parse_gateway_request(body)

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
 DEFAULT_BUDGET_CHARS = 20_000
+ENV_BUDGET = "HUB_TIMELINE_BUDGET"
 DEFAULT_TIER_SHARES = (0.30, 0.40, 0.30)
 DEFAULT_LEVELS = (1.00, 0.85, 0.60)
 _CLAUSE_ENDS = "。！？；\n"
@@ -84,11 +85,23 @@ def compress_narrative(text: str, ratio: float) -> str:
     return _cut_at_boundary(text, limit)
 
 
+def budget_chars() -> int:
+    """时间轴注入预算（字）；HUB_TIMELINE_BUDGET 覆盖，默认 8000。"""
+    import os
+
+    try:
+        value = int(os.getenv(ENV_BUDGET, "") or 8000)
+    except ValueError:
+        value = 8000
+    return max(500, min(value, 200_000))
+
+
 def build_curve(
     events: Iterable,
     budget_chars: int = DEFAULT_BUDGET_CHARS,
     tier_shares: Sequence[float] = DEFAULT_TIER_SHARES,
     levels: Sequence[float] = DEFAULT_LEVELS,
+    line_overhead: int = 0,
 ) -> List[CurveEntry]:
     """按新→旧铺满预算，并按字数份额分层压缩。"""
     ordered = sorted(events, key=lambda item: float(getattr(item, "timestamp", 0) or 0),
@@ -98,7 +111,8 @@ def build_curve(
     used = 0
     for event in ordered:
         text = str(getattr(event, "narrative", "") or "")
-        if not text or used + len(text) > budget_chars:
+        cost = len(text) + max(0, line_overhead)
+        if not text or used + cost > budget_chars:
             break
         tier = _tier_for(used, boundaries)
         kept = compress_narrative(text, levels[tier])
@@ -109,7 +123,7 @@ def build_curve(
             original_chars=len(text),
             kept_chars=len(kept),
         ))
-        used += len(text)
+        used += cost
     return entries
 
 

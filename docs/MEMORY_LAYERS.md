@@ -376,7 +376,19 @@ curl.exe "http://127.0.0.1:18895/api/memory/timeline_curve?budget=20000" -H "X-S
 ```
 
 实现：`agent_core/memory/timeline_curve.py`（`build_curve` / `compress_narrative` / `summarize`）。
-当前尚未接入 prompt 组装——先用接口看效果、定预算，再替换现在的「召回 8 条」。
+
+**已接入 prompt（2026-10-31）**：`_collect_recall_memories` 改为整段曲线注入，
+不再切 8 条；预算 `HUB_TIMELINE_BUDGET` 默认 8,000 字（含 `[时间] ` 前缀开销）。
+
+实测（测试端，8,000 预算）：
+
+```text
+时间轴块  8,027 字 / 88 条 / 覆盖约 16 小时
+prompt    3.7k（基础） → 8.7k tokens
+```
+
+召回打分那段（`_format_recall_lines` / `_recall_exact_hits`）随之删除，
+需要更早的记忆时再上「换页」——那是下一步的混合模式。
 
 ### 5.3 降级机制（草案）
 
