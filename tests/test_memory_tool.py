@@ -51,6 +51,27 @@ class StripTest(unittest.TestCase):
         self.assertIsNone(server._strip_memory_directive(None))
 
 
+class StreamHeadTest(unittest.TestCase):
+    def test_clear_for_normal_text(self):
+        self.assertEqual(server._stream_head_state("在呢，今天想聊什么"), "clear")
+
+    def test_wait_for_leading_space(self):
+        self.assertEqual(server._stream_head_state("  "), "wait")
+
+    def test_directive_when_closed(self):
+        self.assertEqual(server._stream_head_state("[[记忆检索: 小鱼干]]"), "directive")
+
+    def test_wait_before_closing(self):
+        self.assertEqual(server._stream_head_state("[[记忆检索: 小鱼"), "wait")
+
+    def test_delta_text_from_chunk(self):
+        chunk = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+        self.assertEqual(server._stream_delta_text(chunk), "hi")
+
+    def test_delta_text_ignores_done(self):
+        self.assertEqual(server._stream_delta_text(b"data: [DONE]\n\n"), "")
+
+
 class PromptMountTest(unittest.TestCase):
     def test_enabled_by_default(self):
         os.environ.pop("HUB_MEMORY_TOOL", None)

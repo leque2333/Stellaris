@@ -153,6 +153,41 @@ def _recall_writeback(store, session, kept, mode) -> str:
     return text
 
 
+def _stream_delta_text(chunk) -> str:
+    """从一条 SSE chunk 里取增量文本；取不到就返回空串。"""
+    import json
+
+    raw = chunk.decode("utf-8", "ignore") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+    text = ""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        for choice in data.get("choices") or []:
+            delta = choice.get("delta") or {}
+            text += str(delta.get("content") or "")
+    return text
+
+
+def _stream_head_state(text: str) -> str:
+    """缓冲决策：wait 继续攒、clear 可以放了、directive 该查库了。"""
+    head = str(text or "").lstrip()
+    if head.startswith("[[记忆检索"):
+        return "directive" if "]]" in head else "wait"
+    if head.startswith("[") and len(head) < 8:
+        return "wait"
+    if len(head) < 8 and not head.strip():
+        return "wait"
+    return "clear"
+
+
 def _memory_tool_prompt(stream: bool = False) -> str:
     """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
     import os
@@ -3581,19 +3616,51 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return pump
 
     def _stream_forward(self, ctx, accumulator):
-        """把上游 chunk 原样写给客户端，边写边喂累加器。"""
+        """转发上游 SSE：开头缓冲一小段，模型要回忆就先查库再重推。"""
         active_msgs = [{"role": "system", "content": ctx["sys_prompt"]}] + [
             m for m in ctx["messages"] if m.get("role") != "system"
         ]
-        wrote = False
-        for chunk in ctx["compute_mgr"].stream_chat_completion(
+        stream = ctx["compute_mgr"].stream_chat_completion(
             "persona_slot", active_msgs, current_port=PORT, timeout=180, extra=ctx["extra"]
-        ):
+        )
+        return self._stream_guarded(ctx, stream, active_msgs, accumulator)
+
+    def _stream_guarded(self, ctx, stream, active_msgs, accumulator):
+        """缓冲开头：没指令就原样吐出去，有指令就换一轮。"""
+        pending, head, decided, wrote = [], "", False, False
+        for chunk in stream:
+            pending.append(chunk)
+            head += _stream_delta_text(chunk)
+            if not decided:
+                state = _stream_head_state(head)
+                if state == "wait":
+                    continue
+                if state == "directive":
+                    return self._stream_recall(ctx, active_msgs, head, accumulator)
+                decided = True
+            for item in pending:
+                self._stream_write(item, accumulator)
+            pending, wrote = [], True
+        for item in pending:
+            self._stream_write(item, accumulator)
             wrote = True
-            self.wfile.write(chunk)
-            self.wfile.flush()
-            accumulator.feed(chunk)
         return wrote
+
+    def _stream_recall(self, ctx, active_msgs, head, accumulator):
+        """首段是指令：查库、让出预算重拼、换一轮流式。"""
+        request = _parse_memory_directive(head)
+        found = self._run_memory_lookup(ctx, request)
+        messages = self._rebuild_prompt_with_recall(ctx, found) or active_msgs
+        messages = messages + [{"role": "user", "content": found + "\n\n请根据以上检索结果回答我上一个问题。"}]
+        stream = ctx["compute_mgr"].stream_chat_completion(
+            "persona_slot", messages, current_port=PORT, timeout=180, extra=ctx["extra"]
+        )
+        return self._stream_guarded(ctx, stream, messages, accumulator) or True
+
+    def _stream_write(self, chunk, accumulator):
+        self.wfile.write(chunk)
+        self.wfile.flush()
+        accumulator.feed(chunk)
 
     def _stream_fallback_chunk(self, ctx, accumulator):
         """上游一个字都没吐：推一条兜底话术，别让前端空转。"""
