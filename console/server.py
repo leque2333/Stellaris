@@ -147,6 +147,46 @@ def _ledger_tool_calls(accumulator):
     """流式只给了 tool_calls 增量，这里还原成账本要的形状。"""
     return [{"function": {"name": name}} for name in accumulator.tool_call_names]
 
+def _bearer_token(headers) -> str:
+    """Authorization: Bearer xxx 或 X-Hub-Key，取一个。"""
+    token = headers.get('Authorization', '')
+    if token.lower().startswith('bearer '):
+        return token[7:].strip()
+    return headers.get('X-Hub-Key') or ''
+
+
+def _json_text(value) -> str:
+    """非字符串的 raw 先转 JSON 文本，转不了再 str()。"""
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def _record_compression(stats) -> None:
+    """压缩指标落一份；统计失败不影响返回。"""
+    try:
+        from agent_core.tool_shelves.metrics import metrics as shelf_metrics
+
+        shelf_metrics.record_compression([stats])
+    except Exception:
+        pass
+
+
+def _split_setting_line(line):
+    """一行「标签：内容」→ (标签, 内容)；空白行返回 None。"""
+    text = str(line or '').strip()
+    if not text:
+        return None
+    for separator in ('：', ':'):
+        if separator in text:
+            head, tail = text.split(separator, 1)
+            if head.strip() and len(head.strip()) <= 20:
+                return head.strip(), tail.strip()
+            break
+    return '设定', text
+
+
 def _asset_version() -> int:
     """静态资源版本号：取 static/js、static/css 与 index.html 的最新 mtime。"""
     latest = 0
@@ -915,81 +955,79 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
 
     def _handle_tool_clean(self, body):
-        """P4 薄壳清洗接口：给外部薄壳 MCP 服务回灌清洗后的工具结果。
-
-        入参：tool / args / raw / user_query
-        出参：text / truncated / stats
-        鉴权：带客户端 Key 就校验；没带 Key 时沿用"clients.json 不存在则不校验"的旧行为。
-        """
-        if not isinstance(body, dict):
-            return self._send_json({'ok': False, 'error': 'body 必须是 JSON 对象'}, status=400)
+        """P4 薄壳清洗接口：外部薄壳把工具生肉交回来，这里压一遍再回灌。"""
         tool = str(body.get('tool') or '').strip()
+        raw = body.get('raw')
         if not tool:
             return self._send_json({'ok': False, 'error': 'tool 必填'}, status=400)
-        raw = body.get('raw')
         if raw is None:
             return self._send_json({'ok': False, 'error': 'raw 必填'}, status=400)
-        if not isinstance(raw, str):
-            try:
-                raw = json.dumps(raw, ensure_ascii=False)
-            except Exception:
-                raw = str(raw)
+        raw = raw if isinstance(raw, str) else _json_text(raw)
+        if self._clean_auth_denied():
+            return
+        config = self._clean_config_for(tool)
+        if config is None:
+            return self._clean_passthrough(tool, raw)
+        return self._clean_with_model(tool, raw, body, config)
 
-        # 鉴权：有 Key 校验 Key；无 Key 且客户端注册表未启用校验时放行
-        token = self.headers.get('Authorization', '')
-        token = token[7:].strip() if token.lower().startswith('bearer ') else (
-            self.headers.get('X-Hub-Key') or ''
-        )
-        if token:
-            auth = client_registry.resolve(token)
-            if auth.error:
-                return self._send_json({'ok': False, 'error': auth.error}, status=401)
-        elif client_registry.require_key:
-            return self._send_json({'ok': False, 'error': 'missing_key'}, status=401)
+    def _clean_auth_denied(self):
+        """带 Key 就校验 Key；没带 Key 时按 clients.json 的 require_key 决定。"""
+        token = _bearer_token(self.headers)
+        if not token:
+            if not client_registry.require_key:
+                return False
+            self._send_json({'ok': False, 'error': 'missing_key'}, status=401)
+            return True
+        auth = client_registry.resolve(token)
+        if not auth.error:
+            return False
+        self._send_json({'ok': False, 'error': auth.error}, status=401)
+        return True
 
+    def _clean_config_for(self, tool):
+        """压缩没开、或这个工具在 skip 名单里 → 不压。"""
         if tool_gate is None:
-            return self._send_json({'ok': True, 'text': raw, 'truncated': False,
-                                    'stats': {'tool': tool, 'passthrough': True}})
+            return None
         try:
-            comp_cfg = tool_gate.cfg.compression()
-            if not comp_cfg.get('enabled') or tool in (comp_cfg.get('skip_tools') or []):
-                return self._send_json({'ok': True, 'text': raw, 'truncated': False,
-                                        'stats': {'tool': tool, 'passthrough': True}})
+            config = tool_gate.cfg.compression()
+        except Exception:
+            return None
+        if not config.get('enabled') or tool in (config.get('skip_tools') or []):
+            return None
+        return config
 
-            from agent_core.tool_shelves.classifier import complete_once
-            from agent_core.tool_shelves.cleaner import compress_tool_result
+    def _clean_passthrough(self, tool, raw):
+        """不压就原文回去，并标明 passthrough。"""
+        return self._send_json({
+            'ok': True, 'text': raw, 'truncated': False,
+            'stats': {'tool': tool, 'passthrough': True},
+        })
 
-            def _complete(system, user, cfg):
-                return complete_once(
-                    system, user, tool_gate.cfg.get(),
-                    slot=str(cfg.get('slot') or 'logic_slot'),
-                    timeout_ms=cfg.get('timeout_ms'),
-                    temperature=cfg.get('temperature'),
-                    max_tokens=cfg.get('max_tokens'),
-                )
+    def _clean_with_model(self, tool, raw, body, config):
+        """真调执行 AI 清洗；任何异常都回原文，别让薄壳拿到空结果。"""
+        from agent_core.tool_shelves.cleaner import compress_tool_result
 
+        try:
             result = compress_tool_result(
-                tool, raw, comp_cfg,
+                tool, raw, config,
                 args=body.get('args'),
                 user_query=str(body.get('user_query') or ''),
-                complete_once=_complete,
+                complete_once=self._compression_completer(),
             )
-            stats = result.as_dict()
-            try:
-                from agent_core.tool_shelves.metrics import metrics as shelf_metrics
-                shelf_metrics.record_compression([stats])
-            except Exception:
-                pass
-            return self._send_json({
-                'ok': True,
-                'text': result.text,
-                'truncated': bool(result.truncated),
-                'stats': stats,
-            })
         except Exception as exc:
             print(f"[ToolShelves] 清洗接口异常，原文放行: {exc}", flush=True)
-            return self._send_json({'ok': True, 'text': raw, 'truncated': False,
-                                    'stats': {'tool': tool, 'error': str(exc)[:120]}})
+            return self._send_json({
+                'ok': True, 'text': raw, 'truncated': False,
+                'stats': {'tool': tool, 'error': str(exc)[:120]},
+            })
+        stats = result.as_dict()
+        _record_compression(stats)
+        return self._send_json({
+            'ok': True,
+            'text': result.text,
+            'truncated': bool(result.truncated),
+            'stats': stats,
+        })
 
     def _tool_shelves_status(self):
         """工具货架：配置视图 + 今日命中率/节省量。"""
@@ -1425,100 +1463,99 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
+        query = parse_qs(parsed.query)
         if path.startswith('/api/'):
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-        if path.startswith('/hub/v1/services/'):
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            service_id = path.rstrip('/').rsplit('/', 1)[-1]
-            removed = ServiceRegistry(get_store()).delete(service_id)
-            return self._send_json({'ok': True, 'removed': removed})
-
-        if path == '/api/memory/facts':
-            qs = parse_qs(parsed.query)
-            fact_id = (qs.get('fact_id') or [''])[0].strip()
-            if not fact_id:
-                return self._send_json({'error': 'fact_id 必填'}, status=400)
-            from agent_core.memory.facts import FactStore
-            removed = FactStore().delete(fact_id)
-            return self._send_json({'ok': True, 'removed': removed})
-
-        # 档案自定义设定：删除
-        if path.endswith('/settings') and '/api/archives/' in path:
-            qs = parse_qs(parsed.query)
-            setting_id = (qs.get('setting_id') or [''])[0].strip()
-            if not setting_id:
-                return self._send_json({'error': 'setting_id 必填'}, status=400)
-            archive_id = path.rsplit('/', 2)[-2]
-            from agent_core.profile import ProfileManager
-            from agent_core.storage import get_store
-
-            removed = ProfileManager(get_store()).delete_setting(archive_id, setting_id)
-            return self._send_json({'ok': True, 'removed': removed})
-
-        if path == '/api/bindings':
-            qs = parse_qs(parsed.query)
-            platform = (qs.get('platform') or [''])[0].strip()
-            external_id = (qs.get('external_id') or [''])[0].strip()
-            if not platform or not external_id:
-                return self._send_json({'error': 'platform/external_id 必填'}, status=400)
-            from agent_core.storage import get_store
-            removed = get_store().unbind_context(platform, external_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path == '/api/bridges/spec':
-            qs = parse_qs(parsed.query)
-            source_id = (qs.get('source_id') or [''])[0].strip()
-            if not source_id:
-                return self._send_json({'error': 'source_id 必填'}, status=400)
-            from agent_core.storage import get_store
-            manager = _get_bridge_manager()
-            try:
-                manager.stop(source_id)
-            except Exception:
-                pass
-            removed = get_store().delete_bridge_spec(source_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path.startswith('/api/plugins/'):
-            from agent_core.plugins import PluginRegistry
-            from agent_core.storage import get_store
-
-            plugin_id = path.rsplit('/', 1)[-1]
-            removed = PluginRegistry(get_store()).delete(plugin_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path.startswith('/api/services/'):
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            service_id = path.rsplit('/', 1)[-1]
-            removed = ServiceRegistry(get_store()).delete(service_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path.startswith('/api/knowledge/'):
-            from agent_core.knowledge import KnowledgeBase
-            from agent_core.storage import get_store
-
-            source_id = path.rsplit('/', 1)[-1]
-            removed = KnowledgeBase(get_store()).delete(source_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path.startswith('/api/components/'):
-            from agent_core.storage import get_store
-
-            component_id = path.rsplit('/', 1)[-1]
-            removed = get_store().delete_component(component_id)
-            return self._send_json({'ok': True, 'removed': removed})
-        if path.startswith('/api/mcp/'):
-            name = path.rsplit('/', 1)[-1]
-            return self._send_json(_get_mcp_manager().close(name))
+            if self._require_login():
+                return
+            return self._delete_console(path, query)
+        # /hub/v1/services 随 agent_core.services 一起下线了
         self.send_response(404)
         self.end_headers()
+
+    def _delete_console(self, path, query):
+        """控制台删除类接口：按路径尾巴分派，全部要求登录。"""
+        if path == '/api/memory/facts':
+            return self._delete_fact(query)
+        if path.endswith('/settings') and '/api/archives/' in path:
+            return self._delete_archive_setting(path, query)
+        if path == '/api/bindings':
+            return self._delete_binding(query)
+        if path == '/api/bridges/spec':
+            return self._delete_bridge_spec(query)
+        if path.startswith('/api/plugins/'):
+            return self._delete_plugin(path)
+        if path.startswith('/api/knowledge/'):
+            return self._delete_knowledge(path)
+        if path.startswith('/api/components/'):
+            return self._delete_component(path)
+        if path.startswith('/api/mcp/'):
+            return self._send_json(_get_mcp_manager().close(path.rsplit('/', 1)[-1]))
+        self.send_response(404)
+        self.end_headers()
+
+    def _delete_fact(self, query):
+        fact_id = (query.get('fact_id') or [''])[0].strip()
+        if not fact_id:
+            return self._send_json({'error': 'fact_id 必填'}, status=400)
+        from agent_core.memory.facts import FactStore
+
+        removed = FactStore().delete(fact_id)
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_archive_setting(self, path, query):
+        setting_id = (query.get('setting_id') or [''])[0].strip()
+        if not setting_id:
+            return self._send_json({'error': 'setting_id 必填'}, status=400)
+        archive_id = path.rsplit('/', 2)[-2]
+        from agent_core.profile import ProfileManager
+        from agent_core.storage import get_store
+
+        removed = ProfileManager(get_store()).delete_setting(archive_id, setting_id)
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_binding(self, query):
+        platform = (query.get('platform') or [''])[0].strip()
+        external_id = (query.get('external_id') or [''])[0].strip()
+        if not platform or not external_id:
+            return self._send_json({'error': 'platform/external_id 必填'}, status=400)
+        from agent_core.storage import get_store
+
+        removed = get_store().unbind_context(platform, external_id)
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_bridge_spec(self, query):
+        """删桥接规格前先停掉在跑的实例，停不掉也照删。"""
+        source_id = (query.get('source_id') or [''])[0].strip()
+        if not source_id:
+            return self._send_json({'error': 'source_id 必填'}, status=400)
+        from agent_core.storage import get_store
+
+        try:
+            _get_bridge_manager().stop(source_id)
+        except Exception:
+            pass
+        removed = get_store().delete_bridge_spec(source_id)
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_plugin(self, path):
+        from agent_core.plugins import PluginRegistry
+        from agent_core.storage import get_store
+
+        removed = PluginRegistry(get_store()).delete(path.rsplit('/', 1)[-1])
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_knowledge(self, path):
+        from agent_core.knowledge import KnowledgeBase
+        from agent_core.storage import get_store
+
+        removed = KnowledgeBase(get_store()).delete(path.rsplit('/', 1)[-1])
+        return self._send_json({'ok': True, 'removed': removed})
+
+    def _delete_component(self, path):
+        from agent_core.storage import get_store
+
+        removed = get_store().delete_component(path.rsplit('/', 1)[-1])
+        return self._send_json({'ok': True, 'removed': removed})
 
     # ------------------------------------------------------------------
     # 档案 API（/hub/v1/archives）
@@ -1652,111 +1689,107 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             _, err = self._hub_client(require_admin=True)
             if err:
                 return self._hub_error(err)
-        am = self._archive_manager()
+        manager = self._archive_manager()
         path = path.rstrip('/')
-
         if path == '/hub/v1/archives':
-            platform = str(body.get('platform') or '').strip()
-            uid = str(body.get('user_id') or body.get('platform_user_id') or '').strip()
-            role = str(body.get('role') or 'guest').strip().lower()
-            if role not in ('admin', 'guest'):
-                role = 'guest'
-
-            # 不填平台账号 → 创建一个尚未绑定平台的人物档案
-            if not platform and not uid:
-                display_name = str(body.get('display_name') or '').strip()
-                if not display_name:
-                    return self._hub_error('bad_request')
-                archive = am.create_person(display_name, role=role)
-                return self._send_json(self._archive_view(am, archive), status=201)
-
-            if not platform or not uid:
-                return self._hub_error('bad_request')
-            existing = am.resolve(platform, uid, create=False)
-            if existing:
-                return self._send_json({
-                    'error': {'message': '该平台账号已有档案', 'code': 'conflict'},
-                    'archive': self._archive_view(am, existing),
-                }, status=409)
-            archive = am.create_user(
-                platform, uid,
-                display_name=body.get('display_name'),
-                role=role,
-            )
-            return self._send_json(self._archive_view(am, archive), status=201)
-
+            return self._create_archive(manager, body)
         if path.endswith('/settings'):
-            archive_id = path.rsplit('/', 2)[-2]
-            if not am.get(archive_id):
-                return self._hub_error('not_found')
-            from agent_core.profile import ProfileManager
-
-            pm = ProfileManager(am.store)
-
-            # 大文本框整段保存：每行一条「标签：内容」，没有冒号就整行当内容
-            if 'text' in body:
-                text = str(body.get('text') or '')
-                items = []
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    label, content = '', line
-                    for sep in ('：', ':'):
-                        if sep in line:
-                            head, tail = line.split(sep, 1)
-                            if head.strip() and len(head.strip()) <= 20:
-                                label, content = head.strip(), tail.strip()
-                            break
-                    items.append((label or '设定', content))
-                for old in pm.list_settings(archive_id):
-                    pm.delete_setting(archive_id, old['setting_id'])
-                saved = []
-                for label, content in items:
-                    saved.append(pm.upsert_setting(archive_id, label, content))
-                return self._send_json({'ok': True, 'settings': saved, 'count': len(saved)})
-
-            label = str(body.get('label') or '').strip()
-            content = str(body.get('content') or '').strip()
-            if not label:
-                return self._send_json(
-                    {'error': {'message': 'label 必填', 'code': 'bad_request'}}, status=400
-                )
-            try:
-                setting = pm.upsert_setting(
-                    archive_id,
-                    label,
-                    content,
-                    setting_id=str(body.get('setting_id') or '').strip(),
-                    sort_order=body.get('sort_order'),
-                )
-            except ValueError as exc:
-                return self._send_json(
-                    {'error': {'message': str(exc), 'code': 'bad_request'}}, status=400
-                )
-            return self._send_json({'ok': True, 'setting': setting})
-
+            return self._save_archive_settings(manager, path, body)
         if path.endswith('/identities'):
-            parts = path.split('/')
-            archive_id = parts[-2] if len(parts) >= 2 else ''
-            archive = am.get(archive_id)
-            if not archive:
-                return self._hub_error('not_found')
-            platform = str(body.get('platform') or '').strip()
-            uid = str(body.get('user_id') or body.get('platform_user_id') or '').strip()
-            if not platform or not uid:
-                return self._hub_error('bad_request')
-            existing = am.resolve(platform, uid, create=False)
-            if existing and existing['archive_id'] != archive_id:
-                return self._hub_error('conflict')
-            am.link(
-                archive_id, platform, uid,
-                display_name=body.get('display_name'),
-                is_primary=bool(body.get('is_primary')),
-            )
-            return self._send_json(self._archive_view(am, am.get(archive_id)))
-
+            return self._link_archive_identity(manager, path, body)
         return self._hub_error('not_found')
+
+    def _create_archive(self, manager, body):
+        """建档案：给了平台账号就顺手绑身份，没给就只建人。"""
+        platform = str(body.get('platform') or '').strip()
+        uid = str(body.get('user_id') or body.get('platform_user_id') or '').strip()
+        role = str(body.get('role') or 'guest').strip().lower()
+        if role not in ('admin', 'guest'):
+            role = 'guest'
+        if not platform and not uid:
+            return self._create_person_archive(manager, body, role)
+        if not platform or not uid:
+            return self._hub_error('bad_request')
+        existing = manager.resolve(platform, uid, create=False)
+        if existing:
+            return self._send_json({
+                'error': {'message': '该平台账号已有档案', 'code': 'conflict'},
+                'archive': self._archive_view(manager, existing),
+            }, status=409)
+        archive = manager.create_user(
+            platform, uid, display_name=body.get('display_name'), role=role
+        )
+        return self._send_json(self._archive_view(manager, archive), status=201)
+
+    def _create_person_archive(self, manager, body, role):
+        """没有平台账号的档案（先建人，之后再绑身份）。"""
+        display_name = str(body.get('display_name') or '').strip()
+        if not display_name:
+            return self._hub_error('bad_request')
+        archive = manager.create_person(display_name, role=role)
+        return self._send_json(self._archive_view(manager, archive), status=201)
+
+    def _save_archive_settings(self, manager, path, body):
+        """档案自定义设定：整段保存或单条保存。"""
+        archive_id = path.rsplit('/', 2)[-2]
+        if not manager.get(archive_id):
+            return self._hub_error('not_found')
+        from agent_core.profile import ProfileManager
+
+        profile_manager = ProfileManager(manager.store)
+        if 'text' in body:
+            return self._save_settings_text(profile_manager, archive_id, body)
+        return self._save_one_setting(profile_manager, archive_id, body)
+
+    def _save_settings_text(self, profile_manager, archive_id, body):
+        """大文本框整段保存：每行「标签：内容」，没有冒号就整行当内容。"""
+        items = [_split_setting_line(line) for line in str(body.get('text') or '').splitlines()]
+        items = [item for item in items if item]
+        for old in profile_manager.list_settings(archive_id):
+            profile_manager.delete_setting(archive_id, old['setting_id'])
+        saved = [
+            profile_manager.upsert_setting(archive_id, label, content) for label, content in items
+        ]
+        return self._send_json({'ok': True, 'settings': saved, 'count': len(saved)})
+
+    def _save_one_setting(self, profile_manager, archive_id, body):
+        label = str(body.get('label') or '').strip()
+        content = str(body.get('content') or '').strip()
+        if not label:
+            return self._send_json(
+                {'error': {'message': 'label 必填', 'code': 'bad_request'}}, status=400
+            )
+        try:
+            setting = profile_manager.upsert_setting(
+                archive_id, label, content,
+                setting_id=str(body.get('setting_id') or '').strip(),
+                sort_order=body.get('sort_order'),
+            )
+        except ValueError as exc:
+            return self._send_json(
+                {'error': {'message': str(exc), 'code': 'bad_request'}}, status=400
+            )
+        return self._send_json({'ok': True, 'setting': setting})
+
+    def _link_archive_identity(self, manager, path, body):
+        """给已有档案挂一个平台身份；冲突就拒绝，不硬改绑。"""
+        parts = path.split('/')
+        archive_id = parts[-2] if len(parts) >= 2 else ''
+        if not manager.get(archive_id):
+            return self._hub_error('not_found')
+        platform = str(body.get('platform') or '').strip()
+        uid = str(body.get('user_id') or body.get('platform_user_id') or '').strip()
+        if not platform or not uid:
+            return self._hub_error('bad_request')
+        existing = manager.resolve(platform, uid, create=False)
+        if existing and existing['archive_id'] != archive_id:
+            return self._hub_error('conflict')
+        manager.link(
+            archive_id, platform, uid,
+            display_name=body.get('display_name'),
+            is_primary=bool(body.get('is_primary')),
+        )
+        return self._send_json(self._archive_view(manager, manager.get(archive_id)))
 
     def _handle_archive_patch(self, path, body, console=False):
         if not console:
