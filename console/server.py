@@ -207,7 +207,7 @@ def _asset_version() -> int:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from agent_core import api_security  # noqa: E402
+from agent_core import api_security, audit_log  # noqa: E402
 from agent_core.auth import AuthManager  # noqa: E402
 from agent_core.clients import client_registry  # noqa: E402
 
@@ -290,6 +290,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/tools/policies': '_get_tool_policies',
     '/api/messages': '_get_messages',
     '/api/access_control': '_get_access_control',
+    '/api/audit': '_get_audit',
 }
 
 
@@ -663,6 +664,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _get_tool_policies(self):
         return self._send_json(self._tools_policies())
 
+    def _get_audit(self):
+        """安全审计日志（最新在前），?limit= 控制条数。"""
+        query = urlparse(self.path).query
+        params = dict(part.split('=', 1) for part in query.split('&') if '=' in part)
+        try:
+            limit = max(1, min(int(params.get('limit', '200')), 1000))
+        except ValueError:
+            limit = 200
+        return self._send_json({"ok": True, "path": str(audit_log.log_path()),
+                                "entries": audit_log.tail(limit)})
+
     def _get_access_control(self):
         """API 安全开关：本机限制 + 签名状态（密钥只报是否配置）。"""
         return self._send_json({"ok": True, **api_security.status()})
@@ -675,6 +687,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             # 轮换：新密钥立刻生效，旧密钥留一段过渡期
             grace = int(patch['signature'].pop('grace_seconds', 1800) or 1800)
             saved = api_security.rotate_secret(grace)
+            audit_log.record(
+                "secret_rotated",
+                dedupe=False,
+                ip=api_security.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', '')),
+                grace_seconds=grace,
+            )
             return self._send_json({
                 "ok": True,
                 "rotated": True,
@@ -686,6 +704,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if not patch:
             return self._send_json({"ok": False, "error": "没有可更新的字段"}, status=400)
         saved = api_security.save_config(patch)
+        audit_log.record(
+            "security_changed",
+            dedupe=False,
+            ip=api_security.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', '')),
+            local_only=saved["local_only"],
+            signature_enabled=saved["signature"]["enabled"],
+            allow_cidrs=saved["allow_cidrs"],
+        )
         return self._send_json({
             "ok": True,
             "local_only": saved["local_only"],
@@ -1170,6 +1196,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         )
         if api_security.ip_allowed(ip, config):
             return False
+        audit_log.record("access_denied", level="warn", ip=ip, error="local_only",
+                         path=self.path.split('?')[0])
         self._send_json({'ok': False, 'error': 'local_only', 'client_ip': ip}, status=403)
         return True
 
@@ -1195,6 +1223,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         )
         if not error:
             return False
+        audit_log.record("signature_rejected", level="warn", ip=ip, error=error,
+                         path=path, method=method)
         self._send_json({'ok': False, 'error': error}, status=401)
         return True
 
@@ -1350,14 +1380,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         ip = api_security.client_ip(self.client_address[0], self.headers.get('X-Forwarded-For', ''))
         wait = api_security.login_throttle.blocked_for(ip)
         if wait:  # 连续输错就锁一会儿，挡住公网爆破
+            audit_log.record("login_blocked", level="warn", ip=ip, retry_after=wait)
             return self._send_json(
                 {"success": False, "error": "too_many_attempts", "retry_after": wait},
                 status=429,
             )
         if not auth_mgr.verify_credentials(username, password):
             api_security.login_throttle.record_failure(ip)
+            audit_log.record("login_failed", level="warn", ip=ip, username=username)
             return self._send_json({"success": False, "error": "用户名或安全密码不正确"}, status=401)
         api_security.login_throttle.record_success(ip)
+        audit_log.record("login_ok", dedupe=False, ip=ip, username=username)
         token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
         max_age = 604800 if remember else 86400
         cookie = f'anan_session={token}; Path=/; SameSite=Lax; Max-Age={max_age}'

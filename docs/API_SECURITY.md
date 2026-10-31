@@ -185,6 +185,32 @@ python scripts\setup_security.py --rotate-secret --grace-minutes 30
 
 HTTP 状态 429。锁定状态在内存里，重启中枢即清零；登录成功会立刻解除。
 
+## 二·七、审计日志
+
+安全事件不写时间轴（那是给 AI 的记忆），单独落 `logs/audit.log`，JSON Lines：
+
+| 事件 | 何时记 |
+|---|---|
+| `login_ok` / `login_failed` | 登录成功 / 密码错 |
+| `login_blocked` | 触发限速被拒（429） |
+| `security_changed` | 改 local_only / 白名单 / 签名开关 |
+| `secret_rotated` | 轮换签名密钥 |
+| `access_denied` | 本机模式挡住了某来源（403） |
+| `signature_rejected` | 签名缺失 / 过期 / 不对（401） |
+
+查看：
+
+```powershell
+curl.exe "http://127.0.0.1:18895/api/audit?limit=100" -H "X-Session-Token: <token>"
+```
+
+控制台：**设置 → 运行日志 → 安全日志** 按钮，直接看最近 500 条。
+
+细节：
+- 同一 `(事件, IP, 错误码)` 60 秒内只记一次，防止被 401 刷爆磁盘
+- 配置变更 / 密钥轮换 / 登录成功**不去重**，保证每次操作都有记录
+- 超过 5 MB 自动滚成 `audit.log.1`（只保留一份历史）
+
 ## 三、回滚
 
 改坏了最省事的办法：把 `data/api_security.json` 删掉（回到默认全关），或：

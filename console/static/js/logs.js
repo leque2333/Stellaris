@@ -50,6 +50,37 @@ async function loadLogs() {
     }
 }
 
+async function loadAudit() {
+    const view = document.getElementById('logs-view');
+    const meta = document.getElementById('logs-meta');
+    if (!view) return;
+    view.textContent = '加载中…';
+    try {
+        const resp = await fetch('/api/audit?limit=500', { cache: 'no-store' });
+        const data = await resp.json();
+        if (!data.ok) {
+            view.textContent = '读取失败：' + (data.error || '未知错误');
+            return;
+        }
+        const entries = data.entries || [];
+        const lines = entries.map(function (item) {
+            const bits = [item.time || '', '[' + (item.level || 'info') + ']', item.event || ''];
+            ['ip', 'username', 'path', 'method', 'error', 'retry_after', 'local_only',
+             'signature_enabled', 'grace_seconds'].forEach(function (key) {
+                if (item[key] !== undefined && item[key] !== '' && item[key] !== null) {
+                    bits.push(key + '=' + item[key]);
+                }
+            });
+            return bits.join(' ');
+        });
+        view.textContent = lines.join('\n') || '（暂无安全事件）';
+        if (meta) meta.textContent = `${entries.length} 条 · ${data.path || ''}`;
+        view.scrollTop = 0;
+    } catch (e) {
+        view.textContent = '读取失败：' + (e.message || e);
+    }
+}
+
 function openLogsTab() {
     if (typeof openSettingsTab === 'function') openSettingsTab(document.getElementById('footer-settings-btn'));
     const btn = document.querySelector("#tab-settings .subtab-btn[onclick*='subtab-logs']");
@@ -62,4 +93,5 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 window.loadLogs = loadLogs;
+window.loadAudit = loadAudit;
 window.openLogsTab = openLogsTab;
