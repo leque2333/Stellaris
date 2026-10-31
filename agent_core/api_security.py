@@ -33,7 +33,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "local_only": False,
     "allow_cidrs": ["127.0.0.1/32", "::1/128"],
     "trusted_proxies": ["127.0.0.1/32", "::1/128"],
-    "signature": {"enabled": False, "window_seconds": 300, "secret": ""},
+    "signature": {
+        "enabled": False,
+        "window_seconds": 300,
+        "secret": "",
+        # 内网（本机 / docker / 局域网）不参与签名：保护的是经 nginx 进来的公网流量，
+        # AstrBot 这类客户端不用改任何配置
+        "exempt_cidrs": [
+            "127.0.0.0/8", "::1/128",
+            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+        ],
+    },
 }
 
 _CACHE: Dict[str, Any] = {"key": None, "config": None}
@@ -95,7 +105,11 @@ def _merged(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _cidrs(value, fallback) -> list:
-    items = value if isinstance(value, list) else fallback
+    """None / 非列表 → 用默认值；显式空列表就是"不放行任何网段"。"""
+    if value is None or not isinstance(value, list):
+        items = list(fallback)
+    else:
+        items = value
     out = []
     for item in items:
         try:
@@ -103,7 +117,7 @@ def _cidrs(value, fallback) -> list:
             out.append(str(item).strip())
         except ValueError:
             continue
-    return out or list(fallback)
+    return out
 
 
 def _signature_block(value) -> Dict[str, Any]:
@@ -116,6 +130,9 @@ def _signature_block(value) -> Dict[str, Any]:
         "enabled": bool(block.get("enabled", False)),
         "window_seconds": max(30, min(window, 3600)),
         "secret": str(block.get("secret") or ""),
+        "exempt_cidrs": _cidrs(
+            block.get("exempt_cidrs"), DEFAULT_CONFIG["signature"]["exempt_cidrs"]
+        ),
     }
 
 
@@ -163,6 +180,12 @@ def sign(method: str, path: str, timestamp: str, raw_body: bytes, secret: str) -
     return hmac.new(str(secret).encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def signature_exempt(ip: str, config: Optional[Dict[str, Any]] = None) -> bool:
+    """内网来源不参与签名（AstrBot / 本机脚本 / docker 都落在这里）。"""
+    cfg = config or load_config()
+    return _in_networks(ip, cfg["signature"]["exempt_cidrs"])
+
+
 def signature_error(
     method: str,
     path: str,
@@ -206,6 +229,7 @@ def status() -> Dict[str, Any]:
             "enabled": cfg["signature"]["enabled"],
             "window_seconds": cfg["signature"]["window_seconds"],
             "secret_configured": bool(cfg["signature"]["secret"]),
+            "exempt_cidrs": cfg["signature"]["exempt_cidrs"],
         },
         "path": str(config_path()),
     }

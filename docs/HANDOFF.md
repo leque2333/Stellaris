@@ -1254,6 +1254,7 @@ input_price / cache_price / output_price / currency
 | `docs/IDENTITY_SCAN.md` | 身份扫描说明（规则/输出/边界） |
 | `docs/ARCHIVE_PROFILE.md` | 档案画像说明（事实来源/好感度窗口/自定义设定） |
 | `agent_core/api_security.py` | 本机访问限制 + 请求签名（HMAC/防重放） |
+| `scripts/setup_security.py` | 初始化安全配置（生成密钥、开开关、--lan 放行内网） |
 | `docs/API_SECURITY.md` | 两个安全开关的用法与客户端签名示例 |
 | `docs/DEV_RULES.md` | 后续开发规范：四条硬指标、改动流程、踩坑清单 |
 | `scripts/merge_legacy_identities.py` | 合并旧 QQ 号画像到档案 ID |

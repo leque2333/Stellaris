@@ -8,8 +8,9 @@
     2. 检查中枢是否在跑、模型名是什么
     3. 准备中枢客户端 Key（没有 clients.json 时自动生成并落盘）
     4. 把中枢写进 AstrBot 的 provider_sources + provider，并设为默认模型
-    5. 可选：装 P4 执行器插件、配 mcp_hub_tools.py（--p4）
-    6. 可选：重启 AstrBot（--restart，仅 docker 部署）
+    5. 初始化 API 安全配置（data/api_security.json，AstrBot 走内网自动豁免签名）
+    6. 可选：装 P4 执行器插件、配 mcp_hub_tools.py（--p4）
+    7. 可选：重启 AstrBot（--restart，仅 docker 部署）
 
 幂等：重复运行只会更新，不会重复添加。
 
@@ -324,6 +325,28 @@ def patch_cmd_config(cfg: Dict[str, Any], base_url: str, key: str, model: str) -
 # ----------------------------------------------------------------------
 # 5. P4 可选安装
 # ----------------------------------------------------------------------
+def ensure_security_config() -> List[str]:
+    """初始化 API 安全配置：没有就建一份（密钥先生成好，签名默认关）。
+
+    AstrBot 走内网（docker / 局域网），默认豁免签名，所以这里不需要改它任何配置。
+    """
+    try:
+        for extra in (str(PROJECT_ROOT), str(Path(__file__).resolve().parent)):
+            if extra not in sys.path:
+                sys.path.insert(0, extra)
+        from agent_core import api_security
+
+        if api_security.config_path().exists():
+            return ["API 安全配置已存在，未改动"]
+        import setup_security
+
+        config = setup_security.apply(generate_secret=True)
+        state = "开" if config["signature"]["enabled"] else "关"
+        return [f"已生成 {api_security.config_path().name}（签名{state}，密钥已就绪）"]
+    except Exception as exc:
+        return [f"API 安全配置跳过：{type(exc).__name__}: {exc}"]
+
+
 def install_p4(data_dir: Path, base_url: str, key: str) -> List[str]:
     """把薄壳 MCP + 执行器插件装进 AstrBot 的 data 目录；返回改动清单。"""
     changed: List[str] = []
@@ -453,6 +476,11 @@ def main() -> int:
             p4_changes = install_p4(data_dir, base_url, key)
             changed.extend(f"P4：{c}" for c in p4_changes)
             log("P4 组件已安装", "ok")
+
+    # 5.5) API 安全配置：初始化时建好，AstrBot 内网自动豁免，不用改客户端
+    if not args.dry_run:
+        changed.extend(f"安全：{item}" for item in ensure_security_config())
+        log("API 安全配置就绪", "ok")
 
     # 6) 重启
     if args.restart and not args.dry_run:

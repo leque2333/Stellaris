@@ -11,7 +11,8 @@
   "signature": {
     "enabled": false,
     "window_seconds": 300,
-    "secret": ""
+    "secret": "",
+    "exempt_cidrs": ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
   }
 }
 ```
@@ -24,6 +25,7 @@
 | `signature.enabled` | 对 `/v1/*`、`/api/v1/*`、`/hub/v1/*` 校验签名 |
 | `signature.window_seconds` | 时间戳容差，默认 300 秒（30~3600） |
 | `signature.secret` | 共享密钥；**开了签名但密钥为空时会放行**（避免把自己锁死） |
+| `signature.exempt_cidrs` | 这些来源不参与签名。默认整个内网（本机 / docker / 局域网）豁免 |
 
 ---
 
@@ -64,6 +66,24 @@ nginx 配置里已经带了 `proxy_set_header X-Forwarded-For $proxy_add_x_forwa
 - 开启后**控制台从外网也打不开**（403），这是这个开关的本意。
 
 ---
+
+## 一·五、初始化脚本
+
+```powershell
+# 只建配置（签名密钥先生成好，开关保持关闭）
+python scripts\setup_security.py --generate-secret
+
+# 开本机限制，并把局域网 / docker 网段放行
+python scripts\setup_security.py --enable-local-only --lan
+
+# 开签名（内网仍豁免，AstrBot 不用动）
+python scripts\setup_security.py --enable-signature
+
+# 看当前状态
+python scripts\setup_security.py --show
+```
+
+`scripts/connect_astrbot.py` 在接入 AstrBot 时会自动调用同一套初始化。
 
 ## 二、请求签名（HMAC + 防重放）
 
@@ -113,6 +133,20 @@ print(urllib.request.urlopen(req, timeout=60).read()[:80])
 ```
 
 HTTP 状态都是 401。
+
+### 为什么 AstrBot 不用改
+
+AstrBot 跑在 docker / 局域网里，来源 IP 落在 `signature.exempt_cidrs`（RFC1918 + 回环），
+**签名校验直接跳过**。这样"签名"只保护经 nginx 进来的公网流量，内部客户端零改动。
+
+初始化也是自动的：
+
+```text
+python scripts/connect_astrbot.py       # 一键接 AstrBot 时顺带生成 data/api_security.json
+python scripts/setup_security.py --show # 单独查看
+```
+
+如果哪天 AstrBot 从公网绕进来（不经过内网），把它的网段从 `exempt_cidrs` 里去掉即可。
 
 ### 开着签名要改谁
 

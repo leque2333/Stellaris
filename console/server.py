@@ -1162,8 +1162,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return True
 
     def _signature_blocked(self, method, path, raw):
-        """机器对机器接口（/v1、/hub/v1）在开启签名后必须带 X-Timestamp + X-Signature。"""
+        """机器对机器接口（/v1、/hub/v1）在开启签名后必须带 X-Timestamp + X-Signature。
+
+        内网来源（本机 / docker / 局域网）默认豁免：AstrBot 这类客户端不用改任何配置。
+        """
         if not (path.startswith('/v1/') or path.startswith('/api/v1/') or path.startswith('/hub/v1/')):
+            return False
+        config = api_security.load_config()
+        ip = api_security.client_ip(
+            self.client_address[0], self.headers.get('X-Forwarded-For', ''), config
+        )
+        if api_security.signature_exempt(ip, config):
             return False
         error = api_security.signature_error(
             method,

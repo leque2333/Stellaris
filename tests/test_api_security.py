@@ -147,13 +147,23 @@ class HandlerGuardTest(unittest.TestCase):
         self.assertEqual(self.responses, [])
 
     def test_signature_required_for_gateway_paths(self):
+        # 豁免网段清空，模拟外网来源
         self.cfg.write({
-            "signature": {"enabled": True, "secret": "s3cret", "window_seconds": 300},
+            "signature": {
+                "enabled": True, "secret": "s3cret", "window_seconds": 300, "exempt_cidrs": [],
+            },
         })
         self.assertFalse(self.handler._signature_blocked("POST", "/api/tokens", b""))
         self._prepare(path="/v1/chat/completions")
         self.assertTrue(self.handler._signature_blocked("POST", "/v1/chat/completions", b"{}"))
         self.assertEqual(self.responses[0][0], 401)
+
+    def test_private_network_exempt_from_signature(self):
+        """内网（本机 / docker / 局域网）不参与签名，AstrBot 不用改客户端。"""
+        self.cfg.write({"signature": {"enabled": True, "secret": "s3cret"}})
+        self._prepare(path="/v1/chat/completions")
+        self.assertFalse(self.handler._signature_blocked("POST", "/v1/chat/completions", b"{}"))
+        self.assertEqual(self.responses, [])
 
 
 if __name__ == "__main__":
