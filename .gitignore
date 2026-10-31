@@ -24,8 +24,6 @@ backups/
 # ==========================================
 # 私人敏感档案与日志 (Private Archives & Logs)
 # ==========================================
-项目档案.md
-PROJECT_ARCHIVE.md
 *.log
 stderr.log
 stdout.log
