@@ -201,6 +201,57 @@ def _is_error_line(line: str) -> bool:
 
 
 
+# 静态资源类型表：只覆盖前端真正用到的几种
+_STATIC_CONTENT_TYPES = {
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'application/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+}
+
+# 早期「连接管理」模块的路径，全部 404
+_REMOVED_GET_PREFIXES = (
+    '/api/connection', '/api/modules', '/api/hosts', '/api/contexts',
+    '/api/components', '/api/services', '/api/mcp', '/api/tool-permissions',
+    '/api/bridges', '/api/plugins', '/api/execution_ai', '/qq/events',
+)
+
+# 控制台 GET 路由表：路径 → 方法名（方法名延迟解析，表可以写在类外）
+_CONSOLE_GET_ROUTES = {
+    '/api/overview': '_get_overview',
+    '/api/system/resources': '_get_system_resources',
+    '/api/timeline': '_get_timeline',
+    '/api/persona': '_get_persona',
+    '/api/persona/rules': '_get_persona_rules',
+    '/api/models/sync_upstream': '_get_models_sync',
+    '/api/sniff_key': '_get_sniff_key',
+    '/api/models_config': '_get_models_config',
+    '/api/compute/config': '_get_compute_config',
+    '/api/ledger': '_get_ledger',
+    '/api/tokens': '_get_tokens',
+    '/api/access_policy': '_get_access_policy',
+    '/api/connectors': '_get_connectors',
+    '/api/bindings': '_get_bindings',
+    '/api/knowledge': '_get_knowledge',
+    '/api/memory/facts': '_get_memory_facts',
+    '/api/memory/graph': '_get_memory_graph',
+    '/api/tools/shelves': '_get_tools_shelves',
+    '/api/tools/shelves/status': '_get_tools_shelves',
+    '/api/identity/scan': '_get_identity_scan',
+    '/api/affection': '_get_affection',
+    '/api/affection/overview': '_get_affection',
+    '/api/logs': '_get_logs',
+    '/api/logs/alerts': '_get_log_alerts',
+    '/api/tools': '_get_tools',
+    '/api/tools/policies': '_get_tool_policies',
+    '/api/messages': '_get_messages',
+}
+
+
 class ConsoleHandler(BaseHTTPRequestHandler):
     # 高频轮询不写访问日志，避免把运行日志刷屏
     _NOISE_PATHS = (
@@ -276,359 +327,271 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?')[0]
-        if path.startswith((
-            '/api/connection', '/api/modules', '/api/hosts', '/api/contexts',
-            '/api/components', '/api/services', '/api/mcp', '/api/tool-permissions',
-            '/api/bridges', '/api/plugins', '/api/execution_ai', '/qq/events',
-        )):
+        # 早期「连接管理」模块已下线，这些前缀统一 404，别让前端以为还能用
+        if path.startswith(_REMOVED_GET_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
-
-        # 1. 登录页面与免鉴权静态资源
-        if path in ('/login', '/login.html'):
-            login_file = os.path.join(STATIC_DIR, 'login.html')
-            if os.path.exists(login_file):
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.end_headers()
-                with open(login_file, 'rb') as f:
-                    self.wfile.write(f.read())
-                return
-        elif path == '/api/auth/status':
-            return self._send_json(auth_mgr.get_status(self._get_token()))
-
-                # 1.1 静态资源服务 (css, js, 图标等)
-        if path.startswith('/static/'):
-            rel_path = path[len('/static/'):].lstrip('/')
-            file_path = os.path.join(STATIC_DIR, 'static', rel_path)
-            if os.path.exists(file_path) and os.path.isfile(file_path):
-                ext = os.path.splitext(file_path)[1].lower()
-                content_types = {
-                    '.css': 'text/css; charset=utf-8',
-                    '.js': 'application/javascript; charset=utf-8',
-                    '.json': 'application/json; charset=utf-8',
-                    '.png': 'image/png',
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.svg': 'image/svg+xml',
-                    '.ico': 'image/x-icon'
-                }
-                ctype = content_types.get(ext, 'application/octet-stream')
-                self.send_response(200)
-                self.send_header('Content-Type', ctype)
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.end_headers()
-                with open(file_path, 'rb') as f:
-                    self.wfile.write(f.read())
-                return
-            else:
-                self.send_response(404)
-                self.end_headers()
-                return
-
-        # 2. 根路由 /：若未登录则展示登录页，已登录则呈现控制台
-        if path in ('/', '/index.html'):
-            if not self._is_authenticated():
-                login_file = os.path.join(STATIC_DIR, 'login.html')
-                if os.path.exists(login_file):
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html; charset=utf-8')
-                    self.end_headers()
-                    with open(login_file, 'rb') as f:
-                        self.wfile.write(f.read())
-                    return
-            html_file = os.path.join(STATIC_DIR, 'index.html')
-            if os.path.exists(html_file):
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.send_header('Pragma', 'no-cache')
-                self.send_header('Expires', '0')
-                self.end_headers()
-                with open(html_file, 'r', encoding='utf-8') as f:
-                    html = f.read()
-                asset_version = _asset_version()
-                html = re.sub(r'\?v=\d+', f'?v={asset_version}', html)
-                self.wfile.write(html.encode('utf-8'))
-            else:
-                self.send_response(404)
-                self.end_headers()
+        if self._serve_public_page(path):
             return
-
-        # 3. 大模型兼容网关 /v1 豁免 Web 鉴权
+        if path == '/api/auth/status':
+            return self._send_json(auth_mgr.get_status(self._get_token()))
         if path.startswith('/v1/') or path.startswith('/api/v1/'):
-            if path in ('/v1/models', '/api/v1/models'):
-                self._maybe_auto_provision()
-                return self._send_json(backend.get_universal_models_list())
-
-        # 3.1 档案接口（插件/外部工具用，独立 Key 鉴权）
-        if path.startswith('/hub/v1/archives'):
-            return self._handle_archive_get()
-
-        # 3.2 直连服务注册表
-        if path == '/hub/v1/services':
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            return self._send_json({'object': 'list', 'data': ServiceRegistry(get_store()).list()})
-
-        if path.startswith('/hub/v1/services/'):
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            service_id = path.rstrip('/').rsplit('/', 1)[-1]
-            service = ServiceRegistry(get_store()).get(service_id)
-            if not service:
-                return self._hub_error('not_found')
-            return self._send_json(service)
-
-        # 4. 其他所有 /api/ 端点实施登录保护
+            return self._handle_gateway_get(path)
+        if path.startswith('/hub/v1/'):
+            return self._handle_hub_get(path)
         if path.startswith('/api/'):
-            if not self._is_authenticated():
-                return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+            return self._handle_console_api_get(path)
+        self.send_response(404)
+        self.end_headers()
 
-        # 4.1 控制台档案页（同源，无客户端 Key）
-        if path.startswith('/api/archives'):
-            return self._handle_console_archive_get()
+    # ---------------- GET：页面与静态资源 ----------------
+    def _serve_public_page(self, path):
+        """登录页 / 静态资源 / 根路由：这三类不查登录态。"""
+        if path in ('/login', '/login.html'):
+            return self._send_login_page()
+        if path.startswith('/static/'):
+            self._send_static(path[len('/static/'):].lstrip('/'))
+            return True
+        if path in ('/', '/index.html'):
+            self._send_console_page()
+            return True
+        return False
 
-        # 4.2 平台自动发现（连接器只读扫描）
-        if path == '/api/connectors':
-            svc = _get_discovery_service()
-            return self._send_json({'status': svc.status()})
+    def _send_login_page(self):
+        """登录页存在就发；返回是否发过（根路由要靠这个判断）。"""
+        login_file = os.path.join(STATIC_DIR, 'login.html')
+        if not os.path.exists(login_file):
+            return False
+        self._send_file(login_file, 'text/html; charset=utf-8')
+        return True
 
-        # 4.3 动态插件注册表
-        if path == '/api/plugins':
-            from agent_core.plugins import PluginRegistry
-            from agent_core.storage import get_store
-
-            return self._send_json({
-                'object': 'list',
-                'data': PluginRegistry(get_store()).list(),
-            })
-
-        if path == '/api/services':
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            return self._send_json({
-                'object': 'list',
-                'data': ServiceRegistry(get_store()).list(),
-            })
-
-        if path == '/api/knowledge':
-            from agent_core.knowledge import KnowledgeBase
-            from agent_core.storage import get_store
-
-            return self._send_json({
-                'object': 'list',
-                'data': KnowledgeBase(get_store()).list(),
-            })
-
-        if path == '/api/execution_ai':
-            from agent_core.execution.settings import public_settings
-
-            return self._send_json({'ok': True, **public_settings()})
-
-        if path == '/hub/v1/knowledge/search':
-            _, err = self._hub_client(require_admin=False)
-            if err:
-                return self._hub_error(err)
-            from agent_core.knowledge import KnowledgeBase
-            from agent_core.storage import get_store
-
-            qs = parse_qs(urlparse(self.path).query)
-            query = (qs.get('q') or qs.get('query') or [''])[0]
-            limit = int((qs.get('limit') or ['3'])[0] or 3)
-            return self._send_json({
-                'object': 'list',
-                'data': KnowledgeBase(get_store()).search(query, limit=limit),
-            })
-
-        if path == '/api/mcp/servers':
-            return self._send_json({'object': 'list', 'data': _get_mcp_manager().list()})
-
-        if path == '/api/bridges':
-            return self._send_json({'status': _get_bridge_manager().status()})
-
-        if path == '/api/contexts':
-            from agent_core.storage import get_store
-            qs = parse_qs(urlparse(self.path).query)
-            store = get_store()
-            contexts = store.list_contexts(
-                platform=(qs.get('platform') or [None])[0],
-                status=(qs.get('status') or [None])[0],
-                host_id=(qs.get('host_id') or [None])[0],
-            )
-            binding_map = {
-                (b['platform'], b['external_id']): b for b in store.list_bindings()
-            }
-            for item in contexts:
-                for field in ('evidence', 'metadata'):
-                    if isinstance(item.get(field), str):
-                        fallback = '[]' if field == 'evidence' else '{}'
-                        try:
-                            item[field] = json.loads(item[field] or fallback)
-                        except Exception:
-                            item[field] = [] if field == 'evidence' else {}
-                item['binding'] = binding_map.get((item['platform'], item['external_id']))
-            return self._send_json({'object': 'list', 'data': contexts})
-
-        if path == '/api/bindings':
-            from agent_core.storage import get_store
-            bindings = get_store().list_bindings()
-            return self._send_json({'object': 'list', 'data': bindings})
-
-        if path == '/api/overview':
-            data = {
-                "summary": backend.get_system_summary(),
-                "resources": backend.get_system_resources_metrics(),
-                "current_persona": backend.get_current_persona(),
-                "presets": backend.get_preset_personas(),
-                "persona_rules": backend.get_persona_rules(),
-                "tokens": backend.get_token_analytics(),
-                "models_config": backend.get_models_config(),
-                "timeline": backend.get_timeline_events(limit=60),
-                "modules": backend.get_modules_overview(),
-                "modules_permissions": backend.get_module_permissions(),
-                "compute_config": backend.get_compute_config()
-            }
-            self._send_json(data)
-        elif path == '/api/system/resources':
-            self._send_json(backend.get_system_resources_metrics())
-        elif path == '/api/timeline':
-            self._send_json(backend.get_timeline_events(limit=60))
-        elif path == '/api/persona':
-            self._send_json(backend.get_current_persona())
-        elif path == '/api/persona/rules':
-            self._send_json(backend.get_persona_rules())
-        elif path == '/api/models/sync_upstream':
-            res = backend.sync_models_from_upstream()
-            self._send_json(res)
-        elif path == '/api/sniff_key':
-            qs = parse_qs(urlparse(self.path).query)
-            key = (qs.get('key') or qs.get('api_key') or [''])[0]
-            self._send_json(backend.handle_sniff_key({"key": key}))
-        elif path == '/api/models_config':
-            self._send_json(backend.get_models_config())
-        elif path == '/api/modules/custom':
-            from console.modules.module_manager import get_custom_module_configs
-
-            configs = get_custom_module_configs() or {}
-            self._send_json({'data': configs.get('custom_modules', [])})
-        elif path == '/api/components':
-            from agent_core.storage import get_store
-
-            self._send_json({'data': get_store().list_components()})
-        elif path == '/api/connection/tree':
-            from agent_core.connection import build_connection_tree
-            from agent_core.storage import get_store
-            from console.modules.module_manager import get_custom_module_configs
-
-            customs = (get_custom_module_configs() or {}).get('custom_modules') or []
-            self._send_json(build_connection_tree(
-                get_store(),
-                customs=customs,
-                mcp_sessions=_get_mcp_manager().list(),
-            ))
-        elif path == '/api/hosts':
-            from agent_core.storage import get_store
-
-            self._send_json({'data': get_store().list_hosts()})
-        elif path == '/api/modules':
-            self._send_json(backend.get_modules_overview())
-        elif path == '/api/modules/topology':
-            self._send_json(backend.get_topology_overview())
-        elif path == '/api/modules/permissions':
-            self._send_json(backend.get_module_permissions())
-        elif path == '/api/tool-permissions':
-            self._send_json({
-                'ok': False,
-                'deprecated': True,
-                'error': '已废弃，请使用 /api/tools（工具页）',
-            }, status=410)
-        elif path == '/api/compute/config':
-            self._send_json(backend.get_compute_config())
-        elif path == '/api/ledger':
-            # 独立账单流水端点：返回完整 token_analytics，含 recent_ledger + credits + today/overall 统计
-            self._send_json(backend.get_token_analytics())
-        elif path == '/api/tokens':
-            # 轻量统计端点：只查账本，不碰时间轴/模块/资源，保证首屏数字快速出现
-            self._send_json(backend.get_token_analytics())
-        elif path == '/api/access_policy':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.access_policy import load_policy
-            self._send_json({"ok": True, "policy": load_policy()})
-        elif path == '/api/memory/facts':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.memory.facts import FactStore
-            qs = parse_qs(urlparse(self.path).query)
-            subject_id = (qs.get('subject_id') or [''])[0].strip()
-            as_of = (qs.get('as_of') or [''])[0].strip()
-            if subject_id and as_of:
-                try:
-                    at_time = float(as_of)
-                except ValueError:
-                    return self._send_json({'ok': False, 'error': 'as_of 必须是 unix 时间戳'}, status=400)
-                facts = FactStore().facts_at(subject_id, at_time)
-                return self._send_json({'ok': True, 'facts': facts})
-            facts = FactStore().list_facts(
-                subject_id=subject_id,
-                status=(qs.get('status') or ['active'])[0].strip() or 'active',
-                query=(qs.get('q') or [''])[0].strip(),
-                limit=int((qs.get('limit') or ['200'])[0] or 200),
-            )
-            self._send_json({'ok': True, 'facts': facts})
-        elif path == '/api/memory/graph':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.memory.facts import FactStore
-            qs = parse_qs(urlparse(self.path).query)
-            subject_id = (qs.get('subject_id') or [''])[0].strip()
-            if not subject_id:
-                return self._send_json({'ok': False, 'error': 'subject_id 必填'}, status=400)
-            self._send_json({'ok': True, **FactStore().graph(subject_id)})
-        elif path in ('/v1/models', '/api/v1/models'):
-            self._send_json(backend.get_universal_models_list())
-        elif path in ('/api/tools/shelves', '/api/tools/shelves/status'):
-            self._send_json(self._tool_shelves_status())
-        elif path == '/api/identity/scan':
-            self._send_json(self._identity_scan())
-        elif path in ('/api/affection', '/api/affection/overview'):
-            self._send_json(self._affection_overview())
-        elif path == '/api/logs':
-            self._send_json(self._logs_payload())
-        elif path == '/api/logs/alerts':
-            self._send_json(self._logs_alerts())
-        elif path == '/api/tools':
-            self._send_json(self._tools_admin_list())
-        elif path == '/api/tools/policies':
-            self._send_json(self._tools_policies())
-        elif path == '/api/messages':
-            try:
-                from agent_core import messages as _msgs
-
-                self._send_json({"ok": True, **_msgs.snapshot()})
-            except Exception as exc:
-                self._send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
-        else:
+    def _send_console_page(self):
+        """根路由：未登录先给登录页；登录页缺失就照旧给控制台。"""
+        if not self._is_authenticated() and self._send_login_page():
+            return
+        html_file = os.path.join(STATIC_DIR, 'index.html')
+        if not os.path.exists(html_file):
             self.send_response(404)
             self.end_headers()
+            return
+        self._send_console_html(html_file)
+
+    def _send_console_html(self, html_file):
+        """控制台首页：注入静态资源版本号，免得浏览器拿旧 js/css。"""
+        with open(html_file, 'r', encoding='utf-8') as handle:
+            html = handle.read()
+        html = re.sub(r'\?v=\d+', f'?v={_asset_version()}', html)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        self.end_headers()
+        self.wfile.write(html.encode('utf-8'))
+
+    def _send_static(self, rel_path):
+        """静态资源：命中就发，未命中 404。"""
+        file_path = os.path.join(STATIC_DIR, 'static', rel_path)
+        if not (os.path.exists(file_path) and os.path.isfile(file_path)):
+            self.send_response(404)
+            self.end_headers()
+            return
+        extension = os.path.splitext(file_path)[1].lower()
+        content_type = _STATIC_CONTENT_TYPES.get(extension, 'application/octet-stream')
+        self._send_file(file_path, content_type, 'no-cache, no-store, must-revalidate')
+
+    def _send_file(self, file_path, content_type, cache_control=None):
+        """最朴素的静态文件下发；要禁缓存就传 cache_control。"""
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        if cache_control:
+            self.send_header('Cache-Control', cache_control)
+        self.end_headers()
+        with open(file_path, 'rb') as handle:
+            self.wfile.write(handle.read())
+
+    # ---------------- GET：三套接口分发 ----------------
+    def _handle_gateway_get(self, path):
+        """ /v1 的 GET 只开放模型列表；其余由 POST 处理。"""
+        if path in ('/v1/models', '/api/v1/models'):
+            self._maybe_auto_provision()
+            return self._send_json(backend.get_universal_models_list())
+        self.send_response(404)
+        self.end_headers()
+
+    def _handle_hub_get(self, path):
+        """/hub/v1：给外部工具用，Key 鉴权，不走 Web 登录态。"""
+        if path.startswith('/hub/v1/archives'):
+            return self._handle_archive_get()
+        if path == '/hub/v1/knowledge/search':
+            return self._get_hub_knowledge_search()
+        # services 相关实现随 agent_core.services 一起下线了，别再抛 ImportError
+        self.send_response(404)
+        self.end_headers()
+
+    def _handle_console_api_get(self, path):
+        """控制台 /api/*：先过登录态，再查路由表。"""
+        if not self._is_authenticated():
+            return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+        if path.startswith('/api/archives'):
+            return self._handle_console_archive_get()
+        handler = _CONSOLE_GET_ROUTES.get(path)
+        if handler:
+            return getattr(self, handler)()
+        self.send_response(404)
+        self.end_headers()
+
+    def _get_hub_knowledge_search(self):
+        """知识库检索（外部工具用）。"""
+        _, err = self._hub_client(require_admin=False)
+        if err:
+            return self._hub_error(err)
+        from agent_core.knowledge import KnowledgeBase
+        from agent_core.storage import get_store
+
+        query = parse_qs(urlparse(self.path).query)
+        text = (query.get('q') or query.get('query') or [''])[0]
+        limit = int((query.get('limit') or ['3'])[0] or 3)
+        return self._send_json({
+            'object': 'list',
+            'data': KnowledgeBase(get_store()).search(text, limit=limit),
+        })
+
+    # ---------------- GET：控制台账本 / 人格 / 档案 ----------------
+    def _get_overview(self):
+        """仪表盘一次拉全：摘要 / 资源 / 人格 / 账本 / 时间轴。"""
+        return self._send_json({
+            "summary": backend.get_system_summary(),
+            "resources": backend.get_system_resources_metrics(),
+            "current_persona": backend.get_current_persona(),
+            "presets": backend.get_preset_personas(),
+            "persona_rules": backend.get_persona_rules(),
+            "tokens": backend.get_token_analytics(),
+            "models_config": backend.get_models_config(),
+            "timeline": backend.get_timeline_events(limit=60),
+            "modules": backend.get_modules_overview(),
+            "modules_permissions": backend.get_module_permissions(),
+            "compute_config": backend.get_compute_config(),
+        })
+
+    def _get_system_resources(self):
+        return self._send_json(backend.get_system_resources_metrics())
+
+    def _get_timeline(self):
+        return self._send_json(backend.get_timeline_events(limit=60))
+
+    def _get_persona(self):
+        return self._send_json(backend.get_current_persona())
+
+    def _get_persona_rules(self):
+        return self._send_json(backend.get_persona_rules())
+
+    def _get_models_sync(self):
+        return self._send_json(backend.sync_models_from_upstream())
+
+    def _get_models_config(self):
+        return self._send_json(backend.get_models_config())
+
+    def _get_compute_config(self):
+        return self._send_json(backend.get_compute_config())
+
+    def _get_ledger(self):
+        """账单页：完整 token_analytics（含 recent_ledger / 分组 / 余额）。"""
+        return self._send_json(backend.get_token_analytics())
+
+    def _get_tokens(self):
+        """首页轻量统计：只查账本，保证首屏数字快。"""
+        return self._send_json(backend.get_token_analytics())
+
+    def _get_sniff_key(self):
+        """从 URL 里取一个 key（前端粘贴用）。"""
+        query = parse_qs(urlparse(self.path).query)
+        key = (query.get('key') or query.get('api_key') or [''])[0]
+        return self._send_json(backend.handle_sniff_key({"key": key}))
+
+    def _get_access_policy(self):
+        from agent_core.access_policy import load_policy
+
+        return self._send_json({"ok": True, "policy": load_policy()})
+
+    def _get_connectors(self):
+        return self._send_json({'status': _get_discovery_service().status()})
+
+    def _get_bindings(self):
+        from agent_core.storage import get_store
+
+        return self._send_json({'object': 'list', 'data': get_store().list_bindings()})
+
+    def _get_knowledge(self):
+        from agent_core.knowledge import KnowledgeBase
+        from agent_core.storage import get_store
+
+        return self._send_json({'object': 'list', 'data': KnowledgeBase(get_store()).list()})
+
+    def _get_memory_facts(self):
+        """事实列表；给了 subject_id + as_of 就查那个时间点的事实。"""
+        query = parse_qs(urlparse(self.path).query)
+        subject_id = (query.get('subject_id') or [''])[0].strip()
+        as_of = (query.get('as_of') or [''])[0].strip()
+        if subject_id and as_of:
+            return self._get_facts_at(subject_id, as_of)
+        from agent_core.memory.facts import FactStore
+
+        facts = FactStore().list_facts(
+            subject_id=subject_id,
+            status=(query.get('status') or ['active'])[0].strip() or 'active',
+            query=(query.get('q') or [''])[0].strip(),
+            limit=int((query.get('limit') or ['200'])[0] or 200),
+        )
+        return self._send_json({'ok': True, 'facts': facts})
+
+    def _get_facts_at(self, subject_id, as_of):
+        """双时间事实：as_of 是 unix 时间戳，非法就 400。"""
+        from agent_core.memory.facts import FactStore
+
+        try:
+            at_time = float(as_of)
+        except ValueError:
+            return self._send_json({'ok': False, 'error': 'as_of 必须是 unix 时间戳'}, status=400)
+        return self._send_json({'ok': True, 'facts': FactStore().facts_at(subject_id, at_time)})
+
+    def _get_memory_graph(self):
+        from agent_core.memory.facts import FactStore
+
+        query = parse_qs(urlparse(self.path).query)
+        subject_id = (query.get('subject_id') or [''])[0].strip()
+        if not subject_id:
+            return self._send_json({'ok': False, 'error': 'subject_id 必填'}, status=400)
+        return self._send_json({'ok': True, **FactStore().graph(subject_id)})
+
+    def _get_tools_shelves(self):
+        return self._send_json(self._tool_shelves_status())
+
+    def _get_identity_scan(self):
+        return self._send_json(self._identity_scan())
+
+    def _get_affection(self):
+        return self._send_json(self._affection_overview())
+
+    def _get_logs(self):
+        return self._send_json(self._logs_payload())
+
+    def _get_log_alerts(self):
+        return self._send_json(self._logs_alerts())
+
+    def _get_tools(self):
+        return self._send_json(self._tools_admin_list())
+
+    def _get_tool_policies(self):
+        return self._send_json(self._tools_policies())
+
+    def _get_messages(self):
+        """顶部消息铃铛：只返回本次启动之后的消息。"""
+        try:
+            from agent_core import messages as hub_messages
+
+            return self._send_json({"ok": True, **hub_messages.snapshot()})
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
     def _identity_bind(self, body):
         """批量把 UID 绑到档案。

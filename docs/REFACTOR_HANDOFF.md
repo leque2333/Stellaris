@@ -19,7 +19,7 @@
 
 ## 二、当前进度
 
-### 已完成（7 条）
+### 已完成（8 条）
 
 | 函数 | 原行数 | 现行数 | 拆出函数 | 所属文件 |
 |---|---|---|---|---|
@@ -30,26 +30,31 @@
 | `_gateway_complete` | 172 | 8 | 17 个 | `console/server.py` |
 | `_gateway_stream` | 113 | 12 | 7 个 + 累加器拆 6 个 | `console/server.py` |
 | `_gateway_record` | 112 | 15 | 5 个方法 + 7 个模块函数 | `console/server.py` |
+| `do_GET`（路由表化） | 355 | 16 | 36 个方法 + 3 张表 | `console/server.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 > 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
 > 不是「待拆」而是死代码，已直接删除（server.py 少 269 行）。
 
+> 2026-10-31 追加：`do_GET` 里 12 个分支被前面的「已下线」前缀表整段挡住，
+> `/hub/v1/services` 依赖的 `agent_core.services` 早已不存在（请求直接断连）。
+> 这次一并清掉，改成规规矩矩的 404。
+
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   261 个
-超过 100 行的       13 个
+超过 20 行的函数   260 个
+超过 100 行的       12 个
 ```
 
 最狠的五个：
 
 ```text
-1033 行  console/server.py  do_POST
- 355 行  console/server.py  do_GET                        ← 下一步
+1033 行  console/server.py  do_POST                       ← 下一步
  110 行  console/server.py  _handle_archive_post
   97 行  console/server.py  do_DELETE
   76 行  console/server.py  _handle_tool_clean
+  58 行  console/server.py  _handle_archive_patch
 ```
 
 ---
@@ -150,7 +155,7 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 第 3 步  _gateway_complete（172 行）                        ✅ 已完成（315 通过）
 第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（315 通过）
 第 5 步  _gateway_stream（113 行）+ _gateway_record（112 行）  ✅ 已完成（315 通过）
-第 6 步  do_GET（355 行）→ 路由表化
+第 6 步  do_GET（355 行）→ 路由表化  ✅ 已完成（315 通过）
 第 7 步  do_POST（1033 行）→ 路由表化，工作量最大
 第 8 步  剩余 260 多个 20~100 行的
 ```
