@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""安全审计日志：写入、去重、读取。"""
+"""安全审计日志：写入、去重、读取、保留策略。"""
 
 import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -18,19 +19,34 @@ from agent_core import audit_log  # noqa: E402
 class AuditLogTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="audit_")
-        self.path = Path(self.dir) / "audit.log"
-        self._old = os.environ.get("HUB_AUDIT_LOG")
-        os.environ["HUB_AUDIT_LOG"] = str(self.path)
+        self._env = {
+            key: os.environ.get(key)
+            for key in ("HUB_AUDIT_DIR", "HUB_AUDIT_MAX_FILE_MB",
+                        "HUB_AUDIT_RETENTION_DAYS", "HUB_AUDIT_MAX_TOTAL_MB")
+        }
+        os.environ["HUB_AUDIT_DIR"] = self.dir
+        os.environ["HUB_AUDIT_MAX_FILE_MB"] = "1"
+        os.environ["HUB_AUDIT_RETENTION_DAYS"] = "30"
+        os.environ["HUB_AUDIT_MAX_TOTAL_MB"] = "64"
         audit_log.reset_dedupe()
+        audit_log._LAST_PRUNE = 0.0
+        self.path = audit_log.log_path()
 
     def tearDown(self):
-        if self._old is None:
-            os.environ.pop("HUB_AUDIT_LOG", None)
-        else:
-            os.environ["HUB_AUDIT_LOG"] = self._old
+        for key, value in self._env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         import shutil
 
         shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _write_file(self, name, lines=1):
+        path = Path(self.dir) / name
+        path.write_text("\n".join(json.dumps({"event": "x"}) for _ in range(lines)) + "\n",
+                        encoding="utf-8")
+        return path
 
     def test_record_and_tail(self):
         audit_log.record("login_ok", ip="127.0.0.1", username="admin")
@@ -52,14 +68,51 @@ class AuditLogTest(unittest.TestCase):
         audit_log.record("signature_rejected", ip="8.8.8.8", error="stale_timestamp")
         self.assertEqual(len(audit_log.tail(10)), 3)
 
-    def test_json_lines_are_valid(self):
-        audit_log.record("login_failed", ip="1.1.1.1", username="admin")
-        raw = self.path.read_text(encoding="utf-8").strip().splitlines()
-        self.assertEqual(len(raw), 1)
-        self.assertEqual(json.loads(raw[0])["event"], "login_failed")
-
-    def test_tail_missing_file(self):
+    def test_tail_missing_dir(self):
         self.assertEqual(audit_log.tail(5), [])
+
+    def test_file_name_has_date(self):
+        self.assertRegex(self.path.name, r"^audit-\d{4}-\d{2}-\d{2}\.log$")
+
+    def test_rotate_when_file_full(self):
+        os.environ["HUB_AUDIT_MAX_FILE_MB"] = "0.002"  # 约 2 KB
+        for index in range(40):
+            audit_log.record("login_failed", dedupe=False, ip="1.1.1.1", n=index)
+        names = sorted(item.name for item in Path(self.dir).iterdir())
+        self.assertGreaterEqual(len(names), 2)
+        self.assertTrue(any(name.endswith(".1.log") for name in names))
+        self.assertEqual(len(audit_log.tail(200)), 40)
+
+    def test_prune_by_age(self):
+        old = self._write_file("audit-2020-01-01.log")
+        os.utime(old, (time.time() - 40 * 86400, time.time() - 40 * 86400))
+        fresh = self._write_file("audit-2030-01-01.log")
+        removed = audit_log.prune()
+        self.assertIn(old.name, removed)
+        self.assertTrue(fresh.exists())
+
+    def test_prune_by_total_size(self):
+        os.environ["HUB_AUDIT_MAX_TOTAL_MB"] = "0.001"
+        first = self._write_file("audit-2026-01-01.log", lines=60)
+        second = self._write_file("audit-2026-01-02.log", lines=60)
+        removed = audit_log.prune()
+        self.assertIn(first.name, removed)
+        self.assertTrue(second.exists())
+
+    def test_stats(self):
+        self._write_file("audit-2026-02-01.log")
+        info = audit_log.stats()
+        self.assertEqual(info["files"], 1)
+        self.assertGreater(info["bytes"], 0)
+        self.assertEqual(info["retention_days"], 30.0)
+        self.assertEqual(info["oldest"], "audit-2026-02-01.log")
+
+    def test_migrate_legacy(self):
+        legacy = Path(self.dir) / "audit.log"
+        legacy.write_text('{"event": "old"}\n', encoding="utf-8")
+        moved = audit_log.migrate_legacy()
+        self.assertTrue(moved and moved.startswith("audit-"))
+        self.assertFalse(legacy.exists())
 
 
 if __name__ == "__main__":

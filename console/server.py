@@ -673,6 +673,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except ValueError:
             limit = 200
         return self._send_json({"ok": True, "path": str(audit_log.log_path()),
+                                "stats": audit_log.stats(),
                                 "entries": audit_log.tail(limit)})
 
     def _get_access_control(self):
@@ -3410,6 +3411,7 @@ def _warm_resource_cache():
 
 
 def run_server():
+    audit_log.migrate_legacy()
     _start_aggregator()
     _start_memory_maintenance()
     _start_discovery()

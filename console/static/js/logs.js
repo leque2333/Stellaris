@@ -74,7 +74,12 @@ async function loadAudit() {
             return bits.join(' ');
         });
         view.textContent = lines.join('\n') || '（暂无安全事件）';
-        if (meta) meta.textContent = `${entries.length} 条 · ${data.path || ''}`;
+        if (meta) {
+            const info = data.stats || {};
+            const mb = ((info.bytes || 0) / 1024 / 1024).toFixed(1);
+            meta.textContent = `${entries.length} 条 · ${info.files || 0} 个文件 · ${mb} MB`
+                + (info.retention_days ? ` · 保留 ${info.retention_days} 天` : '');
+        }
         view.scrollTop = 0;
     } catch (e) {
         view.textContent = '读取失败：' + (e.message || e);
