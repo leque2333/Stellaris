@@ -1,0 +1,67 @@
+{
+  "specs": [
+    {
+      "name": "astrbot",
+      "base_dir_candidates": [
+        "{env:ASTRBOT_DATA_DIR}",
+        "{cwd}/astrbot/data",
+        "/AstrBot/data"
+      ],
+      "sources": [
+        {
+          "type": "sqlite",
+          "path": "data_v4.db",
+          "query": "SELECT umo, COALESCE(user_alias, auto_name) AS name FROM umo_aliases",
+          "as": "aliases"
+        },
+        {
+          "type": "sqlite",
+          "path": "data_v4.db",
+          "query": "SELECT DISTINCT user_id AS umo FROM conversations WHERE platform_id LIKE 'onebot%'",
+          "as": "conversations"
+        },
+        {
+          "type": "json",
+          "path": "cmd_config.json",
+          "pointer": "admins_id",
+          "as": "admins"
+        },
+        {
+          "type": "json",
+          "path": "cmd_config.json",
+          "pointer": "platform_settings.id_whitelist",
+          "as": "whitelist"
+        }
+      ],
+      "contexts": [
+        {
+          "from": "aliases",
+          "external_id": "{umo}",
+          "display": "{name}",
+          "type": "umo",
+          "evidence": "alias"
+        },
+        {
+          "from": "conversations",
+          "external_id": "{umo}",
+          "type": "umo",
+          "evidence": "conversation"
+        },
+        {
+          "from": "admins",
+          "external_id": "onebot_napcat:FriendMessage:{value}",
+          "display": "主人",
+          "type": "friend",
+          "evidence": "admin"
+        },
+        {
+          "from": "whitelist",
+          "external_id": "onebot_napcat:GroupMessage:{value}",
+          "type": "group",
+          "evidence": "whitelist",
+          "exclude_if_in": "admins"
+        }
+      ]
+    }
+  ]
+}

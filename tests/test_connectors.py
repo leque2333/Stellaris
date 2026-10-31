@@ -43,7 +43,23 @@ def build_astrbot_data(root: Path, group_id="2000000001", admin="1000000001",
     conn.executemany("INSERT INTO conversations VALUES (?, ?)", conversations)
     conn.commit()
     conn.close()
+
+    # 生成一份指向本次临时目录的 spec，避免依赖全局 data/plugin_specs.json
+    _write_specs(data)
     return data
+
+
+FIXTURE_SPECS = Path(__file__).resolve().parent / "fixtures" / "plugin_specs.json"
+
+
+def _write_specs(data: Path) -> Path:
+    import json
+    tpl = json.loads(FIXTURE_SPECS.read_text(encoding="utf-8"))
+    for spec in tpl.get("specs") or []:
+        spec["base_dir_candidates"] = [str(data)]
+    out = data / "plugin_specs.json"
+    out.write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
 
 
 class ConnectorTest(unittest.TestCase):
@@ -56,7 +72,7 @@ class ConnectorTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_astrbot_discovers_group_and_admin(self):
-        report = SpecConnector(self.data).discover()
+        report = SpecConnector(self.data, specs_path=self.data / "plugin_specs.json").discover()
         self.assertTrue(report.ok)
         by_id = {c.external_id: c for c in report.contexts}
         group = by_id["onebot_napcat:GroupMessage:2000000001"]
@@ -76,14 +92,14 @@ class ConnectorTest(unittest.TestCase):
             "bili_sub_list": {"onebot_napcat:GroupMessage:2000000001": [{"uid": 1}]},
             "credential": {"dedeuserid": "12345"},
         }), encoding="utf-8")
-        report = SpecConnector(self.data).discover()
+        report = SpecConnector(self.data, specs_path=self.data / "plugin_specs.json").discover()
         self.assertTrue(report.ok)
         by_id = {c.external_id: c for c in report.contexts}
         self.assertNotIn("bilibili:uid:12345", by_id)
         self.assertNotIn("bilibili:session", by_id)
 
     def test_missing_data_reports_error(self):
-        report = SpecConnector(self.tmp / "missing").discover()
+        report = SpecConnector(self.tmp / "missing", specs_path=self.data / "plugin_specs.json").discover()
         self.assertFalse(report.ok)
         self.assertTrue(report.error)
 
@@ -99,7 +115,7 @@ class DiscoveryTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def service(self, data):
-        return DiscoveryService(self.store, [SpecConnector(data)])
+        return DiscoveryService(self.store, [SpecConnector(data, specs_path=data / "plugin_specs.json")])
 
     def test_scan_upserts_contexts_and_binds_admin(self):
         result = self.service(self.data).scan()
