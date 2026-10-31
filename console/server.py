@@ -207,6 +207,7 @@ def _asset_version() -> int:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from agent_core import api_security  # noqa: E402
 from agent_core.auth import AuthManager  # noqa: E402
 from agent_core.clients import client_registry  # noqa: E402
 
@@ -288,6 +289,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/tools': '_get_tools',
     '/api/tools/policies': '_get_tool_policies',
     '/api/messages': '_get_messages',
+    '/api/access_control': '_get_access_control',
 }
 
 
@@ -320,6 +322,7 @@ _POST_ROUTES = {
     '/api/credits': ('_post_credits', True),
     '/api/compute/config': ('_post_compute_config', True),
     '/api/compute/test': ('_post_compute_test', True),
+    '/api/access_control': ('_post_access_control', True),
 }
 
 class ConsoleHandler(BaseHTTPRequestHandler):
@@ -387,6 +390,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
 
     def do_OPTIONS(self):
+        if self._access_blocked():
+            return
         origin = self.headers.get('Origin', '*')
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
@@ -397,6 +402,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split('?')[0]
+        if self._access_blocked():
+            return
+        if self._signature_blocked('GET', path, b''):
+            return
         # 早期「连接管理」模块已下线，这些前缀统一 404，别让前端以为还能用
         if path.startswith(_REMOVED_PATH_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
@@ -653,6 +662,28 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _get_tool_policies(self):
         return self._send_json(self._tools_policies())
+
+    def _get_access_control(self):
+        """API 安全开关：本机限制 + 签名状态（密钥只报是否配置）。"""
+        return self._send_json({"ok": True, **api_security.status()})
+
+    def _post_access_control(self, body):
+        """改开关：local_only / allow_cidrs / trusted_proxies / signature。"""
+        allowed = ('local_only', 'allow_cidrs', 'trusted_proxies', 'signature')
+        patch = {key: body[key] for key in allowed if key in body}
+        if not patch:
+            return self._send_json({"ok": False, "error": "没有可更新的字段"}, status=400)
+        saved = api_security.save_config(patch)
+        return self._send_json({
+            "ok": True,
+            "local_only": saved["local_only"],
+            "allow_cidrs": saved["allow_cidrs"],
+            "signature": {
+                "enabled": saved["signature"]["enabled"],
+                "window_seconds": saved["signature"]["window_seconds"],
+                "secret_configured": bool(saved["signature"]["secret"]),
+            },
+        })
 
     def _get_messages(self):
         """顶部消息铃铛：只返回本次启动之后的消息。"""
@@ -1081,11 +1112,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0]
+        if self._access_blocked():
+            return
         # 「已下线」前缀先拦，免得白读一遍 body
         if path.startswith(_REMOVED_PATH_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
-        body = self._read_json_body()
-        if body is None:  # 解析失败，_read_json_body 已经回过 400
+        raw = self._read_raw_body()
+        if self._signature_blocked('POST', path, raw):
+            return
+        body = self._parse_json_body(raw)
+        if body is None:  # 解析失败，_parse_json_body 已经回过 400
             return
         if path.startswith('/v1/') or path.startswith('/api/v1/'):
             return self._handle_gateway_post(path, body)
@@ -1096,10 +1132,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def _read_json_body(self):
-        """读并解析 JSON body；解析失败返回 None（已经回过 400）。"""
+    def _read_raw_body(self):
+        """把原始 body 读出来（签名要用原始字节）。"""
         length = int(self.headers.get('Content-Length', 0) or 0)
-        raw = self.rfile.read(length) if length else b''
+        return self.rfile.read(length) if length else b''
+
+    def _parse_json_body(self, raw):
+        """解析 JSON body；解析失败返回 None（已经回过 400）。"""
         if not raw:
             return {}
         try:
@@ -1108,6 +1147,35 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Invalid JSON"}, status=400)
             return None
         return data if isinstance(data, dict) else {}
+
+    def _access_blocked(self):
+        """只允许本机访问的开关；开着且来源不在白名单就 403。"""
+        config = api_security.load_config()
+        if not config["local_only"]:
+            return False
+        ip = api_security.client_ip(
+            self.client_address[0], self.headers.get('X-Forwarded-For', ''), config
+        )
+        if api_security.ip_allowed(ip, config):
+            return False
+        self._send_json({'ok': False, 'error': 'local_only', 'client_ip': ip}, status=403)
+        return True
+
+    def _signature_blocked(self, method, path, raw):
+        """机器对机器接口（/v1、/hub/v1）在开启签名后必须带 X-Timestamp + X-Signature。"""
+        if not (path.startswith('/v1/') or path.startswith('/api/v1/') or path.startswith('/hub/v1/')):
+            return False
+        error = api_security.signature_error(
+            method,
+            self.path,
+            self.headers.get('X-Timestamp', ''),
+            self.headers.get('X-Signature', ''),
+            raw,
+        )
+        if not error:
+            return False
+        self._send_json({'ok': False, 'error': error}, status=401)
+        return True
 
     def _require_login(self):
         """未登录就直接回 401；返回 True 表示已经处理完。"""
@@ -1428,8 +1496,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         path = self.path.split('?')[0]
+        if self._access_blocked():
+            return
         length = int(self.headers.get('Content-Length', 0))
         raw = self.rfile.read(length)
+        if self._signature_blocked('PATCH', path, raw):
+            return
         try:
             body = json.loads(raw.decode('utf-8')) if raw else {}
         except Exception:
@@ -1461,6 +1533,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_DELETE(self):
+        if self._access_blocked():
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
         query = parse_qs(parsed.query)
