@@ -2,6 +2,7 @@
 """存储领域模块：每个子模块只管一类表，SQLiteStore 用 mixin 组装成门面。"""
 
 from .archives import ArchiveOps
+from .buffer import BufferOps
 from .components import ComponentOps
 from .contexts import ContextOps
 from .facts import FactOps
@@ -14,6 +15,7 @@ from .timeline import TimelineOps
 
 __all__ = [
     "ArchiveOps",
+    "BufferOps",
     "ComponentOps",
     "ContextOps",
     "FactOps",

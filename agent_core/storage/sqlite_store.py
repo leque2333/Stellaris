@@ -13,6 +13,7 @@ from typing import Iterator, Optional
 
 from .config import default_db_path
 from .repos.archives import ArchiveOps
+from .repos.buffer import BufferOps
 from .repos.components import ComponentOps
 from .repos.contexts import ContextOps
 from .repos.facts import FactOps
@@ -25,7 +26,7 @@ from .repos.timeline import TimelineOps
 from .schema import apply_migrations
 
 
-class SQLiteStore(TimelineOps, ProfileOps, FactOps, InvocationOps, ArchiveOps, ContextOps, PluginOps, KnowledgeOps, ComponentOps, LedgerOps):
+class SQLiteStore(TimelineOps, ProfileOps, FactOps, InvocationOps, ArchiveOps, ContextOps, PluginOps, KnowledgeOps, ComponentOps, LedgerOps, BufferOps):
     """SQLite 后端：连接与事务在这里，具体 SQL 按领域放在 repos/ 下。"""
 
     def __init__(self, path: Optional[Path] = None, *, read_only: bool = False, migrate: bool = True):

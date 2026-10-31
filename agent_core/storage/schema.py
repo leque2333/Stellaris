@@ -809,6 +809,29 @@ def _v25_affection_range_and_settings(conn: sqlite3.Connection) -> None:
     )
 
 
+def _v27_timeline_buffer(conn: sqlite3.Connection) -> None:
+    """时间轴缓冲区：被检索顶出去的近期记忆暂存这里，轮次结束后回填。
+
+    只存 event 的完整快照（payload），不回写 agent_timeline——
+    因为它已经从视图里出去了，回来时也应该走同一套曲线规则。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS timeline_buffer (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            person_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            released_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_timeline_buffer_person "
+        "ON timeline_buffer(person_id, id)"
+    )
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _v1_baseline),
     (2, "timeline_tags_plugins_ledger", _v2_timeline_and_plugins),
@@ -836,6 +859,7 @@ MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (24, "usage_credential_meta", _v24_usage_credential_meta),
     (25, "affection_range_and_settings", _v25_affection_range_and_settings),
     (26, "token_usage_tools", _v26_token_usage_tools),
+    (27, "timeline_buffer", _v27_timeline_buffer),
 ]
 
 
