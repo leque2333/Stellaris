@@ -3433,8 +3433,14 @@ def _warm_resource_cache():
 
 
 def _bind_host() -> str:
-    """监听地址：HUB_BIND 覆盖；默认 0.0.0.0（只给本机用就设 127.0.0.1）。"""
-    return (os.getenv("HUB_BIND") or "0.0.0.0").strip() or "0.0.0.0"
+    """监听地址：环境变量 HUB_BIND > data/api_security.json 的 bind_host > 0.0.0.0。"""
+    env = (os.getenv("HUB_BIND") or "").strip()
+    if env:
+        return env
+    try:
+        return api_security.load_config()["bind_host"]
+    except Exception:
+        return "0.0.0.0"
 
 
 def run_server():

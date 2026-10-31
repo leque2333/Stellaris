@@ -325,6 +325,40 @@ def patch_cmd_config(cfg: Dict[str, Any], base_url: str, key: str, model: str) -
 # ----------------------------------------------------------------------
 # 5. P4 可选安装
 # ----------------------------------------------------------------------
+PROXY_PORTS = (18891, 53353, 443, 18890)
+
+
+def detect_reverse_proxy(ports=PROXY_PORTS, host: str = "127.0.0.1", timeout: float = 0.3) -> Optional[int]:
+    """看本机有没有反代在监听；返回命中的端口，没有返回 None。"""
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            if sock.connect_ex((host, int(port))) == 0:
+                return int(port)
+        finally:
+            sock.close()
+    return None
+
+
+def report_deployment_mode(base_url: str) -> List[str]:
+    """没有反代就提醒：要么绑回环，要么限制来源网段。"""
+    from urllib.parse import urlparse
+
+    proxy_port = detect_reverse_proxy()
+    host = urlparse(base_url).hostname or ""
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    if proxy_port:
+        return [f"检测到反代端口 {proxy_port}，保持 0.0.0.0（TLS 由反代负责）"]
+    if loopback:
+        return ["没有反代且 AstrBot 走本机回环：建议 HUB_BIND=127.0.0.1，控制台只给本机用"]
+    return [
+        "没有检测到反向代理：18895 是明文，AstrBot 又需要局域网可访问",
+        "建议执行：python scripts/setup_security.py --enable-local-only --lan",
+        "（只给本机用时，把 HUB_BIND 设成 127.0.0.1）",
+    ]
+
+
 def ensure_security_config() -> List[str]:
     """初始化 API 安全配置：没有就建一份（密钥先生成好，签名默认关）。
 
@@ -481,6 +515,8 @@ def main() -> int:
     if not args.dry_run:
         changed.extend(f"安全：{item}" for item in ensure_security_config())
         log("API 安全配置就绪", "ok")
+        for line in report_deployment_mode(base_url):
+            log(line, "warn" if "建议" in line or "没有检测到" in line else "info")
 
     # 6) 重启
     if args.restart and not args.dry_run:

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "bind_host": "0.0.0.0",
     "local_only": False,
     "allow_cidrs": ["127.0.0.1/32", "::1/128"],
     "trusted_proxies": ["127.0.0.1/32", "::1/128"],
@@ -100,6 +101,7 @@ def save_config(patch: Dict[str, Any]) -> Dict[str, Any]:
 
 def _merged(data: Dict[str, Any]) -> Dict[str, Any]:
     config = {
+        "bind_host": str(data.get("bind_host") or "0.0.0.0").strip() or "0.0.0.0",
         "local_only": bool(data.get("local_only", False)),
         "allow_cidrs": _cidrs(data.get("allow_cidrs"), DEFAULT_CONFIG["allow_cidrs"]),
         "trusted_proxies": _cidrs(data.get("trusted_proxies"), DEFAULT_CONFIG["trusted_proxies"]),
@@ -291,6 +293,7 @@ def status() -> Dict[str, Any]:
     """给控制台看的脱敏状态：密钥只报是否已配置。"""
     cfg = load_config()
     return {
+        "bind_host": cfg["bind_host"],
         "local_only": cfg["local_only"],
         "allow_cidrs": cfg["allow_cidrs"],
         "trusted_proxies": cfg["trusted_proxies"],

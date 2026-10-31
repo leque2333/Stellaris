@@ -57,6 +57,30 @@ class FreshInstallTest(unittest.TestCase):
         self.assertEqual(api_security.load_config()["signature"]["secret"],
                          created["signature"]["secret"])
 
+    def test_detect_reverse_proxy(self):
+        import socket as socket_mod
+
+        import connect_astrbot
+
+        server = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+        server.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        try:
+            self.assertEqual(connect_astrbot.detect_reverse_proxy(ports=[port]), port)
+        finally:
+            server.close()
+        self.assertIsNone(connect_astrbot.detect_reverse_proxy(ports=[1], timeout=0.05))
+
+    def test_report_deployment_mode(self):
+        import connect_astrbot
+
+        lines = connect_astrbot.report_deployment_mode("http://127.0.0.1:18895/v1")
+        self.assertTrue(lines)
+        # 无论有没有反代，都必须给出一句可读的结论
+        self.assertTrue(any("反代" in line or "0.0.0.0" in line or "本机" in line for line in lines))
+
     def test_generated_secret_can_sign(self):
         import setup_security
 
