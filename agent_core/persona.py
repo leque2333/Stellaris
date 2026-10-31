@@ -6,7 +6,6 @@ Stellaris Core - 人设引擎与后处理器 (Persona Kernel)
 
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -200,7 +199,8 @@ class PersonaManager:
                 matched_tier = tiers[-1]
 
             stage_desc = matched_tier.get("stage_name", "日常朋友") if matched_tier else "日常朋友"
-            attitude_hint = matched_tier.get("attitude_hint", "自然随和沟通") if matched_tier else "自然随和沟通"
+            attitude_hint = (matched_tier.get("attitude_hint", "自然随和沟通") if matched_tier else "自然随和沟通").strip()
+            attitude_hint = attitude_hint.rstrip("。.")
 
             blocks.append(
                 f"【当前交互对象关系与好感度】\n"

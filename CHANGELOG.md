@@ -20,6 +20,8 @@
 
 ### 修复
 
+- 网关工具闸门：`archive_id` 引用了未定义变量，异常被 fail-open 吞掉，档案级策略静默失效
+- 账本「来源」列：明细查询漏了 `session_type` / `tools`，页面只显示通道、看不到工具
 - 记忆库 `llm_request` 现在留存**实际发给模型的 system prompt**（含人设、好感度、召回原文）
 - 时间轴 `person_id` 归一：`master` / `qq:xxx` / `user_xxx` 全部收敛到 `archive_id`
 - B 站动态与直播接口：修正 Referer，图片动态补正文兜底

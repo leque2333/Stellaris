@@ -49,6 +49,8 @@ class TokenAnalyticsAccountingTest(unittest.TestCase):
                 cached_tokens INTEGER DEFAULT 0,
                 cost_usd REAL DEFAULT 0,
                 source TEXT DEFAULT 'universal_proxy',
+                session_type TEXT DEFAULT '',
+                tools TEXT DEFAULT '',
                 credential_type TEXT DEFAULT '',
                 currency TEXT DEFAULT 'USD'
             )
@@ -94,7 +96,7 @@ class TokenAnalyticsAccountingTest(unittest.TestCase):
             "账户充值", 0, 0, 0, 10.00, "recharge", "USD", today_ts + 5, source="人工充值"
         )
 
-        cfg = {
+        self.cfg = {
             "active_model": "gemini-3.8-flash",
             "credits": {"total_quota": 10.0, "currency": "USD"},
             "master_credentials": [{
@@ -129,10 +131,19 @@ class TokenAnalyticsAccountingTest(unittest.TestCase):
         }
         with patch.object(model_service, "get_db_connection", side_effect=self._connect), \
              patch.object(model_service, "get_store", return_value=None), \
-             patch.object(model_service, "get_models_config", return_value=cfg), \
+             patch.object(model_service, "get_models_config", return_value=self.cfg), \
              patch.object(system_service, "backfill_token_costs"), \
              patch.object(system_service, "backfill_usage_meta"):
             self.result = model_service.get_token_analytics()
+
+    def _analytics(self):
+        """同一套 mock 下重算一次，供需要追加流水的用例使用。"""
+        with patch.object(model_service, "get_db_connection", side_effect=self._connect), \
+             patch.object(model_service, "get_store", return_value=None), \
+             patch.object(model_service, "get_models_config", return_value=self.cfg), \
+             patch.object(system_service, "backfill_token_costs"), \
+             patch.object(system_service, "backfill_usage_meta"):
+            return model_service.get_token_analytics()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -143,16 +154,16 @@ class TokenAnalyticsAccountingTest(unittest.TestCase):
         return conn
 
     def _insert(self, model, prompt, completion, cached, cost, kind, currency, ts,
-                source="universal_proxy"):
+                source="universal_proxy", tools=""):
         conn = sqlite3.connect(self.db)
         conn.execute(
             """
             INSERT INTO token_usage
             (timestamp, model, prompt_tokens, completion_tokens, cached_tokens,
-             cost_usd, source, credential_type, currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             cost_usd, source, session_type, tools, credential_type, currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (ts, model, prompt, completion, cached, cost, source, kind, currency),
+            (ts, model, prompt, completion, cached, cost, source, source, tools, kind, currency),
         )
         conn.commit()
         conn.close()
@@ -249,6 +260,16 @@ class TokenAnalyticsAccountingTest(unittest.TestCase):
         self.assertIn(normal["credential_type"], ("master", "function"))
         self.assertIn(normal["currency"], ("USD", "CNY"))
         self.assertTrue(normal["cost_formatted"].startswith(("$", "¥")))
+
+    def test_recent_ledger_carries_channel_and_tools(self):
+        """账本「来源」列：通道（session_type）+ 本轮调用过的工具名。"""
+        self._insert(
+            "gemini-3.8-flash", 10, 5, 0, 0.01, "master", "USD",
+            self.today_start + 3600, source="qq_test", tools="you-search,call_raw_tool",
+        )
+        recent = self._analytics()["recent_ledger"]
+        self.assertEqual(recent[0]["session_type"], "qq_test")
+        self.assertEqual(recent[0]["tools"], "you-search,call_raw_tool")
 
     def test_monthly_daily_activity(self):
         activity = self.result["daily_activity"]

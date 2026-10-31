@@ -30,6 +30,9 @@ _SOURCE_MAP = {
     "future_task": "AstrBot 内置",
     "send_message_to_user": "AstrBot 内置",
     "control_host_pc_via_antigravity": "MCP（executor 隐藏）",
+    "bilibili_subscribe": "astrbot_plugin_bilibili",
+    "bilibili_subscriptions": "astrbot_plugin_bilibili",
+    "bilibili_unsubscribe": "astrbot_plugin_bilibili",
 }
 
 
@@ -233,3 +236,66 @@ def update_tool(
 
 
 __all__ = ["list_tools", "update_tool"]
+
+
+# ----------------------------------------------------------------------
+# 档案级工具策略：不同档案可用不同工具，陌生访客（无档案）走 _guest
+# ----------------------------------------------------------------------
+GUEST_KEY = "_guest"
+
+
+def list_policies(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
+    c = cfg or ShelfConfig()
+    return {
+        "ok": True,
+        "policies": c.archive_policies(),
+        "guest_key": GUEST_KEY,
+    }
+
+
+def update_policy(
+    archive_id: str,
+    mode: str = "all",
+    tools: Optional[List[str]] = None,
+    cfg: Optional[ShelfConfig] = None,
+) -> Dict[str, Any]:
+    """写入某档案的工具策略。archive_id 留空 = 陌生访客。"""
+    c = cfg or ShelfConfig()
+    key = str(archive_id or "").strip() or GUEST_KEY
+    m = str(mode or "all").strip().lower()
+    if m not in ("all", "allow", "deny"):
+        return {"ok": False, "error": f"mode 只能是 all/allow/deny：{mode}"}
+    picked = [str(x) for x in (tools or []) if x]
+    if m in ("allow", "deny") and not picked:
+        return {"ok": False, "error": f"mode={m} 时 tools 不能为空"}
+
+    path = _config_path(c)
+    data = _read(path)
+    policies = data.setdefault("archive_policies", {})
+    if not isinstance(policies, dict):
+        policies = {}
+        data["archive_policies"] = policies
+    policies[key] = {"mode": m, "tools": picked}
+    _write(path, data)
+    try:
+        c.reload(force=True)
+    except Exception:
+        pass
+    return {"ok": True, "archive_id": key, "mode": m, "tools": picked}
+
+
+def delete_policy(archive_id: str, cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
+    c = cfg or ShelfConfig()
+    key = str(archive_id or "").strip() or GUEST_KEY
+    path = _config_path(c)
+    data = _read(path)
+    policies = data.get("archive_policies") or {}
+    if isinstance(policies, dict) and key in policies:
+        policies.pop(key, None)
+        _write(path, data)
+        try:
+            c.reload(force=True)
+        except Exception:
+            pass
+        return {"ok": True, "removed": key}
+    return {"ok": True, "removed": ""}

@@ -173,7 +173,17 @@ def backfill_usage_meta():
         print(f"[TokenLedger] meta backfill failed: {exc}")
 
 
-def record_token_usage_event(model_id, input_tokens, output_tokens, cache_tokens=0, source="universal_proxy", cost_usd=0.0, credential_type=None, currency=None):
+def record_token_usage_event(
+    model_id,
+    input_tokens,
+    output_tokens,
+    cache_tokens=0,
+    source="universal_proxy",
+    cost_usd=0.0,
+    credential_type=None,
+    currency=None,
+    tools="",
+):
     """统一账本：所有通道都写入 token_usage（token_usage_ledger 为兼容视图）"""
     try:
         if not cost_usd:
@@ -195,6 +205,7 @@ def record_token_usage_event(model_id, input_tokens, output_tokens, cache_tokens
             source=source,
             credential_type=credential_type or meta_type,
             currency=currency or meta_currency,
+            tools=str(tools or ""),
         )
     except Exception as e:
         print(f"[TokenLedger] Record failed: {e}")

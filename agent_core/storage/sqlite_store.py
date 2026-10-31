@@ -1812,6 +1812,7 @@ class SQLiteStore(Store):
         source: str = "universal_proxy",
         credential_type: str = "",
         currency: str = "USD",
+        tools: str = "",
     ) -> int:
         now_ts = time.time()
         total = total_tokens if total_tokens is not None else int(prompt_tokens) + int(completion_tokens)
@@ -1821,14 +1822,15 @@ class SQLiteStore(Store):
                 INSERT INTO token_usage
                 (timestamp, time_str, session_type, model, prompt_tokens, completion_tokens,
                  total_tokens, cached_tokens, call_duration_ms, cost_usd, source,
-                 credential_type, currency)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 credential_type, currency, tools)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     now_ts, get_cst_now_str(now_ts), session_type, model,
                     int(prompt_tokens), int(completion_tokens), int(total),
                     int(cached_tokens), int(call_duration_ms), float(cost_usd), source,
                     credential_type or "", (currency or "USD").upper(),
+                    str(tools or ""),
                 ),
             )
             return int(cur.lastrowid or 0)

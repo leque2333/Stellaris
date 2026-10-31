@@ -292,6 +292,107 @@ class GateDecideTest(unittest.TestCase):
         self.assertEqual(decision.tools_out[0], "send_message_to_user")
 
 
+class ArchivePolicyGateTest(unittest.TestCase):
+    """档案级工具策略：不同档案可用不同工具，陌生访客走 _guest。"""
+
+    def _settings(self):
+        settings = json.loads(json.dumps(BASE_SETTINGS))
+        settings["archive_policies"] = {
+            "arc_media": {"mode": "allow", "tools": ["media_demo"]},
+            "arc_deny": {"mode": "deny", "tools": ["server_demo"]},
+            "_guest": {"mode": "allow", "tools": ["send_message_to_user"]},
+        }
+        return settings
+
+    def _decide(self, archive_id, actor_id="master", categories=("media",)):
+        def fake_classifier(*a, **k):
+            return ClassifierResult(
+                ok=True, need_tools=True, categories=list(categories), confidence=0.9
+            )
+
+        gate, _ = _gate(self._settings(), classifier=fake_classifier)
+        return gate.decide(
+            _msgs("放首歌"), TOOLS,
+            channel_id="qq", actor_id=actor_id, archive_id=archive_id,
+        )
+
+    def test_allow_mode_keeps_only_listed_tools(self):
+        decision = self._decide("arc_media")
+        self.assertEqual(decision.tools_out, ["media_demo"])
+        self.assertTrue(decision.archive_policy)
+
+    def test_deny_mode_removes_listed_tools(self):
+        decision = self._decide("arc_deny")
+        self.assertEqual(
+            decision.tools_out,
+            ["mock_tool", "media_demo", "send_message_to_user", "future_task"],
+        )
+        self.assertTrue(decision.archive_policy)
+
+    def test_guest_policy_applies_when_archive_unknown(self):
+        decision = self._decide("")
+        self.assertEqual(decision.tools_out, ["send_message_to_user"])
+        self.assertTrue(decision.archive_policy)
+
+    def test_policy_falls_back_to_actor_id(self):
+        decision = self._decide("arc_unknown", actor_id="arc_deny")
+        self.assertNotIn("server_demo", decision.tools_out)
+        self.assertTrue(decision.archive_policy)
+
+    def test_no_policy_leaves_tools_alone(self):
+        decision = self._decide("arc_master")
+        self.assertFalse(decision.archive_policy)
+        self.assertEqual(
+            decision.tools_out,
+            ["mock_tool", "media_demo", "send_message_to_user", "future_task"],
+        )
+
+
+class ArchivePolicyAdminTest(unittest.TestCase):
+    """工具页「档案策略」的读写：写进 tool_shelves.json，能被 gate 立刻读到。"""
+
+    def setUp(self):
+        self.cfg = _cfg(json.loads(json.dumps(BASE_SETTINGS)))
+
+    def test_update_list_delete_round_trip(self):
+        from agent_core.tool_shelves import admin
+
+        written = admin.update_policy("arc_x", "allow", ["media_demo"], self.cfg)
+        self.assertTrue(written["ok"])
+        policies = admin.list_policies(self.cfg)["policies"]
+        self.assertEqual(policies["arc_x"], {"mode": "allow", "tools": ["media_demo"]})
+
+        removed = admin.delete_policy("arc_x", self.cfg)
+        self.assertTrue(removed["ok"])
+        self.assertNotIn("arc_x", admin.list_policies(self.cfg)["policies"])
+
+    def test_blank_archive_id_writes_guest_policy(self):
+        from agent_core.tool_shelves import admin
+
+        admin.update_policy("", "deny", ["server_demo"], self.cfg)
+        policies = admin.list_policies(self.cfg)["policies"]
+        self.assertIn("_guest", policies)
+        self.assertEqual(policies["_guest"]["mode"], "deny")
+
+    def test_allow_without_tools_rejected(self):
+        from agent_core.tool_shelves import admin
+
+        result = admin.update_policy("arc_y", "allow", [], self.cfg)
+        self.assertFalse(result["ok"])
+        self.assertNotIn("arc_y", admin.list_policies(self.cfg)["policies"])
+
+    def test_invalid_mode_rejected(self):
+        from agent_core.tool_shelves import admin
+
+        result = admin.update_policy("arc_z", "maybe", ["media_demo"], self.cfg)
+        self.assertFalse(result["ok"])
+
+    def test_delete_missing_archive_is_ok(self):
+        from agent_core.tool_shelves import admin
+
+        self.assertTrue(admin.delete_policy("arc_none", self.cfg)["ok"])
+
+
 class ClassifierParseTest(unittest.TestCase):
     def test_parse_plain_json(self):
         result = parse_output(
@@ -605,6 +706,28 @@ class GatewayE2E(unittest.TestCase):
         self.assertIn("choices", body)
         self.assertTrue(body["choices"][0]["message"]["content"])
         self.assertEqual(len(self.upstream.payloads), 1)
+
+    def test_archive_policy_applies_to_gateway(self):
+        """档案级策略要真的作用到发往上游的工具表。
+
+        回归点：archive_id 曾在 _gateway_context 里引用了未定义的 ctx，
+        异常被闸门的 fail-open 吞掉，策略静默失效；这里断言实际效果。
+        """
+        self.upstream.reset()
+        self.upstream.classifier_reply = (
+            '{"need_tools":true,"categories":["media"],"confidence":0.9,"reason":"放歌"}'
+        )
+        with self._with_shelves({
+            "archive_policies": {"arc_master": {"mode": "allow", "tools": ["send_message_to_user"]}},
+        }):
+            self._post({
+                "model": "client-model",
+                "messages": [{"role": "user", "content": "放首歌"}],
+                "tools": TOOLS,
+            })
+        names = [t["function"]["name"] for t in self.upstream.payloads[0].get("tools") or []]
+        self.assertEqual(names, ["send_message_to_user"])
+
 
 
 

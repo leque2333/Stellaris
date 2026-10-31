@@ -473,3 +473,30 @@
         font-size: 15px;
     }
 }
+
+/* 账单来源列 */
+.ledger-source-cell {
+    font-size: 11px;
+    line-height: 1.8;
+    max-width: 170px;
+}
+
+.ledger-source-channel {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.1);
+    color: #6366f1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin-right: 4px;
+}
+
+.ledger-tool-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(5, 150, 105, 0.1);
+    color: #059669;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin: 1px 3px 1px 0;
+}

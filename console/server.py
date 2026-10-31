@@ -535,6 +535,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send_json(self._logs_alerts())
         elif path == '/api/tools':
             self._send_json(self._tools_admin_list())
+        elif path == '/api/tools/policies':
+            self._send_json(self._tools_policies())
         elif path == '/api/messages':
             try:
                 from agent_core import messages as _msgs
@@ -617,6 +619,43 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         from agent_core.tool_shelves.config import ShelfConfig
 
         return ShelfConfig()
+
+    def _tools_policies(self):
+        """档案级工具策略 + 可选档案列表。"""
+        from agent_core.tool_shelves import admin as _admin
+
+        data = _admin.list_policies(self._tool_shelf_cfg())
+        archives = []
+        try:
+            from agent_core.storage import get_store
+
+            store = get_store()
+            for row in store.list_archives() or []:
+                archives.append({
+                    "archive_id": row.get("archive_id"),
+                    "display_name": row.get("display_name"),
+                    "role": row.get("role"),
+                    "status": row.get("status"),
+                })
+        except Exception:
+            pass
+        data["archives"] = archives
+        return data
+
+    def _tools_policy_update(self, body):
+        from agent_core.tool_shelves import admin as _admin
+
+        return _admin.update_policy(
+            str(body.get("archive_id") or ""),
+            str(body.get("mode") or "all"),
+            [str(x) for x in (body.get("tools") or [])],
+            self._tool_shelf_cfg(),
+        )
+
+    def _tools_policy_delete(self, body):
+        from agent_core.tool_shelves import admin as _admin
+
+        return _admin.delete_policy(str(body.get("archive_id") or ""), self._tool_shelf_cfg())
 
     def _tools_admin_list(self):
         """工具页：所有已知工具 + 当前设置。"""
@@ -788,7 +827,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._send_json({'ok': False, 'error': 'uids 必须是非空数组'}, status=400)
         hidden = bool(body.get('hidden', True))
         try:
-            from agent_core.identity_scan import load_hidden, set_hidden
+            from agent_core.identity_scan import set_hidden
 
             now_hidden = set_hidden(uids, hidden=hidden)
             return self._send_json({
@@ -970,6 +1009,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
             return self._tools_admin_update(tool_body)
 
+        # 档案级工具策略
+        if path in ('/api/tools/policy', '/api/tools/policy/delete'):
+            content_length = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(content_length)
+            try:
+                pol_body = json.loads(raw.decode('utf-8')) if raw else {}
+            except Exception:
+                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
+            if path.endswith('/delete'):
+                return self._send_json(self._tools_policy_delete(pol_body))
+            return self._send_json(self._tools_policy_update(pol_body))
+
         # 身份映射：批量把 UID 绑到档案（写白名单 + 请求解析用的绑定）
         if path == '/api/identity/bind':
             content_length = int(self.headers.get('Content-Length', 0))
@@ -1141,7 +1192,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
             try:
                 service = ServiceRegistry(get_store()).register(body)
-            except Exception as exc:
+            except Exception:
                 return self._hub_error('bad_request', status=400)
             return self._send_json(service, status=201)
 
@@ -2728,176 +2779,274 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             ),
         }
 
-    def _gateway_context(self, body):
-        messages = body.get("messages") or []
-        req_model = body.get("model") or "gemini-3.8-flash"
-        stream = bool(body.get("stream", False))
-        trace_id = f"tr_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    def _parse_gateway_request(self, body):
+        """请求体最外层几个字段，缺省值在这里统一兜住。"""
+        return {
+            "messages": body.get("messages") or [],
+            "model": body.get("model") or "gemini-3.8-flash",
+            "stream": bool(body.get("stream", False)),
+            "trace_id": f"tr_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+        }
 
+    def _authenticate_gateway_client(self):
+        """认证 + 限流；失败时返回 (None, 错误码)。"""
         auth_header = self.headers.get("Authorization", "")
-        token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else (
-            self.headers.get("X-Hub-Key") or ""
-        )
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+        else:
+            token = self.headers.get("X-Hub-Key") or ""
         auth = client_registry.resolve(token)
         if auth.error:
-            return {"error": auth.error}
+            return None, auth.error
         profile = auth.profile
-        client_id = profile.id
         if not client_registry.allow_request(profile.id, profile.rate_limit_per_minute):
-            return {"error": "rate_limited"}
+            return None, "rate_limited"
+        return profile, None
 
+    def _resolve_channel_ids(self, profile):
         channel_id = self.headers.get("X-Channel") or profile.channel or "universal_proxy"
         channel_type = str(self.headers.get("X-Channel-Type") or "").strip().lower()
+        return channel_id, channel_type
 
-        # 陌生模块首次通过 /v1 接入：后台登记为模块，并抓一次内部信息卡/二级插件
-        self._maybe_auto_provision()
-
-        user_query = ""
-        for m in reversed(messages):
-            if m.get("role") != "user":
+    def _extract_user_query(self, messages):
+        """取最后一条 user 消息的纯文本。"""
+        for message in reversed(messages):
+            if message.get("role") != "user":
                 continue
-            c = m.get("content")
-            if isinstance(c, str):
-                user_query = c
-            elif isinstance(c, list):
-                user_query = "".join(
-                    sub.get("text", "") for sub in c
-                    if isinstance(sub, dict) and sub.get("type") == "text"
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(
+                    part.get("text", "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
                 )
-            break
+            return ""
+        return ""
 
-        raw_user_id = str(
-            body.get("user") or self.headers.get("X-User-Id") or self.headers.get("X-Actor-Id") or ""
+    def _extract_raw_user_id(self, body, user_query):
+        """优先 body/header 里的显式 ID；没有就从正文的 "(12345):" 前缀里嗅探。"""
+        raw = str(
+            body.get("user")
+            or self.headers.get("X-User-Id")
+            or self.headers.get("X-Actor-Id")
+            or ""
         ).strip()
-        if not raw_user_id and user_query:
-            sniff_id = re.search(r"\((\d{5,12})\):", user_query)
-            if sniff_id:
-                raw_user_id = sniff_id.group(1)
+        if raw or not user_query:
+            return raw
+        sniffed = re.search(r"\((\d{5,12})\):", user_query)
+        return sniffed.group(1) if sniffed else ""
 
-        if user_query:
-            clean_q = re.sub(r"^\[.*?\]\s*", "", user_query)
-            clean_q = re.sub(r"^.*?\(\d{5,12}\):\s*", "", clean_q).strip()
-            if clean_q:
-                user_query = clean_q
+    def _strip_query_prefix(self, user_query):
+        """去掉平台注入的 "[时间]" 和 "昵称(12345):" 前缀。"""
+        if not user_query:
+            return user_query
+        cleaned = re.sub(r"^\[.*?\]\s*", "", user_query)
+        cleaned = re.sub(r"^.*?\(\d{5,12}\):\s*", "", cleaned).strip()
+        return cleaned or user_query
 
+    def _resolve_platform_name(self, body, channel_id):
         from agent_core.identity_binding import infer_platform
-        platform_name = (
+        return (
             self.headers.get("X-Platform")
             or str(body.get("platform") or "")
             or infer_platform(channel_id, self.headers.get("X-External-Id") or "")
             or "web"
         )
-        display_name = _header_text(self.headers.get("X-User-Name"))
-        from agent_core.access_policy import load_policy
-        from agent_core.identity import IdentityResolver
-        access_policy = load_policy()
-        if profile.default_actor == "guest":
-            # 访客客户端不允许通过 body/header 冒充主人
-            actor_id = f"guest_{profile.id}"
-            actor_name = profile.name
-            role_type = "guest"
-        else:
-            actor_id, actor_name, role_type = IdentityResolver.resolve_actor(
-                platform_name, raw_user_id or profile.default_actor or "master", display_name
-            )
 
+    def _resolve_gateway_actor(self, profile, platform_name, raw_user_id, display_name):
+        """访客客户端不许冒充主人；其余交给 IdentityResolver。"""
+        if profile.default_actor == "guest":
+            return f"guest_{profile.id}", profile.name, "guest"
+        from agent_core.identity import IdentityResolver
+        return IdentityResolver.resolve_actor(
+            platform_name, raw_user_id or profile.default_actor or "master", display_name
+        )
+
+    def _resolve_channel_perms(self, profile, channel_id):
+        """客户端自己声明了记忆开关就覆盖模块级默认。"""
         perms = backend.get_module_permissions().get(channel_id, {
             "allow_recall_memory": True,
             "allow_ingest_timeline": True,
         })
-        if profile.id != "legacy":
-            perms = dict(perms)
-            perms["allow_recall_memory"] = profile.allow_recall_memory
-            perms["allow_ingest_timeline"] = profile.allow_ingest_timeline
+        if profile.id == "legacy":
+            return perms
+        perms = dict(perms)
+        perms["allow_recall_memory"] = profile.allow_recall_memory
+        perms["allow_ingest_timeline"] = profile.allow_ingest_timeline
+        return perms
 
-        master_facts, recalled_memories = [], []
-        archive_id = None
-        is_guest = False
+    def _resolve_archive_identity(self, body, actor_id, platform_name, raw_user_id, profile, perms, access_policy):
+        """解析档案 / 访客身份 / 好感度 / 主人事实。
+
+        访客开关关闭时返回 {"error": "guest_disabled"}，由调用方直接拒绝。
+        """
+        from agent_core.identity import IdentityResolver
+        from agent_core.timeline_hub import TimelineHub
+
         bound_archive = self._bound_archive_id(body, raw_user_id)
         master_qq = str(IdentityResolver.get_master_qq() or "").strip()
-        person_id = bound_archive or (
-            master_qq if str(actor_id) in ("master", master_qq) else actor_id
-        )
-        current_affection = None
-        th = None
+        person_id = bound_archive or (master_qq if str(actor_id) in ("master", master_qq) else actor_id)
+        result = {
+            "actor_id": actor_id, "actor_name": profile.name, "role_type": "guest" if actor_id.startswith("guest_") else "user",
+            "perms": perms, "person_id": person_id, "archive_id": None,
+            "is_guest": False, "bound_archive": bound_archive,
+            "affection": None, "master_facts": [],
+        }
         try:
-            from agent_core.timeline_hub import TimelineHub
             th = TimelineHub()
             try:
                 archive = th.profile.archives.resolve_actor(actor_id, platform_name)
-                archive_id = archive["archive_id"] if archive else None
+                result["archive_id"] = archive["archive_id"] if archive else None
             except Exception:
-                archive_id = None
-
+                result["archive_id"] = None
             # 白名单制度：没有档案的人按访客处理；访客开关默认关闭
-            is_guest = not bool(bound_archive or archive_id)
+            is_guest = not bool(bound_archive or result["archive_id"])
             if is_guest:
                 if not access_policy.get("guest_enabled", False):
                     return {"error": "guest_disabled"}
-                safe_uid = re.sub(r"[^0-9A-Za-z_\-]", "_", raw_user_id or profile.id)[:48]
-                actor_id = f"guest_{platform_name}_{safe_uid}"
-                actor_name = display_name or actor_name or profile.name
-                role_type = "guest"
-                person_id = actor_id
-                current_affection = int(access_policy.get("guest_default_affection", 50))
-                perms = dict(perms)
-                perms["allow_recall_memory"] = False
-                perms["allow_ingest_timeline"] = bool(
-                    access_policy.get("guest_timeline_enabled", False)
-                )
-            else:
-                person_id = bound_archive or archive_id or (
-                    master_qq if str(actor_id) in ("master", master_qq) else actor_id
-                )
-                is_master_person = str(actor_id) in ("master", master_qq)
-                current_affection = th.get_user_affection(person_id)
-                if is_master_person:
-                    prof = th.get_user_profile(person_id)
-                    if prof:
-                        master_facts = prof.get("facts", [])
+                return self._build_guest_identity(result, raw_user_id, platform_name, profile, access_policy)
+            return self._build_member_identity(result, th, actor_id, master_qq, bound_archive)
+        except Exception:
+            return result
+
+    def _build_guest_identity(self, result, raw_user_id, platform_name, profile, access_policy):
+        """访客：不能召回记忆，时间轴按开关决定。"""
+        safe_uid = re.sub(r"[^0-9A-Za-z_\-]", "_", raw_user_id or profile.id)[:48]
+        actor_id = f"guest_{platform_name}_{safe_uid}"
+        perms = dict(result["perms"])
+        perms["allow_recall_memory"] = False
+        perms["allow_ingest_timeline"] = bool(access_policy.get("guest_timeline_enabled", False))
+        result.update({
+            "actor_id": actor_id,
+            "role_type": "guest",
+            "person_id": actor_id,
+            "is_guest": True,
+            "perms": perms,
+            "affection": int(access_policy.get("guest_default_affection", 50)),
+        })
+        return result
+
+    def _build_member_identity(self, result, timeline_hub, actor_id, master_qq, bound_archive):
+        """有档案的人：读好感度；主人再额外读一次长期事实。"""
+        person_id = bound_archive or result["archive_id"] or (
+            master_qq if str(actor_id) in ("master", master_qq) else actor_id
+        )
+        result["person_id"] = person_id
+        result["affection"] = timeline_hub.get_user_affection(person_id)
+        if str(actor_id) in ("master", master_qq):
+            profile_row = timeline_hub.get_user_profile(person_id)
+            if profile_row:
+                result["master_facts"] = profile_row.get("facts", [])
+        return result
+
+    def _collect_recall_memories(self, timeline_hub, user_query, actor_id, person_id, channel_id, channel_type):
+        """向量召回 + FTS5 精确子串补充。"""
+        from agent_core.memory.embedding import embed_text_list
+
+        group_chat = channel_type == "group" or "group" in channel_id.lower()
+        is_master = str(actor_id) in ("master", "master")
+        recalls = timeline_hub.recall_timeline(
+            actor_id=actor_id, query=user_query, person_id=person_id,
+            query_embedding=embed_text_list(user_query),
+            limit=(8 if (group_chat or is_master) else 2),
+            include_all_actors=False, channel_id=channel_id,
+            include_channel=(group_chat and not is_master),
+            exclude_group=(not group_chat and not is_master),
+        )
+        lines = self._format_recall_lines(timeline_hub, recalls)
+        lines.extend(self._recall_exact_hits(timeline_hub, user_query, person_id, recalls))
+        return lines
+
+    def _format_recall_lines(self, timeline_hub, recalls):
+        """前两条带上原话，后面只给摘要。"""
+        lines = []
+        for index, recall in enumerate(recalls):
+            line = f"[{recall.event.time_str}] {recall.event.narrative}"
+            if index < 2 and getattr(recall.event, "detail_id", ""):
+                original = self._read_recall_detail(timeline_hub, recall.event.detail_id)
+                if original:
+                    line += f"\n原话：{str(original)[:280]}"
+            lines.append(line)
+        return lines
+
+    def _read_recall_detail(self, timeline_hub, detail_id):
+        try:
+            row = timeline_hub.store.get_detail(detail_id)
+            data = json.loads(row["content"]) if row and row.get("content") else {}
+            message = data.get("message") or {}
+            return message.get("content") or data.get("content") or ""
+        except Exception:
+            return ""
+
+    def _recall_exact_hits(self, timeline_hub, user_query, person_id, recalls):
+        """FTS5 兜底：人名、标题、暗号这类精确词，向量召回容易漏。"""
+        try:
+            from agent_core.memory.facts import FactStore
+
+            seen_ids = {item.event.event_id for item in recalls}
+            rows = FactStore(timeline_hub.store).search_episodes(user_query, person_id=person_id, limit=4)
+            return [
+                f"[{row.get('time_str') or ''}] {row.get('narrative') or ''}（精确命中）"
+                for row in rows if row["event_id"] not in seen_ids
+            ]
+        except Exception:
+            return []
+
+    def _gateway_context(self, body):
+        request = self._parse_gateway_request(body)
+        messages = request["messages"]
+        req_model = request["model"]
+        stream = request["stream"]
+        trace_id = request["trace_id"]
+        profile, auth_error = self._authenticate_gateway_client()
+        if auth_error:
+            return {"error": auth_error}
+        client_id = profile.id
+        channel_id, channel_type = self._resolve_channel_ids(profile)
+
+        # 陌生模块首次通过 /v1 接入：后台登记为模块，并抓一次内部信息卡/二级插件
+        self._maybe_auto_provision()
+
+        user_query = self._strip_query_prefix(self._extract_user_query(messages))
+        raw_user_id = self._extract_raw_user_id(body, user_query)
+        platform_name = self._resolve_platform_name(body, channel_id)
+        display_name = _header_text(self.headers.get("X-User-Name"))
+
+        from agent_core.access_policy import load_policy
+        access_policy = load_policy()
+        actor_id, actor_name, role_type = self._resolve_gateway_actor(
+            profile, platform_name, raw_user_id, display_name
+        )
+        perms = self._resolve_channel_perms(profile, channel_id)
+
+
+        identity = self._resolve_archive_identity(
+            body, actor_id, platform_name, raw_user_id, profile, perms, access_policy
+        )
+        if identity.get("error"):
+            return {"error": identity["error"]}
+
+        actor_id = identity["actor_id"]
+        actor_name = identity["actor_name"]
+        role_type = identity["role_type"]
+        perms = identity["perms"]
+        person_id = identity["person_id"]
+        archive_id = identity["archive_id"]
+        is_guest = identity["is_guest"]
+        bound_archive = identity["bound_archive"]
+        current_affection = identity["affection"]
+        master_facts = identity["master_facts"]
+
+        recalled_memories = []
+        try:
+            from agent_core.timeline_hub import TimelineHub
+            th = TimelineHub()
             if not is_guest and perms.get("allow_recall_memory", True) and len(user_query) >= 2:
-                group_chat = channel_type == "group" or "group" in channel_id.lower()
-                is_master = is_master_person
-                from agent_core.memory.embedding import embed_text_list
-                recalls = th.recall_timeline(
-                    actor_id=actor_id, query=user_query,
-                    person_id=person_id,
-                    query_embedding=embed_text_list(user_query),
-                    limit=(8 if (group_chat or is_master) else 2),
-                    include_all_actors=False,
-                    channel_id=channel_id,
-                    include_channel=(group_chat and not is_master),
-                    exclude_group=(not group_chat and not is_master),
+                recalled_memories = self._collect_recall_memories(
+                    th, user_query, actor_id, person_id, channel_id, channel_type
                 )
-                recalled_memories = []
-                for idx, recall in enumerate(recalls):
-                    line = f"[{recall.event.time_str}] {recall.event.narrative}"
-                    if idx < 2 and getattr(recall.event, "detail_id", ""):
-                        try:
-                            row = th.store.get_detail(recall.event.detail_id)
-                            data = json.loads(row["content"]) if row and row.get("content") else {}
-                            message = data.get("message") or {}
-                            original = message.get("content") or data.get("content") or ""
-                            if original:
-                                line += f"\n原话：{str(original)[:280]}"
-                        except Exception:
-                            pass
-                    recalled_memories.append(line)
-                # FTS5 精确子串补充，解决人名/标题/暗号这类精确词
-                try:
-                    from agent_core.memory.facts import FactStore
-                    seen_ids = {item.event.event_id for item in recalls}
-                    exact = FactStore(th.store).search_episodes(
-                        user_query, person_id=person_id, limit=4
-                    )
-                    for row in exact:
-                        if row["event_id"] in seen_ids:
-                            continue
-                        recalled_memories.append(
-                            f"[{row.get('time_str') or ''}] {row.get('narrative') or ''}（精确命中）"
-                        )
-                except Exception:
-                    pass
         except Exception:
             pass
 
@@ -2987,6 +3136,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     platform=platform_name,
                     channel_type=channel_type,
                     client_perms=getattr(profile, "tool_permissions", None),
+                    # 档案级工具策略要的是本轮解析出的档案 ID，ctx 此时还没构建
+                    archive_id=str(archive_id or ""),
                 )
                 if denied and not decision.applied:
                     decision.applied = True
@@ -3108,11 +3259,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
-    def _gateway_record(self, ctx, content, p_in, p_out, has_tool_calls=False, detail_id=""):
+    def _gateway_record(self, ctx, content, p_in, p_out, has_tool_calls=False, detail_id="", tool_calls=None):
+        # 把本轮实际调用的工具名记进账本，方便按「通道 + 工具」归因
+        names = []
+        for _tc in (tool_calls or []):
+            _fn = ((_tc or {}).get("function") or {}).get("name")
+            if _fn and _fn not in names:
+                names.append(str(_fn))
+        tools = ",".join(names)
+        if tools:
+            has_tool_calls = True
         try:
             backend.record_token_usage_event(
                 ctx.get("actual_model") or ctx["req_model"],
-                p_in, p_out, source=ctx["channel_id"],
+                p_in, p_out, source=ctx["channel_id"], tools=tools,
             )
         except Exception:
             pass
@@ -3437,6 +3597,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             }, invocation_id=inv_model or inv_channel)
         event_id = self._gateway_record(
             ctx, content, p_in, p_out, bool(tool_calls), detail_id=detail_id or "",
+            tool_calls=tool_calls,
         )
 
         if store:
@@ -3582,6 +3743,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             }, invocation_id=inv_model or inv_channel)
         event_id = self._gateway_record(
             ctx, content, p_in, p_out, accum.tool_calls, detail_id=detail_id or "",
+            tool_calls=accum.tool_calls,
         )
 
         if store:

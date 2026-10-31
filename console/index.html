@@ -325,6 +325,7 @@
                                     <th style="width: 120px;">流水单号</th>
                                     <th style="width: 130px;">凭证归属</th>
                                     <th>调用模型 / 服务商</th>
+                                    <th style="width: 150px;">来源</th>
                                     <th>输入 Tokens</th>
                                     <th>缓存命中</th>
                                     <th>输出 Tokens</th>
@@ -587,10 +588,17 @@
                         <button class="btn btn-secondary" onclick="loadToolsPage()">刷新</button>
                     </div>
                 </div>
+                <div class="tools-toolbar">
+                    <label class="tools-target-label">权限视角</label>
+                    <select id="tools-policy-target" class="tools-target-select" onchange="onToolsTargetChange(this.value)">
+                        <option value="__global__">全局配置（所有档案共用）</option>
+                    </select>
+                </div>
                 <div id="tools-summary" class="tools-summary"></div>
                 <div id="tools-list" class="tools-list">
                     <div class="archive-empty">打开本页会自动加载。</div>
                 </div>
+                <div id="tools-policy-panel" class="tools-policy-panel" style="display: none;"></div>
             </section>
 
             <!-- Tab: 身份映射 -->
@@ -928,7 +936,7 @@
             <div class="form-grid" style="margin-top: 16px;">
                 <div class="form-group">
                     <label class="form-label">显示名称</label>
-                    <input class="form-input" id="archive-create-name" placeholder="例如：主人">
+                    <input class="form-input" id="archive-create-name" placeholder="例如：乐阙">
                 </div>
                 <div class="form-group">
                     <label class="form-label">档案级别</label>

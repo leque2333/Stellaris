@@ -56,6 +56,7 @@ class Decision:
     classifier_completion_tokens: int = 0
     unknown_tools: List[str] = field(default_factory=list)
     denied: List[str] = field(default_factory=list)
+    archive_policy: bool = False
     session_key: str = ""
     misfire: bool = False
     classifier_model: str = ""
@@ -116,6 +117,7 @@ class ToolGate:
         platform: str = "",
         channel_type: str = "",
         client_perms: Optional[Dict[str, Any]] = None,
+        archive_id: str = "",
     ) -> Decision:
         started = time.time()
         session_key = ""
@@ -136,7 +138,7 @@ class ToolGate:
         try:
             return self._decide(
                 decision, messages, tools, channel_id, actor_id,
-                client_id, platform, channel_type, client_perms,
+                client_id, platform, channel_type, client_perms, archive_id,
             )
         except Exception as exc:  # 绝不允许闸门把对话弄挂
             logger.warning("[ToolShelves] 闸门异常，全量放行: %s", exc)
@@ -225,6 +227,28 @@ class ToolGate:
         available = set(catalog.tool_names(tools))
         return available & set(names or [])
 
+    def _archive_policy_denied(self, archive_id: str, actor_id: str, tools) -> set:
+        """档案策略 → 要剔除的工具集合。
+
+        mode=all   不限制
+        mode=allow 只保留 tools 列表里的，其余剔除
+        mode=deny  剔除 tools 列表里的
+        archive_id 为空（陌生访客）时用 _guest 策略。
+        """
+        policy = self.cfg.archive_policy(archive_id)
+        if not policy and actor_id:
+            policy = self.cfg.archive_policy(actor_id)
+        if not policy:
+            return set()
+        mode = str(policy.get("mode") or "all").strip().lower()
+        if mode not in ("allow", "deny"):
+            return set()
+        listed = {str(x) for x in (policy.get("tools") or []) if x}
+        names = catalog.tool_names(tools)
+        if mode == "allow":
+            return {n for n in names if n not in listed}
+        return {n for n in names if n in listed}
+
     def _denied_tools(self, decision: Decision, tools, client_id, client_perms) -> set:
         """硬拒绝集合：三层叠加，任何一层命中都算拒绝。
 
@@ -268,7 +292,7 @@ class ToolGate:
     # ---------------- 内部 ----------------
     def _decide(
         self, decision: Decision, messages, tools, channel_id, actor_id,
-        client_id, platform, channel_type, client_perms=None,
+        client_id, platform, channel_type, client_perms=None, archive_id="",
     ) -> Decision:
         decision.session_key = self.sessions.key(channel_id, actor_id)
         decision.tools_in = catalog.tool_names(tools)
@@ -283,6 +307,14 @@ class ToolGate:
 
         # 0) 权限硬拒绝：即使闸门关闭/客户端豁免，也必须生效
         denied = self._denied_tools(decision, tools, client_id, client_perms)
+        # 档案级工具策略：不同档案可用不同工具；陌生访客走 _guest
+        try:
+            policy_denied = self._archive_policy_denied(archive_id, actor_id, tools)
+            if policy_denied:
+                denied |= policy_denied
+                decision.archive_policy = True
+        except Exception:
+            pass
         decision.denied = sorted(denied)
 
         # 1) 没有工具 / 闸门关闭

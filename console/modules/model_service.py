@@ -791,6 +791,9 @@ def _describe_recent_row(row) -> dict:
         "cache_tokens": row["cache_tokens"],
         "cached": row["cache_tokens"],
         "source": row["source"],
+        # 账本「来源」列：通道 + 本轮实际用到的工具（逗号分隔）
+        "session_type": row["session_type"] or "",
+        "tools": row["tools"] or "",
     }
 
 
@@ -828,7 +831,7 @@ def _fetch_recent_entries(cursor, limit: int = 30) -> list:
     cursor.execute("""
         SELECT id, timestamp, model AS model_id, prompt_tokens AS input_tokens,
                completion_tokens AS output_tokens, cached_tokens AS cache_tokens,
-               source, cost_usd, credential_type, currency
+               source, session_type, tools, cost_usd, credential_type, currency
         FROM token_usage
         ORDER BY timestamp DESC
         LIMIT ?

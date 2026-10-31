@@ -4,8 +4,8 @@
 > 交接时间：2026-10-30（追加：工具按需加载 P1–P2 已上线）  
 > 生产目录：`D:\机器人_完整版`  
 > 开发目录：`D:\机器人`  
-> 生产数据库 schema：**24**  
-> 当前测试：**312 项**（全部通过）
+> 生产数据库 schema：**26**  
+> 当前测试：**310 项**（全部通过）
 
 ---
 
@@ -121,7 +121,7 @@ D:\机器人_完整版
 │  ├─ upstream_models_cache.json
 │  └─ persona.md          # 人格文件
 ├─ docs\                       # 架构/接入/记忆层文档
-├─ tests\                      # 312 个测试
+├─ tests\                      # 310 个测试
 ├─ backups\                    # 迁移/清理备份
 └─ logs\
 ```
@@ -228,7 +228,7 @@ python -m unittest discover -s tests -t .
 交接时结果：
 
 ```text
-Ran 216 tests
+Ran 310 tests
 OK
 ```
 
@@ -361,13 +361,14 @@ token_usage_ledger    # 兼容视图
 
 `schema_migrations` 记录迁移。
 
-### 6.2 v24 账本字段
+### 6.2 v24 账本字段（v26 补 tools 列）
 
 `token_usage` 新增：
 
 ```text
 credential_type TEXT   # master / function / recharge / ''
 currency TEXT          # USD / CNY
+tools TEXT             # v26：本轮实际调用的工具名，逗号分隔（账本「来源」列）
 ```
 
 账本分组：
@@ -775,7 +776,7 @@ input 0.75 / cache 0.075 / output 3.75
 6. 凭证弹窗去掉滑动动画、重复叉、外部保存；改为右上角操作。
 7. iPad / 窄屏弹窗适配。
 8. 价格单位 USD / CNY 选择，不换算。
-9. 账本 schema v24，按 `credential_type + currency` 分桶。
+9. 账本 schema v24，按 `credential_type + currency` 分桶；v26 再补 `tools` 列（通道 + 工具归因）。
 10. 账本页增加分组卡片。
 11. 设置增加“清空账本”。
 12. 首页容器加宽、详情换行、iPad 两列布局。
@@ -1211,7 +1212,7 @@ input_price / cache_price / output_price / currency
 
 1. 先确认 `18895`、nginx、AstrBot、NapCat 各自状态。
 2. 用浏览器登录，确认首页、凭证、账本三个页面正常。
-3. 跑一次 `312` 测试。
+3. 跑一次 `310` 测试。
 4. 备份 `memory.db` / `memory_graph.db` / `models_config.json` / `compute_providers.json`。
 5. 确认 AstrBot 的 provider 指向 `http://192.168.3.4:18895/v1`，模型为 `gemini-3.8-flash`。
 6. 确认 AstrBot embedding/知识库仍关闭。
@@ -1228,7 +1229,7 @@ input_price / cache_price / output_price / currency
 | `console/index.html` | 控制台页面 |
 | `console/modules/model_service.py` | 凭证/定价/账本聚合 |
 | `console/modules/system_service.py` | 账本写入/归属推断/回填 |
-| `agent_core/storage/schema.py` | 数据库迁移（当前 v24） |
+| `agent_core/storage/schema.py` | 数据库迁移（当前 v26） |
 | `agent_core/storage/sqlite_store.py` | SQLite 读写 |
 | `agent_core/memory/__init__.py` | 记忆门面 |
 | `agent_core/profile/archives.py` | 档案/身份 |
@@ -1280,8 +1281,8 @@ input_price / cache_price / output_price / currency
 - [ ] 停用凭证只读
 - [ ] 账本分桶卡片正常
 - [ ] 清空账本已备份
-- [ ] 216 测试通过
-- [ ] 生产数据库 schema 24
+- [ ] 310 测试通过
+- [ ] 生产数据库 schema 26
 - [ ] 档案只有 `arc_master`，没有多余自动档案
 - [ ] 访客策略仍为默认关闭
 - [ ] 不在文档/聊天中泄露 API Key

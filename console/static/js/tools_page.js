@@ -6,6 +6,9 @@ const toolsState = {
     categories: [],
     current: null,
     loaded: false,
+    policies: {},
+    archives: [],
+    target: '__global__',
 };
 
 function toolsEsc(value) {
@@ -75,6 +78,8 @@ async function loadToolsPage() {
         toolsState.categories = Array.isArray(data.categories) ? data.categories : [];
         toolsState.loaded = true;
         renderToolsList();
+        await loadPolicies();
+        renderPolicyPanel();
         if (window.location.hash === '#tools-edit' && toolsState.items.length) {
             openToolEditor(toolsState.items[0].name);
         }
@@ -148,6 +153,148 @@ async function saveToolEditor() {
         await loadToolsPage();
     } catch (e) {
         if (typeof showToast === 'function') showToast('保存失败：' + (e.message || e));
+    }
+}
+
+// ---------------- 档案级工具权限 ----------------
+const POLICY_GUEST = '__guest__';
+
+function onToolsTargetChange(value) {
+    toolsState.target = value || '__global__';
+    renderPolicyPanel();
+}
+
+function renderTargets() {
+    const sel = document.getElementById('tools-policy-target');
+    if (!sel) return;
+    const current = toolsState.target || '__global__';
+    const opts = ['<option value="__global__">全局配置（所有档案共用）</option>'];
+    const policies = toolsState.policies || {};
+    (toolsState.archives || []).forEach(function (a) {
+        const id = a.archive_id || '';
+        if (!id) return;
+        const name = a.display_name || id;
+        const mark = policies[id] ? ' · 已配置' : '';
+        opts.push(`<option value="${toolsEsc(id)}">${toolsEsc(name)}（${toolsEsc(id)}）${mark}</option>`);
+    });
+    const guestMark = policies[POLICY_GUEST] ? ' · 已配置' : '';
+    opts.push(`<option value="${POLICY_GUEST}">陌生访客（无档案）${guestMark}</option>`);
+    sel.innerHTML = opts.join('');
+    sel.value = current;
+}
+
+function renderPolicyPanel() {
+    const panel = document.getElementById('tools-policy-panel');
+    const list = document.getElementById('tools-list');
+    const summary = document.getElementById('tools-summary');
+    if (!panel) return;
+    const target = toolsState.target || '__global__';
+
+    if (target === '__global__') {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        if (list) list.style.display = '';
+        if (summary) summary.style.display = '';
+        return;
+    }
+
+    if (list) list.style.display = 'none';
+    if (summary) summary.style.display = 'none';
+    panel.style.display = '';
+
+    const policy = (toolsState.policies || {})[target] || { mode: 'all', tools: [] };
+    const mode = policy.mode || 'all';
+    const selected = new Set(policy.tools || []);
+    const label = target === POLICY_GUEST
+        ? '陌生访客（无档案）'
+        : ((toolsState.archives || []).find((a) => a.archive_id === target) || {}).display_name || target;
+
+    const rows = (toolsState.items || []).map(function (tool) {
+        const checked = selected.has(tool.name) ? 'checked' : '';
+        return `
+            <label class="policy-tool-row">
+                <input type="checkbox" value="${toolsEsc(tool.name)}" ${checked} />
+                <span class="tool-name">${toolsEsc(tool.name)}</span>
+                <span class="tool-source">${toolsEsc(tool.source_group || '')}</span>
+            </label>`;
+    }).join('');
+
+    panel.innerHTML = `
+        <div class="policy-head">
+            <div class="policy-title">${toolsEsc(label)} 的工具权限</div>
+            <div class="policy-hint">留空并选「全部工具」= 该档案不受限；白名单 = 只给勾选的；黑名单 = 除了勾选的全给。</div>
+        </div>
+        <div class="policy-mode-row">
+            <label class="tool-choice"><input type="radio" name="policy-mode" value="all" ${mode === 'all' ? 'checked' : ''} onchange="onPolicyModeChange()" /> <span><b>全部工具</b>　不受限</span></label>
+            <label class="tool-choice"><input type="radio" name="policy-mode" value="allow" ${mode === 'allow' ? 'checked' : ''} onchange="onPolicyModeChange()" /> <span><b>白名单</b>　只给勾选的</span></label>
+            <label class="tool-choice"><input type="radio" name="policy-mode" value="deny" ${mode === 'deny' ? 'checked' : ''} onchange="onPolicyModeChange()" /> <span><b>黑名单</b>　除了勾选的全给</span></label>
+        </div>
+        <div class="policy-tools ${mode === 'all' ? 'is-disabled' : ''}" id="policy-tools">${rows || '<div class="archive-empty">还没有工具</div>'}</div>
+        <div class="policy-actions">
+            <button class="btn btn-secondary" onclick="deletePolicy('${toolsEsc(target)}')">清除该档案配置</button>
+            <button class="btn btn-primary" onclick="savePolicy('${toolsEsc(target)}')">保存</button>
+        </div>`;
+    onPolicyModeChange();
+}
+
+function onPolicyModeChange() {
+    const mode = (document.querySelector('input[name="policy-mode"]:checked') || {}).value || 'all';
+    const box = document.getElementById('policy-tools');
+    if (box) {
+        box.classList.toggle('is-disabled', mode === 'all');
+    }
+}
+
+async function savePolicy(target) {
+    const mode = (document.querySelector('input[name="policy-mode"]:checked') || {}).value || 'all';
+    const tools = Array.from(document.querySelectorAll('#policy-tools input[type="checkbox"]:checked'))
+        .map((el) => el.value);
+    if (mode !== 'all' && !tools.length) {
+        alert('白名单 / 黑名单模式下至少要勾一个工具');
+        return;
+    }
+    try {
+        const res = await fetch('/api/tools/policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archive_id: target === POLICY_GUEST ? '' : target, mode: mode, tools: tools }),
+        });
+        const data = await res.json();
+        if (!data.ok) { alert(data.error || '保存失败'); return; }
+        await loadPolicies();
+        renderPolicyPanel();
+    } catch (e) {
+        alert('保存失败：' + e.message);
+    }
+}
+
+async function deletePolicy(target) {
+    if (!confirm('清除这个档案的工具配置？')) return;
+    try {
+        const res = await fetch('/api/tools/policy/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archive_id: target === POLICY_GUEST ? '' : target }),
+        });
+        const data = await res.json();
+        if (!data.ok) { alert(data.error || '清除失败'); return; }
+        await loadPolicies();
+        renderPolicyPanel();
+    } catch (e) {
+        alert('清除失败：' + e.message);
+    }
+}
+
+async function loadPolicies() {
+    try {
+        const res = await fetch('/api/tools/policies');
+        const data = await res.json();
+        toolsState.policies = data.policies || {};
+        toolsState.archives = data.archives || [];
+        renderTargets();
+    } catch (e) {
+        toolsState.policies = {};
+        toolsState.archives = [];
     }
 }
 

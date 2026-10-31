@@ -103,6 +103,21 @@
         container.innerHTML = accountingRow(master, 'master') + accountingRow(func, 'function');
     }
 
+    function renderSourceCell(record) {
+        const channel = String(record.session_type || record.source || '').trim();
+        const tools = String(record.tools || '').trim();
+        if (!channel && !tools) return '<span class="ledger-muted-cell">--</span>';
+        const parts = [];
+        if (channel) parts.push(`<span class="ledger-source-channel">${escapeHtml(channel)}</span>`);
+        if (tools) {
+            const names = tools.split(',').filter(Boolean);
+            names.forEach(function (n) {
+                parts.push(`<span class="badge ledger-tool-badge">${escapeHtml(n)}</span>`);
+            });
+        }
+        return parts.join(' ');
+    }
+
     function renderCredentialCell(record) {
         const kind = String(record.credential_type || '');
         const isRecharge = Boolean(record.is_recharge || RECHARGE_SOURCES.has(record.source));
@@ -142,7 +157,7 @@
         if (!tableBody) return;
 
         if (!records.length) {
-            tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 36px 16px;">暂无大模型调用流水记录</td></tr>';
+            tableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 36px 16px;">暂无大模型调用流水记录</td></tr>';
             return;
         }
 
@@ -157,6 +172,7 @@
                         <td class="ledger-id-cell">#${escapeHtml(idText)}</td>
                         <td>${renderCredentialCell(record)}</td>
                         <td><span class="badge" style="background: rgba(34, 197, 94, 0.12); color: #059669; font-weight: 600;">+ 额度充值</span></td>
+                        <td class="ledger-muted-cell">--</td>
                         <td class="ledger-muted-cell">--</td>
                         <td class="ledger-muted-cell">--</td>
                         <td class="ledger-muted-cell">--</td>
@@ -175,6 +191,7 @@
                     <td class="ledger-id-cell">#${escapeHtml(idText)}</td>
                     <td>${renderCredentialCell(record)}</td>
                     <td class="ledger-model-cell">${escapeHtml(modelName)}</td>
+                    <td class="ledger-source-cell">${renderSourceCell(record)}</td>
                     <td class="font-mono">${inTok}</td>
                     <td class="font-mono ledger-muted-cell">${cacheTok}</td>
                     <td class="font-mono">${outTok}</td>
@@ -187,7 +204,7 @@
     async function loadDetailedLedger() {
         const tableBody = document.getElementById('ledger-detailed-body');
         if (tableBody) {
-            tableBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:28px 16px;">正在读取流水...</td></tr>';
+            tableBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:28px 16px;">正在读取流水...</td></tr>';
         }
 
         try {
@@ -209,7 +226,7 @@
         } catch (e) {
             console.warn('Load detailed ledger failed:', e);
             if (tableBody) {
-                tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #ef4444; padding: 36px 16px;">流水加载失败，请刷新重试</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #ef4444; padding: 36px 16px;">流水加载失败，请刷新重试</td></tr>';
             }
         }
     }

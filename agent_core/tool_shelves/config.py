@@ -179,6 +179,33 @@ class ShelfConfig:
         """需要管理员提权才能自动调用的工具。"""
         return [str(t) for t in (self.get().get("approval_tools") or []) if t]
 
+    def archive_policies(self) -> Dict[str, Dict[str, Any]]:
+        """按档案（或访客）区分的工具权限。
+
+        结构：{"arc_master": {"mode": "all"},
+               "arc_person_x": {"mode": "allow", "tools": [...]},
+               "_guest": {"mode": "allow", "tools": [...]}}
+        mode: all=不限制 / allow=只给列表 / deny=除了列表都给
+        """
+        raw = self.get().get("archive_policies") or {}
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for key, spec in raw.items():
+            if isinstance(spec, dict):
+                out[str(key)] = spec
+        return out
+
+    def archive_policy(self, key: str) -> Dict[str, Any]:
+        """取某档案的策略；key 为空时落到陌生访客 _guest。"""
+        policies = self.archive_policies()
+        name = str(key or "").strip()
+        if name and name in policies:
+            return policies[name]
+        if not name and "_guest" in policies:
+            return policies["_guest"]
+        return {}
+
     def category_by_tool(self) -> Dict[str, List[str]]:
         mapping: Dict[str, List[str]] = {}
         for cat, spec in self.categories().items():
