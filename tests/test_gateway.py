@@ -271,6 +271,20 @@ class GatewayE2ETest(unittest.TestCase):
             payload = json.loads(resp.read().decode("utf-8"))
         self.assertIn("data", payload)
 
+    def test_anonymous_console_write_rejected(self):
+        """控制台写接口必须登录：/api/tools、/api/tools/policy、/api/archives 曾经是公开的。"""
+        for path in ("/api/tools", "/api/tools/policy", "/api/archives"):
+            request = urllib.request.Request(
+                self._url(path),
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(request, timeout=10)
+            self.assertEqual(ctx.exception.code, 401, path)
+            ctx.exception.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

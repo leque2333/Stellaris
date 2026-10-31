@@ -31,7 +31,6 @@ import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import backend
@@ -214,7 +213,7 @@ _STATIC_CONTENT_TYPES = {
 }
 
 # 早期「连接管理」模块的路径，全部 404
-_REMOVED_GET_PREFIXES = (
+_REMOVED_PATH_PREFIXES = (
     '/api/connection', '/api/modules', '/api/hosts', '/api/contexts',
     '/api/components', '/api/services', '/api/mcp', '/api/tool-permissions',
     '/api/bridges', '/api/plugins', '/api/execution_ai', '/qq/events',
@@ -251,6 +250,37 @@ _CONSOLE_GET_ROUTES = {
     '/api/messages': '_get_messages',
 }
 
+
+# 控制台 POST 路由表：路径 → (方法名, 是否需要登录)
+_POST_ROUTES = {
+    '/api/tools/shelves/reload': ('_post_shelves_reload', True),
+    '/api/tools/shelves/metrics/reset': ('_post_shelves_metrics_reset', True),
+    '/api/tools/clean': ('_post_tool_clean', False),
+    '/api/tools': ('_post_tool_update', True),
+    '/api/tools/policy': ('_post_tool_policy', True),
+    '/api/tools/policy/delete': ('_post_tool_policy_delete', True),
+    '/api/identity/bind': ('_post_identity_bind', True),
+    '/api/identity/hide': ('_post_identity_hide', True),
+    '/api/ledger/clear': ('_post_ledger_clear', True),
+    '/api/access_policy': ('_post_access_policy', True),
+    '/api/memory/facts/rollback': ('_post_fact_rollback', True),
+    '/api/memory/facts': ('_post_fact_upsert', True),
+    '/api/auth/login': ('_post_login', False),
+    '/api/auth/logout': ('_post_logout', False),
+    '/api/auth/change_password': ('_post_change_password', True),
+    '/api/connectors/scan': ('_post_connectors_scan', False),
+    '/api/adapters/analyze': ('_post_adapter_analyze', False),
+    '/api/adapters/generate': ('_post_adapter_generate', False),
+    '/api/adapters/attach': ('_post_adapter_attach', False),
+    '/api/bindings': ('_post_bindings', True),
+    '/api/persona': ('_post_persona', True),
+    '/api/persona/rules': ('_post_persona_rules', True),
+    '/api/models/sync_upstream': ('_post_models_sync', True),
+    '/api/models_config': ('_post_models_config', True),
+    '/api/credits': ('_post_credits', True),
+    '/api/compute/config': ('_post_compute_config', True),
+    '/api/compute/test': ('_post_compute_test', True),
+}
 
 class ConsoleHandler(BaseHTTPRequestHandler):
     # 高频轮询不写访问日志，避免把运行日志刷屏
@@ -328,7 +358,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split('?')[0]
         # 早期「连接管理」模块已下线，这些前缀统一 404，别让前端以为还能用
-        if path.startswith(_REMOVED_GET_PREFIXES):
+        if path.startswith(_REMOVED_PATH_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
         if self._serve_public_page(path):
             return
@@ -1013,1037 +1043,350 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0]
-
-        # 工具货架：热重载配置 / 清空统计（登录由下方 /api/ 统一校验）
-        if path == '/api/tools/shelves/reload':
-            if not self._is_authenticated():
-                return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
-            if tool_gate is None:
-                return self._send_json({'ok': False, 'error': 'tool gate 未初始化'}, status=500)
-            tool_gate.cfg.reload(force=True)
-            return self._send_json({'ok': True, 'enabled': tool_gate.cfg.enabled(),
-                                    'config_error': tool_gate.cfg.load_error()})
-        if path == '/api/tools/shelves/metrics/reset':
-            if not self._is_authenticated():
-                return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
-            try:
-                from agent_core.tool_shelves.metrics import metrics as shelf_metrics
-                shelf_metrics.reset()
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=500)
-            return self._send_json({'ok': True})
-
-        # P4 薄壳 MCP：外部薄壳把工具生肉交过来，用同一套清洗逻辑压缩。
-        # 放在 body 解析之后：这里既不要求 Web 登录（薄壳在容器里），也不用 Key 拦截（走接口内校验）。
-        if path == '/api/tools/clean':
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
-            try:
-                clean_body = json.loads(post_data.decode('utf-8')) if post_data else {}
-            except Exception:
-                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
-            return self._handle_tool_clean(clean_body)
-
-        # 工具设置：改一个工具的模式/提权
-        if path == '/api/tools':
-            content_length = int(self.headers.get('Content-Length', 0))
-            raw = self.rfile.read(content_length)
-            try:
-                tool_body = json.loads(raw.decode('utf-8')) if raw else {}
-            except Exception:
-                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
-            return self._tools_admin_update(tool_body)
-
-        # 档案级工具策略
-        if path in ('/api/tools/policy', '/api/tools/policy/delete'):
-            content_length = int(self.headers.get('Content-Length', 0))
-            raw = self.rfile.read(content_length)
-            try:
-                pol_body = json.loads(raw.decode('utf-8')) if raw else {}
-            except Exception:
-                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
-            if path.endswith('/delete'):
-                return self._send_json(self._tools_policy_delete(pol_body))
-            return self._send_json(self._tools_policy_update(pol_body))
-
-        # 身份映射：批量把 UID 绑到档案（写白名单 + 请求解析用的绑定）
-        if path == '/api/identity/bind':
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
-            try:
-                bind_body = json.loads(post_data.decode('utf-8')) if post_data else {}
-            except Exception:
-                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
-            return self._identity_bind(bind_body)
-
-        # 身份映射：隐藏 / 显示 UID
-        if path == '/api/identity/hide':
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length)
-            try:
-                hide_body = json.loads(post_data.decode('utf-8')) if post_data else {}
-            except Exception:
-                return self._send_json({'ok': False, 'error': 'Invalid JSON'}, status=400)
-            return self._identity_hide(hide_body)
-
-        if path.startswith((
-            '/api/connection', '/api/modules', '/api/hosts', '/api/contexts',
-            '/api/components', '/api/services', '/api/mcp', '/api/tool-permissions',
-            '/api/bridges', '/api/plugins', '/api/execution_ai', '/qq/events',
-        )):
+        # 「已下线」前缀先拦，免得白读一遍 body
+        if path.startswith(_REMOVED_PATH_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
-        try:
-            body = json.loads(post_data.decode('utf-8')) if post_data else {}
-        except Exception:
-            return self._send_json({"error": "Invalid JSON"}, status=400)
-
-        # NapCat / OneBot 11 HTTP 上报（不经过 AstrBot）
-        if path == '/qq/events':
-            from agent_core.onebot_service import OneBotService
-
-            expected = OneBotService().token
-            auth = str(self.headers.get('Authorization') or '')
-            if auth.lower().startswith('bearer '):
-                auth = auth[7:].strip()
-            if expected and auth != expected:
-                return self._send_json({'ok': False, 'error': 'invalid token'}, status=401)
-            from agent_core.connectors.onebot_events import get_responder
-
-            threading.Thread(
-                target=get_responder().handle,
-                args=(body,),
-                daemon=True,
-                name='onebot-event',
-            ).start()
-            return self._send_json({'ok': True})
-
-        if path == '/api/ledger/clear':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            try:
-                from console.modules.common import get_db_connection
-                from console.modules.model_service import reset_credits_and_balances
-
-                conn = get_db_connection()
-                count = conn.execute("DELETE FROM token_usage").rowcount
-                conn.commit()
-                conn.close()
-
-                # 清空账本时同步归零所有金额：额度池 + 凭证余额
-                reset_credits_and_balances()
-
-                return self._send_json({
-                    "ok": True,
-                    "cleared": int(count or 0),
-                    "balances_reset": True,
-                })
-            except Exception as exc:
-                return self._send_json({"ok": False, "error": str(exc)}, status=500)
-
-        if path == '/api/access_policy':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.access_policy import save_policy
-            policy = save_policy(body if isinstance(body, dict) else {})
-            return self._send_json({"ok": True, "policy": policy})
-
-        if path == '/api/memory/facts/rollback':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            fact_id = str(body.get('fact_id') or '').strip()
-            if not fact_id:
-                return self._send_json({'ok': False, 'error': 'fact_id 必填'}, status=400)
-            from agent_core.memory.facts import FactStore
-            fact = FactStore().rollback(fact_id)
-            return self._send_json({'ok': bool(fact), 'fact': fact})
-
-        if path == '/api/memory/facts':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.memory.facts import FactStore
-            store = FactStore()
-            fact_id = str(body.get('fact_id') or '').strip()
-            if fact_id:
-                value = str(body.get('value') or '').strip()
-                if not value:
-                    return self._send_json({'ok': False, 'error': 'value 必填'}, status=400)
-                fact = store.update_value(fact_id, value)
-                return self._send_json({'ok': bool(fact), 'fact': fact})
-            subject_id = str(body.get('subject_id') or '').strip()
-            predicate = str(body.get('predicate') or '').strip()
-            value = str(body.get('value') or '').strip()
-            if not subject_id or not predicate or not value:
-                return self._send_json(
-                    {'ok': False, 'error': 'subject_id/predicate/value 必填'}, status=400
-                )
-            fact = store.add(subject_id, predicate, value)
-            return self._send_json({'ok': bool(fact), 'fact': fact})
-
-        # 1. 认证鉴权公共 API
-        if path == '/api/auth/login':
-            username = body.get('username', '').strip()
-            password = body.get('password', '')
-            remember = body.get('remember', True)
-            if auth_mgr.verify_credentials(username, password):
-                token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
-                max_age = 604800 if remember else 86400
-                origin = self.headers.get('Origin', '*')
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Set-Cookie', f'anan_session={token}; Path=/; SameSite=Lax; Max-Age={max_age}')
-                self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
-                self.send_header('Access-Control-Allow-Credentials', 'true')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": True, "token": token, "username": username}, ensure_ascii=False).encode('utf-8'))
-                return
-            else:
-                return self._send_json({"success": False, "error": "用户名或安全密码不正确"}, status=401)
-        elif path == '/api/auth/logout':
-            token = self._get_token()
-            auth_mgr.revoke_session(token)
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Set-Cookie', 'anan_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True}, ensure_ascii=False).encode('utf-8'))
+        body = self._read_json_body()
+        if body is None:  # 解析失败，_read_json_body 已经回过 400
             return
-        elif path == '/api/auth/change_password':
-            if not self._is_authenticated():
-                return self._send_json({"error": "未登录"}, status=401)
-            old_p = body.get('old_password', '')
-            new_p = body.get('new_password', '')
-            ok, msg = auth_mgr.change_password(old_p, new_p)
-            return self._send_json({"success": ok, "message": msg}, status=200 if ok else 400)
+        if path.startswith('/v1/') or path.startswith('/api/v1/'):
+            return self._handle_gateway_post(path, body)
+        if path.startswith('/hub/v1/'):
+            return self._post_hub(path, body)
+        if path.startswith('/api/'):
+            return self._post_console_api(path, body)
+        self.send_response(404)
+        self.end_headers()
 
-        # 2.0 直连服务协议
-        if path == '/hub/v1/services/register':
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            from agent_core.services import ServiceRegistry
+    def _read_json_body(self):
+        """读并解析 JSON body；解析失败返回 None（已经回过 400）。"""
+        length = int(self.headers.get('Content-Length', 0) or 0)
+        raw = self.rfile.read(length) if length else b''
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw.decode('utf-8'))
+        except Exception:
+            self._send_json({"error": "Invalid JSON"}, status=400)
+            return None
+        return data if isinstance(data, dict) else {}
 
-            from agent_core.storage import get_store
+    def _require_login(self):
+        """未登录就直接回 401；返回 True 表示已经处理完。"""
+        if self._is_authenticated():
+            return False
+        self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+        return True
 
-            try:
-                service = ServiceRegistry(get_store()).register(body)
-            except Exception:
-                return self._hub_error('bad_request', status=400)
-            return self._send_json(service, status=201)
+    # ---------------- POST：三套接口分发 ----------------
+    def _handle_gateway_post(self, path, body):
+        """/v1 的 POST 只有对话补全一个入口。"""
+        if path in ('/v1/chat/completions', '/api/v1/chat/completions'):
+            return self._handle_universal_chat_completions(body)
+        self.send_response(404)
+        self.end_headers()
 
-        if path.startswith('/hub/v1/services/') and '/tools/' in path:
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            parts = path.strip('/').split('/')
-            # hub v1 services {id} tools {name}
-            if len(parts) < 6:
-                return self._hub_error('bad_request')
-            service_id, tool = parts[3], parts[5]
-            args = body.get('args') if isinstance(body.get('args'), dict) else body
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            try:
-                result = ServiceRegistry(get_store()).call_tool(service_id, tool, args)
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=400)
-            return self._send_json(result)
-
-        # 2. 档案接口
+    def _post_hub(self, path, body):
+        """/hub/v1：外部工具用，Key 鉴权，不走 Web 登录态。"""
         if path.startswith('/hub/v1/archives'):
             return self._handle_archive_post(path, body)
-        if path.startswith('/api/archives'):
-            return self._handle_console_archive_post(path, body)
-
-        # 2.1 平台自动发现与绑定
-        if path == '/api/connectors/scan':
-            return self._send_json(_get_discovery_service().scan())
-
-        if path == '/api/plugins/scan':
-            from agent_core.plugins import PluginRegistry
-            from agent_core.storage import get_store
-
-            roots = body.get('roots') or None
-            return self._send_json(PluginRegistry(get_store()).scan(roots))
-
-        if path == '/api/plugins':
-            from agent_core.plugins import PluginRegistry
-            from agent_core.storage import get_store
-
-            reg = PluginRegistry(get_store())
-            target = str(body.get('path') or body.get('root_path') or '').strip()
-            if target:
-                plugin = reg.register_path(target, name=str(body.get('name') or ''))
-                if not plugin:
-                    return self._send_json({'error': '无法识别该路径'}, status=400)
-                return self._send_json(plugin, status=201)
-            name = str(body.get('name') or '').strip()
-            protocol = str(body.get('protocol') or '').strip()
-            spec = body.get('spec') if isinstance(body.get('spec'), dict) else None
-            if not name or not protocol:
-                return self._send_json({'error': 'name/protocol 必填，或提供 path'}, status=400)
-            return self._send_json(
-                reg.register_manual(name, target, protocol, spec), status=201
-            )
-
-        if path == '/api/services':
-            from agent_core.services import ServiceRegistry
-
-            from agent_core.storage import get_store
-
-            try:
-                service = ServiceRegistry(get_store()).register(body)
-            except Exception as exc:
-                return self._send_json({'error': str(exc)}, status=400)
-            return self._send_json(service, status=201)
-
         if path == '/hub/v1/knowledge/ingest':
-            _, err = self._hub_client(require_admin=True)
-            if err:
-                return self._hub_error(err)
-            from agent_core.knowledge import KnowledgeBase
-            from agent_core.storage import get_store
+            return self._post_hub_ingest(body)
+        self.send_response(404)
+        self.end_headers()
 
-            try:
-                result = KnowledgeBase(get_store()).ingest(
-                    title=str(body.get('title') or ''),
-                    content=str(body.get('content') or ''),
-                    source=str(body.get('source') or ''),
-                    tags=body.get('tags') if isinstance(body.get('tags'), list) else [],
-                )
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=400)
-            return self._send_json(result, status=201)
-
-        if path == '/api/mcp/connect':
-            try:
-                return self._send_json(_get_mcp_manager().connect(body), status=201)
-            except Exception as exc:
-                return self._send_json({'error': str(exc)}, status=400)
-
-        if path.startswith('/api/mcp/') and '/tools/' in path:
-            parts = path.strip('/').split('/')
-            if len(parts) < 5:
-                return self._send_json({'error': '路径不完整'}, status=400)
-            name, tool = parts[2], parts[4]
-            args = body.get('args') if isinstance(body.get('args'), dict) else body
-            try:
-                return self._send_json({
-                    'ok': True,
-                    'result': _get_mcp_manager().call_tool(name, tool, args),
-                })
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=400)
-
-        if path in ('/api/bridges/infer', '/api/bridges/attach'):
-            import asyncio
-
-            from agent_core.bridge import BridgeSpec, BridgeSpecInferer
-
-            target = str(body.get('target') or body.get('path') or body.get('url') or '').strip()
-            kind = str(body.get('kind') or '').strip()
-            extra_options = body.get('options') if isinstance(body.get('options'), dict) else None
-            if not target:
-                return self._send_json({'error': 'target 必填'}, status=400)
-            try:
-                result = asyncio.run(BridgeSpecInferer().infer(target, kind, extra_options))
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=500)
-            if body.get('start') and result.get('ok'):
-                try:
-                    started = _get_bridge_manager().start(BridgeSpec.from_dict(result['spec']))
-                    result['started'] = started
-                except Exception as exc:
-                    result['started'] = None
-                    result['start_error'] = str(exc)
-            return self._send_json(result)
-
-        if path == '/api/adapters/analyze':
-            from agent_core.source import SourceAnalyzer
-
-            repo = str(body.get('repo_path') or body.get('path') or '').strip()
-            if not repo:
-                return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
-            return self._send_json(SourceAnalyzer().analyze(repo))
-
-        if path in ('/api/adapters/generate', '/api/adapters/attach'):
-            import asyncio
-
-            from agent_core.source import SourceSynthesizer
-
-            repo = str(body.get('repo_path') or body.get('path') or '').strip()
-            if not repo:
-                return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
-            try:
-                result = asyncio.run(SourceSynthesizer().generate(repo))
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=500)
-            if path.endswith('/attach') and body.get('start'):
-                from agent_core.bridge import BridgeSpec
-
-                started = []
-                for item in result.get('specs') or []:
-                    if not item.get('ok') or not item.get('spec'):
-                        continue
-                    try:
-                        started.append(_get_bridge_manager().start(
-                            BridgeSpec.from_dict(item['spec'])
-                        ))
-                    except Exception as exc:
-                        started.append({'ok': False, 'error': str(exc)})
-                result['started'] = started
-            return self._send_json(result)
-
-        if path == '/api/bridges/batch':
-            import asyncio
-
-            from agent_core.bridge import BridgeSpec, BridgeSpecInferer
-
-            raw_targets = body.get('targets') or body.get('target') or []
-            if isinstance(raw_targets, str):
-                raw_targets = [x.strip() for x in re.split(r"[\n,，;；]+", raw_targets) if x.strip()]
-            targets = [str(x).strip() for x in raw_targets if str(x).strip()][:20]
-            if not targets:
-                return self._send_json({'error': 'targets 必填'}, status=400)
-            kind = str(body.get('kind') or '').strip()
-            auto_start = bool(body.get('start'))
-            inferer = BridgeSpecInferer()
-            results = []
-            for target in targets:
-                try:
-                    item = asyncio.run(inferer.infer(target, kind))
-                except Exception as exc:
-                    item = {'ok': False, 'error': str(exc), 'preview': []}
-                record = {
-                    'target': target,
-                    'ok': bool(item.get('ok')),
-                    'kind': (item.get('spec') or {}).get('kind'),
-                    'preview_count': len(item.get('preview') or []),
-                    'error': item.get('error') or '',
-                }
-                if auto_start and item.get('ok'):
-                    try:
-                        record['started'] = _get_bridge_manager().start(
-                            BridgeSpec.from_dict(item['spec'])
-                        )
-                    except Exception as exc:
-                        record['started'] = None
-                        record['start_error'] = str(exc)
-                results.append(record)
-            return self._send_json({'count': len(results), 'results': results})
-
-        if path == '/api/bridges/start':
-            from agent_core.bridge import BridgeSpec
-
-            spec = BridgeSpec.from_dict(body)
-            if not spec.source_id or not spec.kind:
-                return self._send_json({'error': 'source_id/kind 必填'}, status=400)
-            try:
-                return self._send_json(_get_bridge_manager().start(spec))
-            except Exception as exc:
-                return self._send_json({'error': str(exc)}, status=400)
-
-        if path == '/api/bridges/stop':
-            source_id = str(body.get('source_id') or '').strip()
-            if not source_id:
-                return self._send_json({'error': 'source_id 必填'}, status=400)
-            return self._send_json(_get_bridge_manager().stop(source_id))
-
-        if path == '/api/contexts/match':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.connectors import match_contexts
-            from agent_core.storage import get_store
-
-            names = body.get('names') or body.get('name') or []
-            uids = body.get('uids') or body.get('uid') or []
-            platform = str(body.get('platform') or '').strip() or None
-            module_id = str(body.get('module_id') or '').strip()
-            store = get_store()
-            if module_id:
-                host = next(
-                    (h for h in store.list_hosts() if h.get('host_id') == module_id), None
-                )
-                if not host:
-                    return self._send_json({'object': 'list', 'data': []}, status=404)
-                platform = platform or str(host.get('platform') or '') or None
-            am = self._archive_manager()
-            contexts = store.list_contexts(status='active')
-            if module_id:
-                contexts = [
-                    c for c in contexts
-                    if str(c.get('host_id') or '') == module_id
-                    or module_id.lower() in str(c.get('source') or '').lower()
-                    or (platform and c.get('platform') == platform)
-                ]
-            archive_names = {
-                a['archive_id']: (a.get('display_name') or '')
-                for a in am.list_archives()
-            }
-            binding_map = {
-                (b['platform'], b['external_id']): b for b in store.list_bindings()
-            }
-            for ctx in contexts:
-                aliases = []
-                binding = binding_map.get((ctx['platform'], ctx['external_id']))
-                if binding:
-                    archive_name = archive_names.get(binding.get('archive_id'))
-                    if archive_name:
-                        aliases.append(archive_name)
-                ctx['aliases'] = aliases
-            matches = match_contexts(contexts, names, uids, platform)
-            return self._send_json({'object': 'list', 'data': matches})
-
-        if path == '/api/contexts/ai_match':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            import asyncio
-
-            from agent_core.connectors.ai_matcher import AIMatcher
-            from agent_core.storage import get_store
-
-            names = body.get('names') or body.get('name') or []
-            uids = body.get('uids') or body.get('uid') or []
-            platform = str(body.get('platform') or '').strip()
-            module_id = str(body.get('module_id') or '').strip()
-            store = get_store()
-            roots = None
-            if module_id:
-                host = next(
-                    (h for h in store.list_hosts() if h.get('host_id') == module_id), None
-                )
-                if not host:
-                    return self._send_json(
-                        {'ok': False, 'error': '模块不存在', 'matches': []}, status=404
-                    )
-                root = str(host.get('root') or '').strip()
-                if root:
-                    roots = [Path(root)]
-                if not platform:
-                    platform = str(host.get('platform') or '').strip()
-            try:
-                result = asyncio.run(
-                    AIMatcher(store=store, roots=roots).match(names, uids, platform)
-                )
-            except Exception as exc:
-                return self._send_json(
-                    {'ok': False, 'error': f'执行 AI 失败: {exc}', 'matches': []}, status=500
-                )
-            if result.get('ok'):
-                for item in result.get('matches', []):
-                    external_id = str(item.get('external_id') or '').strip()
-                    if not external_id:
-                        continue
-                    store.upsert_context(
-                        str(item.get('platform') or 'other'),
-                        external_id,
-                        external_type=str(item.get('external_type') or ''),
-                        display_name=str(item.get('display_name') or ''),
-                        source='execution_ai',
-                        evidence=list(item.get('evidence') or []),
-                        metadata={'ai_match': True, 'module_id': module_id},
-                        host_id=module_id,
-                    )
-            return self._send_json(result)
-
-        if path == '/api/contexts/ai_scan':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            import asyncio
-
-            from agent_core.connectors.ai_matcher import AIMatcher
-            from agent_core.storage import get_store
-
-            module_id = str(body.get('module_id') or '').strip()
-            if not module_id:
-                return self._send_json(
-                    {'ok': False, 'error': 'module_id 必填', 'users': []}, status=400
-                )
-            store = get_store()
-            host = next(
-                (h for h in store.list_hosts() if h.get('host_id') == module_id), None
-            )
-            if not host:
-                return self._send_json(
-                    {'ok': False, 'error': '模块不存在', 'users': []}, status=404
-                )
-            root = str(host.get('root') or '').strip()
-            host_root = Path(root) if root else None
-            roots = [host_root] if host_root else []
-            # 通用适配：把该模块下注册过的插件目录都纳入扫描范围
-            for plugin in store.list_plugins():
-                raw_plugin_root = str(plugin.get('root_path') or '').strip()
-                if not raw_plugin_root:
-                    continue
-                plugin_root = Path(raw_plugin_root)
-                if not plugin_root.exists():
-                    continue
-                if host_root and (plugin_root == host_root or host_root in plugin_root.parents):
-                    roots.append(plugin_root)
-            deduped_roots = []
-            for item in roots:
-                try:
-                    resolved = item.resolve()
-                except OSError:
-                    continue
-                if resolved not in deduped_roots:
-                    deduped_roots.append(resolved)
-            platform = str(host.get('platform') or '').strip()
-
-            # 模块自己的公开清单优先：module.json 有身份就不需要 AI 猜
-            from agent_core.connectors.module_manifest import find_manifest
-            manifest = find_manifest(module_id, str(host.get('root') or ''), str(PROJECT_ROOT))
-            if manifest:
-                manifest_data = manifest['data']
-                account = manifest_data.get('account') if isinstance(manifest_data.get('account'), dict) else {}
-                uid = str(account.get('uid') or manifest_data.get('uid') or '').strip()
-                manifest_platform = str(
-                    account.get('platform') or manifest_data.get('platform') or platform or 'other'
-                ).strip()
-                display_name = str(
-                    account.get('name') or manifest_data.get('name') or uid
-                ).strip()
-                existing = next(
-                    (
-                        c for c in store.list_contexts()
-                        if c.get('platform') == manifest_platform
-                        and str(c.get('external_id') or '') == uid
-                    ),
-                    None,
-                )
-                if existing and str(existing.get('status') or '') == 'ignored':
-                    return self._send_json({
-                        'ok': True,
-                        'source': 'module_manifest',
-                        'ignored': True,
-                        'users': [],
-                    })
-                context_id = store.upsert_context(
-                    manifest_platform,
-                    uid,
-                    external_type='host',
-                    display_name=display_name,
-                    source='module_manifest',
-                    evidence=[manifest['path']],
-                    metadata={
-                        'module_id': module_id,
-                        'module_manifest': True,
-                        'manifest_path': manifest['path'],
-                        'capabilities': manifest_data.get('capabilities') or [],
-                        'events': manifest_data.get('events') or [],
-                    },
-                    host_id=module_id,
-                )
-                return self._send_json({
-                    'ok': True,
-                    'source': 'module_manifest',
-                    'users': [{
-                        'uid': uid,
-                        'external_id': uid,
-                        'platform': manifest_platform,
-                        'name': display_name,
-                        'person_uid': uid,
-                        'external_type': 'host',
-                        'source': 'module_manifest',
-                        'context_id': context_id,
-                        'evidence': [manifest['path']],
-                        'metadata': {
-                            'module_id': module_id,
-                            'module_manifest': True,
-                            'capabilities': manifest_data.get('capabilities') or [],
-                            'events': manifest_data.get('events') or [],
-                        },
-                    }],
-                })
-
-            # 没有宿主目录的独立模块（例如 B站模块）：用已有档案身份补信息卡
-            if not deduped_roots:
-                users = []
-                seen = set()
-                existing_by_key = {
-                    (c.get('platform'), str(c.get('external_id') or '')): c
-                    for c in store.list_contexts()
-                }
-                for archive in store.list_archives():
-                    archive_id = str(archive.get('archive_id') or '')
-                    archive_name = str(archive.get('display_name') or '')
-                    for ident in store.list_identities(archive_id):
-                        ident_platform = str(ident.get('platform') or '')
-                        uid = str(ident.get('platform_user_id') or '').strip()
-                        if not uid or (platform and ident_platform != platform):
-                            continue
-                        key = (ident_platform, uid)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        existing = existing_by_key.get(key)
-                        if existing and str(existing.get('status') or '') == 'ignored':
-                            continue
-                        display_name = str(ident.get('display_name') or archive_name or uid)
-                        context_id = store.upsert_context(
-                            ident_platform,
-                            uid,
-                            external_type='host',
-                            display_name=display_name,
-                            source='archive_identity',
-                            evidence=['archive_identities'],
-                            metadata={
-                                'module_id': module_id,
-                                'archive_identity': True,
-                                'archive_id': archive_id,
-                            },
-                            host_id=module_id,
-                        )
-                        users.append({
-                            'uid': uid,
-                            'external_id': uid,
-                            'platform': ident_platform,
-                            'name': display_name,
-                            'person_uid': uid,
-                            'external_type': 'host',
-                            'source': 'archive_identities',
-                            'context_id': context_id,
-                            'evidence': ['archive_identities'],
-                            'metadata': {
-                                'module_id': module_id,
-                                'archive_identity': True,
-                                'archive_id': archive_id,
-                            },
-                        })
-                return self._send_json({
-                    'ok': True,
-                    'users': users,
-                    'source': 'archive_identities',
-                })
-
-            try:
-                result = asyncio.run(
-                    AIMatcher(store=store, roots=deduped_roots).scan_all(platform)
-                )
-            except Exception as exc:
-                return self._send_json(
-                    {'ok': False, 'error': f'执行 AI 失败: {exc}', 'users': []}, status=500
-                )
-            contexts = store.list_contexts()
-            by_key = {
-                (c.get('platform'), c.get('external_id')): c for c in contexts
-            }
-            users = []
-            for user in result.get('users') or []:
-                uid = str(user.get('uid') or user.get('external_id') or '').strip()
-                if not uid:
-                    continue
-                user_platform = str(user.get('platform') or platform or 'other')
-                existing = by_key.get((user_platform, uid))
-                if existing is None:
-                    existing = next(
-                        (
-                            c for c in contexts
-                            if c.get('platform') == user_platform
-                            and str(c.get('external_id') or '').endswith(':' + uid)
-                        ),
-                        None,
-                    )
-                if existing and str(existing.get('status') or '') == 'ignored':
-                    continue
-                external_id = str((existing or {}).get('external_id') or uid)
-                person_uid = str(user.get('person_uid') or ('' if user.get('secondary') else uid))
-                external_type = str(
-                    user.get('external_type')
-                    or (existing or {}).get('external_type')
-                    or ''
-                )
-                evidence = list(user.get('evidence') or [])
-                metadata = {
-                    'module_id': module_id,
-                    'ai_scan': True,
-                    'person_uid': person_uid,
-                    'secondary': bool(user.get('secondary')),
-                    'plugin': str(user.get('plugin') or ''),
-                    'scan_source': str(user.get('source') or ''),
-                    'extra': user.get('extra') if isinstance(user.get('extra'), dict) else {},
-                    'evidence': evidence[:8],
-                }
-                context_id = store.upsert_context(
-                    user_platform,
-                    external_id,
-                    external_type=external_type,
-                    display_name=str(user.get('name') or ''),
-                    source='execution_ai',
-                    evidence=evidence,
-                    metadata=metadata,
-                    host_id=module_id,
-                )
-                user['external_id'] = external_id
-                user['context_id'] = context_id
-                user['metadata'] = metadata
-                users.append(user)
-            result['users'] = users
-            return self._send_json(result)
-
-        if path == '/api/contexts/status':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.storage import get_store
-
-            context_id = str(body.get('context_id') or '').strip()
-            status = str(body.get('status') or 'active').strip().lower()
-            if not context_id or status not in ('active', 'ignored', 'stale'):
-                return self._send_json(
-                    {'ok': False, 'error': 'context_id 或 status 不合法'}, status=400
-                )
-            get_store().set_context_status(context_id, status)
-            return self._send_json({'ok': True, 'context_id': context_id, 'status': status})
-
-        if path == '/api/contexts/bind':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            from agent_core.storage import get_store
-
-            platform = str(body.get('platform') or '').strip()
-            uid = str(body.get('uid') or body.get('external_id') or '').strip()
-            archive_id = str(body.get('archive_id') or '').strip()
-            module_id = str(body.get('module_id') or '').strip()
-            if not platform or not uid or not archive_id:
-                return self._send_json(
-                    {'ok': False, 'error': 'platform/uid/archive_id 必填'}, status=400
-                )
-            store = get_store()
-            if not store.get_archive(archive_id):
-                return self._send_json({'ok': False, 'error': '档案不存在'}, status=404)
-            context_id = store.upsert_context(
-                platform, uid,
-                external_type='',
-                display_name=str(body.get('name') or ''),
-                source='console_match',
-                metadata={
-                    'person_uid': uid,
-                    'module_id': module_id,
-                    'matched': True,
-                },
-                host_id=module_id,
-            )
-            try:
-                confidence = float(body.get('confidence') or 1.0)
-            except (TypeError, ValueError):
-                confidence = 1.0
-            binding_id = store.bind_context(
-                platform, uid, archive_id,
-                confidence=max(0.0, min(1.0, confidence)),
-                verified_by='console_match',
-            )
-            return self._send_json({
-                'ok': True, 'context_id': context_id, 'binding_id': binding_id,
-            })
-
-        if path == '/api/bindings':
-            if not self._is_authenticated():
-                return self._send_json(
-                    {"error": "未登录或登录已过期", "require_login": True}, status=401
-                )
-            platform = str(body.get('platform') or '').strip()
-            external_id = str(body.get('external_id') or '').strip()
-            archive_id = str(body.get('archive_id') or '').strip()
-            if not platform or not external_id or not archive_id:
-                return self._send_json({'error': 'platform/external_id/archive_id 必填'}, status=400)
-            from agent_core.storage import get_store
-            store = get_store()
-            if not store.get_archive(archive_id):
-                return self._send_json({'error': '档案不存在'}, status=404)
-            try:
-                confidence = float(body.get('confidence') or 0.0)
-            except (TypeError, ValueError):
-                confidence = 0.0
-            verified_by = str(body.get('verified_by') or 'manual').strip() or 'manual'
-            binding_id = store.bind_context(
-                platform, external_id, archive_id,
-                confidence=max(0.0, min(1.0, confidence)),
-                verified_by=verified_by,
-            )
-            return self._send_json({'ok': True, 'binding_id': binding_id})
-
-        # 2. 大模型 API 网关 /v1 豁免 Web 登录
-        if path == '/v1/chat/completions':
-            pass
-        elif path.startswith('/api/'):
-            # 3. 控制台管理 API 验证登录
-            if not self._is_authenticated():
-                return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
-
-        if path == '/api/persona':
-            if any(key in body for key in ('name', 'persona', 'dialogue_examples', 'other')):
-                fields = {
-                    'name': str(body.get('name') or '').strip(),
-                    'persona': str(body.get('persona') or '').strip(),
-                    'dialogue_examples': str(body.get('dialogue_examples') or '').strip(),
-                    'other': str(body.get('other') or '').strip(),
-                }
-                if not fields['name']:
-                    return self._send_json({"error": "AI 名称不能为空"}, status=400)
-                if not fields['persona']:
-                    return self._send_json({"error": "人格设定不能为空"}, status=400)
-                res = backend.save_persona_profile(fields)
-            else:
-                prompt = body.get('system_prompt', '')
-                if not prompt:
-                    return self._send_json({"error": "Prompt cannot be empty"}, status=400)
-                res = backend.save_persona(prompt)
-            self._send_json(res)
-        elif path == '/api/persona/rules':
-            res = backend.save_persona_rules(body)
-            self._send_json(res)
-        elif path == '/api/models/sync_upstream':
-            res = backend.sync_models_from_upstream()
-            self._send_json(res)
-        elif path == '/api/models_config':
-            res = backend.save_models_config(body)
-            self._send_json(res)
-        elif path == '/api/credits':
-            res = backend.save_credits(body)
-            self._send_json(res)
-        elif path == '/api/modules/toggle':
-            res = backend.toggle_module_active(body.get('module_id'), body.get('is_active', True))
-            self._send_json(res)
-        elif path == '/api/modules/category':
-            res = backend.update_module_custom_category(body.get('module_id'), body.get('category'))
-            self._send_json(res)
-        elif path == '/api/modules/import':
-            res = backend.import_custom_module(body)
-            self._send_json(res)
-        elif path == '/api/hosts/resolve':
-            from agent_core.module_resolver import resolve_module
-
-            from agent_core.storage import get_store
-
-            try:
-                result = resolve_module(
-                    get_store(),
-                    module_root=str(body.get('module_root') or body.get('host_root') or '').strip() or None,
-                    hints=body.get('hints') if isinstance(body.get('hints'), dict) else {},
-                    archive_id=str(body.get('archive_id') or '').strip() or None,
-                )
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=400)
-            self._send_json(result)
-        elif path == '/api/modules/delete':
-            res = backend.delete_custom_module(body.get('module_id'))
-            self._send_json(res)
-        elif path == '/api/modules/permissions':
-            res = backend.save_module_permissions(body)
-            self._send_json(res)
-        elif path == '/api/tool-permissions':
-            self._send_json({
-                'ok': False,
-                'deprecated': True,
-                'error': '已废弃，请使用 /api/tools（工具页）',
-            }, status=410)
-        elif path == '/api/compute/config':
-            res = backend.save_compute_config(body)
-            self._send_json(res)
-        elif path == '/api/compute/test':
-            res = backend.test_compute_provider(body.get('provider_key', ''))
-            self._send_json(res)
-        elif path == '/api/connection/bind':
-            from agent_core.storage import get_store
-
-            store = get_store()
-            module_id = str(body.get('module_id') or '').strip()
-            archive_id = str(body.get('archive_id') or '').strip()
-            host = next((h for h in store.list_hosts() if h.get('host_id') == module_id), None)
-            if not host:
-                return self._send_json({'ok': False, 'error': '模块不存在'}, status=404)
-            platform = str(host.get('platform') or '').strip()
-            external_id = str(host.get('internal_uid') or '').strip()
-            if not platform or not external_id:
-                return self._send_json(
-                    {'ok': False, 'error': '模块缺少平台或内部 UID，请先识别/扫描'}, status=400
-                )
-            context_id = store.upsert_context(
-                platform, external_id,
-                external_type='host',
-                display_name=str(host.get('name') or module_id),
-                source='module_binding',
-                evidence=['console_identity'],
-                metadata={'host_id': module_id},
-                host_id=module_id,
-            )
-            if not archive_id:
-                store.unbind_context(platform, external_id)
-                return self._send_json({'ok': True, 'context_id': context_id, 'binding': None})
-            if not store.get_archive(archive_id):
-                return self._send_json({'ok': False, 'error': '档案不存在'}, status=404)
-            binding_id = store.bind_context(
-                platform, external_id, archive_id,
-                confidence=1.0, verified_by='console',
-            )
-            return self._send_json({'ok': True, 'context_id': context_id, 'binding_id': binding_id})
-        elif path == '/api/execution_ai':
-            from agent_core.execution.settings import save_settings
-
-            try:
-                saved = save_settings(
-                    base_url=body.get('base_url'),
-                    model=body.get('model'),
-                    api_key=body.get('api_key'),
-                    clear_api_key=bool(body.get('clear_api_key')),
-                )
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': f'保存失败: {exc}'}, status=500)
-            self._send_json({'ok': True, **saved})
-        elif path == '/api/execution_ai/test':
-            import asyncio
-
-            from agent_core.execution.settings import test_connection
-
-            try:
-                result = asyncio.run(test_connection(
-                    base_url=body.get('base_url'),
-                    model=body.get('model'),
-                    api_key=body.get('api_key'),
-                ))
-            except Exception as exc:
-                return self._send_json({'ok': False, 'error': str(exc)}, status=500)
-            self._send_json(result)
-        elif path == '/api/modules/probe':
-            mod_id = body.get('module_id')
-            if mod_id:
-                res = backend.probe_single_module(mod_id)
-            else:
-                res = backend.probe_all_modules()
-            self._send_json(res)
-        elif path == '/api/modules/topology/save':
-            res = backend.save_topology_overview(body.get('nodes', {}), body.get('positions', {}))
-            self._send_json(res)
-        elif path == '/api/modules/topology/validate':
-            res = backend.validate_topology_overview(body.get('relations', None))
-            self._send_json(res)
-        elif path in ('/v1/chat/completions', '/api/v1/chat/completions'):
-            self._handle_universal_chat_completions(body)
-        else:
+    def _post_console_api(self, path, body):
+        """/api/*：先过登录态（公开路由除外），再查路由表。"""
+        if path.startswith('/api/archives'):
+            if self._require_login():
+                return
+            return self._handle_console_archive_post(path, body)
+        route = _POST_ROUTES.get(path)
+        if route is None:
             self.send_response(404)
             self.end_headers()
+            return
+        handler, needs_auth = route
+        if needs_auth and self._require_login():
+            return
+        return getattr(self, handler)(body)
+
+    # ---------------- POST：工具货架 ----------------
+    def _post_shelves_reload(self, body):
+        """热重载工具货架配置（改完 json 不用重启）。"""
+        if tool_gate is None:
+            return self._send_json({'ok': False, 'error': 'tool gate 未初始化'}, status=500)
+        tool_gate.cfg.reload(force=True)
+        return self._send_json({
+            'ok': True,
+            'enabled': tool_gate.cfg.enabled(),
+            'config_error': tool_gate.cfg.load_error(),
+        })
+
+    def _post_shelves_metrics_reset(self, body):
+        """清空工具货架的统计（今日节省比、压缩指标）。"""
+        try:
+            from agent_core.tool_shelves.metrics import metrics as shelf_metrics
+
+            shelf_metrics.reset()
+        except Exception as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=500)
+        return self._send_json({'ok': True})
+
+    def _post_tool_clean(self, body):
+        """P4 薄壳清洗：自带客户端 Key，不要求 Web 登录。"""
+        return self._handle_tool_clean(body)
+
+    def _post_tool_update(self, body):
+        return self._tools_admin_update(body)
+
+    def _post_tool_policy(self, body):
+        return self._send_json(self._tools_policy_update(body))
+
+    def _post_tool_policy_delete(self, body):
+        return self._send_json(self._tools_policy_delete(body))
+
+    # ---------------- POST：身份与账本 ----------------
+    def _post_identity_bind(self, body):
+        return self._identity_bind(body)
+
+    def _post_identity_hide(self, body):
+        return self._identity_hide(body)
+
+    def _post_ledger_clear(self, body):
+        """清空流水，并把额度池与所有凭证余额一起归零。"""
+        try:
+            from console.modules.common import get_db_connection
+            from console.modules.model_service import reset_credits_and_balances
+
+            conn = get_db_connection()
+            count = conn.execute("DELETE FROM token_usage").rowcount
+            conn.commit()
+            conn.close()
+            reset_credits_and_balances()
+            return self._send_json({
+                "ok": True,
+                "cleared": int(count or 0),
+                "balances_reset": True,
+            })
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=500)
+
+    # ---------------- POST：访客策略与事实 ----------------
+    def _post_access_policy(self, body):
+        from agent_core.access_policy import save_policy
+
+        policy = save_policy(body if isinstance(body, dict) else {})
+        return self._send_json({"ok": True, "policy": policy})
+
+    def _post_fact_rollback(self, body):
+        fact_id = str(body.get('fact_id') or '').strip()
+        if not fact_id:
+            return self._send_json({'ok': False, 'error': 'fact_id 必填'}, status=400)
+        from agent_core.memory.facts import FactStore
+
+        fact = FactStore().rollback(fact_id)
+        return self._send_json({'ok': bool(fact), 'fact': fact})
+
+    def _post_fact_upsert(self, body):
+        """带 fact_id 是改值，不带就是新增一条。"""
+        from agent_core.memory.facts import FactStore
+
+        store = FactStore()
+        fact_id = str(body.get('fact_id') or '').strip()
+        if fact_id:
+            return self._update_fact_value(store, fact_id, str(body.get('value') or '').strip())
+        return self._add_fact(store, body)
+
+    def _update_fact_value(self, store, fact_id, value):
+        if not value:
+            return self._send_json({'ok': False, 'error': 'value 必填'}, status=400)
+        fact = store.update_value(fact_id, value)
+        return self._send_json({'ok': bool(fact), 'fact': fact})
+
+    def _add_fact(self, store, body):
+        subject_id = str(body.get('subject_id') or '').strip()
+        predicate = str(body.get('predicate') or '').strip()
+        value = str(body.get('value') or '').strip()
+        if not subject_id or not predicate or not value:
+            return self._send_json(
+                {'ok': False, 'error': 'subject_id/predicate/value 必填'}, status=400
+            )
+        fact = store.add(subject_id, predicate, value)
+        return self._send_json({'ok': bool(fact), 'fact': fact})
+
+    # ---------------- POST：登录 / 登出 / 改密 ----------------
+    def _post_login(self, body):
+        username = str(body.get('username') or '').strip()
+        password = body.get('password') or ''
+        remember = body.get('remember', True)
+        if not auth_mgr.verify_credentials(username, password):
+            return self._send_json({"success": False, "error": "用户名或安全密码不正确"}, status=401)
+        token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
+        max_age = 604800 if remember else 86400
+        cookie = f'anan_session={token}; Path=/; SameSite=Lax; Max-Age={max_age}'
+        return self._send_json_with_cookie(
+            {"success": True, "token": token, "username": username}, cookie
+        )
+
+    def _post_logout(self, body):
+        auth_mgr.revoke_session(self._get_token())
+        return self._send_json_with_cookie(
+            {"success": True},
+            'anan_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+        )
+
+    def _post_change_password(self, body):
+        ok, message = auth_mgr.change_password(
+            body.get('old_password', ''), body.get('new_password', '')
+        )
+        return self._send_json({"success": ok, "message": message}, status=200 if ok else 400)
+
+    def _send_json_with_cookie(self, payload, cookie):
+        """登录态要顺手写 Set-Cookie，_send_json 不够用。"""
+        origin = self.headers.get('Origin', '*')
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Set-Cookie', cookie)
+        self.send_header('Access-Control-Allow-Origin', origin if origin != '*' else '*')
+        self.send_header('Access-Control-Allow-Credentials', 'true')
+        self.end_headers()
+        self.wfile.write(data)
+
+    # ---------------- POST：发现与适配器 ----------------
+    def _post_connectors_scan(self, body):
+        return self._send_json(_get_discovery_service().scan())
+
+    def _post_adapter_analyze(self, body):
+        from agent_core.source import SourceAnalyzer
+
+        repo = str(body.get('repo_path') or body.get('path') or '').strip()
+        if not repo:
+            return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
+        return self._send_json(SourceAnalyzer().analyze(repo))
+
+    def _post_adapter_generate(self, body):
+        return self._generate_adapters(body, attach=False)
+
+    def _post_adapter_attach(self, body):
+        return self._generate_adapters(body, attach=True)
+
+    def _generate_adapters(self, body, attach):
+        """生成适配器；attach 时顺手把识别出来的桥接起来。"""
+        import asyncio
+
+        from agent_core.source import SourceSynthesizer
+
+        repo = str(body.get('repo_path') or body.get('path') or '').strip()
+        if not repo:
+            return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
+        try:
+            result = asyncio.run(SourceSynthesizer().generate(repo))
+        except Exception as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=500)
+        if attach and body.get('start'):
+            result['started'] = self._start_bridges(result.get('specs') or [])
+        return self._send_json(result)
+
+    def _start_bridges(self, specs):
+        """按生成结果批量起桥；单条失败不影响其它。"""
+        from agent_core.bridge import BridgeSpec
+
+        started = []
+        for item in specs:
+            if not item.get('ok') or not item.get('spec'):
+                continue
+            try:
+                started.append(_get_bridge_manager().start(BridgeSpec.from_dict(item['spec'])))
+            except Exception as exc:
+                started.append({'ok': False, 'error': str(exc)})
+        return started
+
+    # ---------------- POST：档案绑定 ----------------
+    def _post_bindings(self, body):
+        platform = str(body.get('platform') or '').strip()
+        external_id = str(body.get('external_id') or '').strip()
+        archive_id = str(body.get('archive_id') or '').strip()
+        if not platform or not external_id or not archive_id:
+            return self._send_json({'error': 'platform/external_id/archive_id 必填'}, status=400)
+        from agent_core.storage import get_store
+
+        store = get_store()
+        if not store.get_archive(archive_id):
+            return self._send_json({'error': '档案不存在'}, status=404)
+        try:
+            confidence = float(body.get('confidence') or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        verified_by = str(body.get('verified_by') or 'manual').strip() or 'manual'
+        binding_id = store.bind_context(
+            platform, external_id, archive_id,
+            confidence=max(0.0, min(1.0, confidence)),
+            verified_by=verified_by,
+        )
+        return self._send_json({'ok': True, 'binding_id': binding_id})
+
+    # ---------------- POST：人格 / 模型 / 额度 / 计算 ----------------
+    def _post_persona(self, body):
+        """新版前端按字段存人设卡；老客户端只传 system_prompt。"""
+        if any(key in body for key in ('name', 'persona', 'dialogue_examples', 'other')):
+            return self._save_persona_fields(body)
+        prompt = body.get('system_prompt', '')
+        if not prompt:
+            return self._send_json({"error": "Prompt cannot be empty"}, status=400)
+        return self._send_json(backend.save_persona(prompt))
+
+    def _save_persona_fields(self, body):
+        fields = {
+            'name': str(body.get('name') or '').strip(),
+            'persona': str(body.get('persona') or '').strip(),
+            'dialogue_examples': str(body.get('dialogue_examples') or '').strip(),
+            'other': str(body.get('other') or '').strip(),
+        }
+        if not fields['name']:
+            return self._send_json({"error": "AI 名称不能为空"}, status=400)
+        if not fields['persona']:
+            return self._send_json({"error": "人格设定不能为空"}, status=400)
+        return self._send_json(backend.save_persona_profile(fields))
+
+    def _post_persona_rules(self, body):
+        return self._send_json(backend.save_persona_rules(body))
+
+    def _post_models_sync(self, body):
+        return self._send_json(backend.sync_models_from_upstream())
+
+    def _post_models_config(self, body):
+        return self._send_json(backend.save_models_config(body))
+
+    def _post_credits(self, body):
+        return self._send_json(backend.save_credits(body))
+
+    def _post_compute_config(self, body):
+        return self._send_json(backend.save_compute_config(body))
+
+    def _post_compute_test(self, body):
+        return self._send_json(backend.test_compute_provider(body.get('provider_key', '')))
+
+    # ---------------- POST：知识库入库 ----------------
+    def _post_hub_ingest(self, body):
+        _, err = self._hub_client(require_admin=True)
+        if err:
+            return self._hub_error(err)
+        from agent_core.knowledge import KnowledgeBase
+        from agent_core.storage import get_store
+
+        try:
+            result = KnowledgeBase(get_store()).ingest(
+                title=str(body.get('title') or ''),
+                content=str(body.get('content') or ''),
+                source=str(body.get('source') or ''),
+                tags=body.get('tags') if isinstance(body.get('tags'), list) else [],
+            )
+        except Exception as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        return self._send_json(result, status=201)
+
 
     def do_PATCH(self):
         path = self.path.split('?')[0]

@@ -2,7 +2,7 @@
 
 > 更新：2026-10-31（第 1 步「合并代码分叉」已完成）
 > 目标：拒绝屎山。四个硬指标见下。
-> 状态：**进行中，未推远端**。开发端与测试端源码已重新对齐，两端都是 315 测试通过。
+> 状态：**进行中，未推远端**。开发端与测试端源码已重新对齐，两端都是 316 测试通过。
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## 二、当前进度
 
-### 已完成（8 条）
+### 已完成（9 条）
 
 | 函数 | 原行数 | 现行数 | 拆出函数 | 所属文件 |
 |---|---|---|---|---|
@@ -31,6 +31,7 @@
 | `_gateway_stream` | 113 | 12 | 7 个 + 累加器拆 6 个 | `console/server.py` |
 | `_gateway_record` | 112 | 15 | 5 个方法 + 7 个模块函数 | `console/server.py` |
 | `do_GET`（路由表化） | 355 | 16 | 36 个方法 + 3 张表 | `console/server.py` |
+| `do_POST`（路由表化） | 1033 | 16 | 38 个方法 + 3 张表 | `console/server.py` |
 | 合并代码分叉 | — | — | — | 全项目（见第三节） |
 
 > 2026-10-31 追加：`_handle_universal_chat_completions_legacy`（268 行）全项目零调用，
@@ -40,21 +41,26 @@
 > `/hub/v1/services` 依赖的 `agent_core.services` 早已不存在（请求直接断连）。
 > 这次一并清掉，改成规规矩矩的 404。
 
+> 2026-10-31 追加：`do_POST` 里 30 多个分支同样被「已下线」前缀表挡住（plugins / services /
+> mcp / bridges / contexts / modules / hosts / execution_ai 全在里面），一并删除；
+> 顺带补上三个**未鉴权就能写**的洞：`/api/tools`、`/api/tools/policy`、`/api/archives`
+> 以前不登录也能改工具配置和建档案，现在统一 401（已加回归测试）。
+
 ### 全项目剩余
 
 ```text
 超过 20 行的函数   260 个
-超过 100 行的       12 个
+超过 100 行的       11 个
 ```
 
 最狠的五个：
 
 ```text
-1033 行  console/server.py  do_POST                       ← 下一步
- 110 行  console/server.py  _handle_archive_post
-  97 行  console/server.py  do_DELETE
-  76 行  console/server.py  _handle_tool_clean
-  58 行  console/server.py  _handle_archive_patch
+138 行  agent_core/llm.py  generate_with_tools            ← 下一步
+110 行  console/server.py  _handle_archive_post
+ 97 行  console/server.py  do_DELETE
+ 76 行  console/server.py  _handle_tool_clean
+ 58 行  console/server.py  _handle_archive_patch
 ```
 
 ---
@@ -108,11 +114,11 @@
 ```powershell
 cd D:\Stellaris
 python -m unittest discover -s tests -t .
-# 期望：315 通过，1 skip（test_bilibili_module，模块已归档）
+# 期望：316 通过，1 skip（test_bilibili_module，模块已归档）
 
 cd D:\Stellaris_test
 python -m unittest discover -s tests -t .
-# 期望：同上，315 通过
+# 期望：同上，316 通过
 ```
 
 本轮新增 12 个用例：
@@ -150,14 +156,14 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 按风险从低到高：
 
 ```text
-第 1 步  合并代码分叉                                     ✅ 已完成（315 通过）
-第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（315 通过）
-第 3 步  _gateway_complete（172 行）                        ✅ 已完成（315 通过）
-第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（315 通过）
-第 5 步  _gateway_stream（113 行）+ _gateway_record（112 行）  ✅ 已完成（315 通过）
-第 6 步  do_GET（355 行）→ 路由表化  ✅ 已完成（315 通过）
-第 7 步  do_POST（1033 行）→ 路由表化，工作量最大
-第 8 步  剩余 260 多个 20~100 行的
+第 1 步  合并代码分叉                                     ✅ 已完成（316 通过）
+第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（316 通过）
+第 3 步  _gateway_complete（172 行）                        ✅ 已完成（316 通过）
+第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（316 通过）
+第 5 步  _gateway_stream（113 行）+ _gateway_record（112 行）  ✅ 已完成（316 通过）
+第 6 步  do_GET（355 行）→ 路由表化  ✅ 已完成（316 通过）
+第 7 步  do_POST（1033 行）→ 路由表化  ✅ 已完成（316 通过）
+第 8 步  剩余 260 个 20~100 行的（最大 138 行）
 ```
 
 ---
@@ -237,4 +243,4 @@ HEAD     合并提交（archive 策略 + _gateway_context 拆分 + 账本 tools 
 
 ---
 
-*接手建议：先跑一次测试确认基线（应 315 通过），再从 `_gateway_context` 剩余 220 行继续。*
+*接手建议：先跑一次测试确认基线（应 316 通过），再从 `_gateway_context` 剩余 220 行继续。*

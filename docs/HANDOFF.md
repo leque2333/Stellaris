@@ -5,7 +5,7 @@
 > 开发端：`D:\Stellaris`（唯一改代码的地方）  
 > 测试端：`D:\Stellaris_test`（跑测试 + 跑 18895，不在里面改代码）  
 > 生产数据库 schema：**26**  
-> 当前测试：**315 项**（全部通过）
+> 当前测试：**316 项**（全部通过）
 
 > 目录命名：2026-10-31 起两个目录都改用项目名，不再叫「机器人 / 机器人_完整版」。
 > 代码一律先在 `D:\Stellaris` 改完、跑通测试，再整目录复刻到 `D:\Stellaris_test` 验证。
@@ -124,7 +124,7 @@ D:\Stellaris_test
 │  ├─ upstream_models_cache.json
 │  └─ persona.md          # 人格文件
 ├─ docs\                       # 架构/接入/记忆层文档
-├─ tests\                      # 315 个测试
+├─ tests\                      # 316 个测试
 ├─ backups\                    # 迁移/清理备份
 └─ logs\
 ```
@@ -231,7 +231,7 @@ python -m unittest discover -s tests -t .
 交接时结果：
 
 ```text
-Ran 315 tests
+Ran 316 tests
 OK
 ```
 
@@ -1215,7 +1215,7 @@ input_price / cache_price / output_price / currency
 
 1. 先确认 `18895`、nginx、AstrBot、NapCat 各自状态。
 2. 用浏览器登录，确认首页、凭证、账本三个页面正常。
-3. 跑一次 `315` 测试。
+3. 跑一次 `316` 测试。
 4. 备份 `memory.db` / `memory_graph.db` / `models_config.json` / `compute_providers.json`。
 5. 确认 AstrBot 的 provider 指向 `http://192.168.3.4:18895/v1`，模型为 `gemini-3.8-flash`。
 6. 确认 AstrBot embedding/知识库仍关闭。
@@ -1284,7 +1284,7 @@ input_price / cache_price / output_price / currency
 - [ ] 停用凭证只读
 - [ ] 账本分桶卡片正常
 - [ ] 清空账本已备份
-- [ ] 315 测试通过
+- [ ] 316 测试通过
 - [ ] 生产数据库 schema 26
 - [ ] 档案只有 `arc_master`，没有多余自动档案
 - [ ] 访客策略仍为默认关闭
