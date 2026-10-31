@@ -6,11 +6,11 @@ cd /d "%~dp0.."
 set PY=python
 where python >nul 2>nul
 if errorlevel 1 (
-  set PY=C:\Users\user\AppData\Local\Python\bin\python.exe
+  set PY=py
 )
 
 echo ============================================================
-echo  助手中枢 x AstrBot 一键连接
+echo  Stellaris 中枢 x AstrBot 一键连接
 echo ============================================================
 echo.
 echo  将要：自动找到 AstrBot 的 data 目录，把中枢写成它的默认模型提供商。
