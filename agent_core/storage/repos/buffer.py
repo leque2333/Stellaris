@@ -74,3 +74,70 @@ class BufferOps:
     def _buffer_row(row) -> Dict[str, Any]:
         payload: Optional[Dict[str, Any]] = _loads(row["payload"], {})
         return payload if isinstance(payload, dict) else {}
+
+    def release_tail(self, person_id: str, keep_chars: int, limit: int = 500) -> int:
+        """把超出 keep_chars 的旧事件从时间轴搬进缓冲区（时间轴因此有界）。"""
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT event_id, timestamp, source_module, actor_id, actor_name, narrative, "
+                "time_str, importance, detail_id, person_id, metadata, embedding "
+                "FROM agent_timeline WHERE person_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (str(person_id), int(limit)),
+            ).fetchall()
+            keep, drop = self._split_by_chars(rows, keep_chars)
+            if not drop:
+                return 0
+            now = __import__("time").time()
+            for row in drop:
+                payload = {key: row[key] for key in row.keys()}
+                payload["embedding"] = None  # 二进制不进 JSON
+                conn.execute(
+                    "INSERT INTO timeline_buffer (person_id, event_id, payload, released_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (str(person_id), str(row["event_id"]), _json(payload, "{}"), float(now)),
+                )
+                conn.execute("DELETE FROM agent_timeline WHERE event_id = ?", (row["event_id"],))
+        return len(drop)
+
+    def restore_buffer(self, person_id: str, limit: int = 50) -> int:
+        """把缓冲区里的记忆接回时间轴；返回接回条数。"""
+        restored = 0
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT id, payload FROM timeline_buffer WHERE person_id = ? ORDER BY id ASC LIMIT ?",
+                (str(person_id), int(limit)),
+            ).fetchall()
+            for row in rows:
+                payload = _loads(row["payload"], {})
+                if not isinstance(payload, dict) or not payload.get("event_id"):
+                    continue
+                conn.execute(
+                    "INSERT OR IGNORE INTO agent_timeline "
+                    "(event_id, timestamp, source_module, actor_id, actor_name, narrative, time_str, "
+                    "importance, detail_id, person_id, metadata) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        payload.get("event_id"), float(payload.get("timestamp") or 0),
+                        payload.get("source_module") or "", payload.get("actor_id") or "",
+                        payload.get("actor_name") or "", payload.get("narrative") or "",
+                        payload.get("time_str") or "", float(payload.get("importance") or 1.0),
+                        payload.get("detail_id") or "", payload.get("person_id") or person_id,
+                        _json(payload.get("metadata") or {}, "{}"),
+                    ),
+                )
+                conn.execute("DELETE FROM timeline_buffer WHERE id = ?", (int(row["id"]),))
+                restored += 1
+        return restored
+
+    @staticmethod
+    def _split_by_chars(rows, keep_chars: int):
+        """按字数切：前面的留、后面的搬。"""
+        keep, drop, used = [], [], 0
+        for row in rows:
+            size = len(str(row["narrative"] or ""))
+            if used + size <= max(0, int(keep_chars)):
+                keep.append(row)
+                used += size
+            else:
+                drop.append(row)
+        return keep, drop
