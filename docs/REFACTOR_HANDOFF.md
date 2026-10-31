@@ -2,7 +2,7 @@
 
 > 更新：2026-10-31（第 1 步「合并代码分叉」已完成）
 > 目标：拒绝屎山。四个硬指标见下。
-> 状态：**进行中，未推远端**。开发端与测试端源码已重新对齐，两端都是 316 测试通过。
+> 状态：**进行中，未推远端**。开发端与测试端源码已重新对齐，两端都是 306 测试通过。
 
 ---
 
@@ -49,21 +49,29 @@
 > 顺带补上三个**未鉴权就能写**的洞：`/api/tools`、`/api/tools/policy`、`/api/archives`
 > 以前不登录也能改工具配置和建档案，现在统一 401（已加回归测试）。
 
+
+> 2026-10-31 追加：删掉两个死模块 —— `agent_core/topology.py`（全仓零 import）、
+> `agent_core/connection.py`（只有测试在用，对应路由早已 404），连同 10 个测试用例。
+> 这也是为什么「超 100 行」从 10 个降到 8 个：`validate_handshake`(122) 和
+> `build_connection_tree`(103) 直接消失了，不需要拆。
+
 ### 全项目剩余
 
 ```text
-超过 20 行的函数   259 个
-超过 100 行的       10 个
+超过 20 行的函数   249 个
+超过 100 行的       8 个
 ```
 
 最狠的五个：
 
 ```text
-138 行  agent_core/llm.py  generate_with_tools             ← 下一步
-122 行  agent_core/topology.py  validate_handshake
+138 行  agent_core/llm.py  generate_with_tools             ← CLI 老链路，待定去留
 120 行  agent_core/identity_scan.py  scan
-117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins
-108 行  agent_core/memory/episodic_stream.py  recall_timeline
+117 行  agent_core/storage/schema.py  _v2_timeline_and_plugins   （一次性迁移，不拆）
+115 行  tests/test_tool_shelves.py  setUpClass               （测试夹具，不拆）
+108 行  agent_core/memory/episodic_stream.py  recall_timeline    ← 下一步
+107 行  agent_core/tool_shelves/gate.py  _decide
+104 行  agent_core/tool_shelves/cleaner.py  compress_tool_result
 ```
 
 ---
@@ -117,11 +125,11 @@
 ```powershell
 cd D:\Stellaris
 python -m unittest discover -s tests -t .
-# 期望：316 通过，1 skip（test_bilibili_module，模块已归档）
+# 期望：306 通过，1 skip（test_bilibili_module，模块已归档）
 
 cd D:\Stellaris_test
 python -m unittest discover -s tests -t .
-# 期望：同上，316 通过
+# 期望：同上，306 通过
 ```
 
 本轮新增 12 个用例：
@@ -159,13 +167,13 @@ curl -X POST http://127.0.0.1:18895/v1/chat/completions \
 按风险从低到高：
 
 ```text
-第 1 步  合并代码分叉                                     ✅ 已完成（316 通过）
-第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（316 通过）
-第 3 步  _gateway_complete（172 行）                        ✅ 已完成（316 通过）
-第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（316 通过）
-第 5 步  _gateway_stream（113 行）+ _gateway_record（112 行）  ✅ 已完成（316 通过）
-第 6 步  do_GET（355 行）→ 路由表化  ✅ 已完成（316 通过）
-第 7 步  do_POST（1033 行）→ 路由表化  ✅ 已完成（316 通过）
+第 1 步  合并代码分叉                                     ✅ 已完成（306 通过）
+第 2 步  拆 _gateway_context 剩余 220 行（工具闸门 + 构建 ctx dict）  ✅ 已完成（306 通过）
+第 3 步  _gateway_complete（172 行）                        ✅ 已完成（306 通过）
+第 4 步  删 _handle_universal_chat_completions_legacy（268 行死代码）  ✅ 已完成（306 通过）
+第 5 步  _gateway_stream（113 行）+ _gateway_record（112 行）  ✅ 已完成（306 通过）
+第 6 步  do_GET（355 行）→ 路由表化  ✅ 已完成（306 通过）
+第 7 步  do_POST（1033 行）→ 路由表化  ✅ 已完成（306 通过）
 第 8 步  console/server.py 已无 100 行以上函数；继续拆 agent_core（最大 138 行）
           然后是剩余 259 个 20~100 行的小函数
 ```
@@ -247,4 +255,4 @@ HEAD     合并提交（archive 策略 + _gateway_context 拆分 + 账本 tools 
 
 ---
 
-*接手建议：先跑一次测试确认基线（应 316 通过），再从 `_gateway_context` 剩余 220 行继续。*
+*接手建议：先跑一次测试确认基线（应 306 通过），再从 `_gateway_context` 剩余 220 行继续。*
