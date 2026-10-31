@@ -112,6 +112,17 @@ def _prefetch_terms(user_query: str) -> list:
     return picked[:5]
 
 
+MIN_TIMELINE_CHARS = 2_000
+
+
+def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
+    """检索占了多少字，时间轴就让出多少；至少留 2000 字。"""
+    from agent_core.memory import timeline_curve
+
+    budget = int(total or timeline_curve.budget_chars())
+    return max(MIN_TIMELINE_CHARS, budget - max(0, int(reserved)))
+
+
 def _memory_tool_prompt(stream: bool = False) -> str:
     """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
     import os
@@ -2469,13 +2480,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result["master_facts"] = profile_row.get("facts", [])
         return result
 
-    def _collect_recall_memories(self, timeline_hub, user_query, actor_id, person_id, channel_id, channel_type):
+    def _collect_recall_memories(self, timeline_hub, user_query, actor_id, person_id, channel_id, channel_type,
+                                 reserved: int = 0):
         """时间轴整段注入：按记忆曲线压缩，不再切 8 条。"""
         from agent_core.memory import timeline_curve
 
         events = self._timeline_events(timeline_hub, actor_id, person_id, channel_id, channel_type)
         entries = timeline_curve.build_curve(
-            events, budget_chars=timeline_curve.budget_chars(), line_overhead=22,
+            events, budget_chars=_timeline_budget_with_reserved(reserved), line_overhead=22,
         )
         by_id = {getattr(event, "event_id", ""): event for event in events}
         lines = []
@@ -2500,6 +2512,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         session = self._gateway_session(body, request)
         if session.get("error"):
             return {"error": session["error"]}
+        session["_memory_block"] = self._prefetch_memory_block(session)
         memory = self._gateway_memory(session)
         compute = self._gateway_compute(session["user_query"])
         tools = self._gateway_tools(body, request, session)
@@ -2591,7 +2604,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _gateway_memory(self, session):
         """召回 + 事实 + 系统提示词：这一段决定"它记得什么"。"""
-        recalled = self._gateway_recall(session)
+        reserved = len(session.get("_memory_block") or "")
+        recalled = self._gateway_recall(session, reserved)
         master_facts, relations = self._gateway_facts(session)
         sys_prompt = self._gateway_system_prompt(session, master_facts, recalled, relations)
         return {
@@ -2601,7 +2615,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "sys_prompt": sys_prompt,
         }
 
-    def _gateway_recall(self, session):
+    def _gateway_recall(self, session, reserved: int = 0):
         """长期记忆召回；访客、没权限、查询太短都不查。"""
         if session["is_guest"] or not session["perms"].get("allow_recall_memory", True):
             return []
@@ -2842,7 +2856,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         }
         ctx.update(self._gateway_ctx_identity(session))
         ctx.update(self._gateway_ctx_model(memory, compute, request["stream"]))
-        ctx["sys_prompt"] += self._prefetch_memory_block(ctx)
+        ctx["sys_prompt"] += session.get("_memory_block") or ""
         return ctx
 
     def _prefetch_memory_block(self, ctx):

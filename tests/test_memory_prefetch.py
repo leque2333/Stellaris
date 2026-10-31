@@ -17,6 +17,20 @@ from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
 
 
+class BudgetTest(unittest.TestCase):
+    def test_no_reserved(self):
+        self.assertEqual(server._timeline_budget_with_reserved(0, total=8000), 8000)
+
+    def test_reserved_deducted(self):
+        self.assertEqual(server._timeline_budget_with_reserved(3000, total=8000), 5000)
+
+    def test_floor(self):
+        self.assertEqual(server._timeline_budget_with_reserved(90_000, total=8000), 2000)
+
+    def test_negative_reserved_ignored(self):
+        self.assertEqual(server._timeline_budget_with_reserved(-5, total=8000), 8000)
+
+
 class PrefetchTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="prefetch_"))
