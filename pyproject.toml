@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stellaris"
+version = "8.0.0"
+description = "Agent 记忆中枢：人格、档案、时间轴、模型路由与 Token 账本"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "Stellaris contributors" }]
+keywords = ["agent", "memory", "persona", "openai-compatible", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "aiohttp>=3.9.0",
+    "numpy>=1.24.0",
+    "jieba>=0.42.1",
+    "psutil>=5.9.0",
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "pytest>=8.0"]
+
+[project.urls]
+Repository = "https://github.com/leque2333/Stellaris"
+Issues = "https://github.com/leque2333/Stellaris/issues"
+
+[tool.setuptools.packages.find]
+include = ["agent_core*", "console*"]
+exclude = ["tests*", "docs*", "scripts*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = ["data", "backups", "logs", "archive", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # 行长交给 formatter
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
