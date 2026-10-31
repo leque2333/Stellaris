@@ -27,22 +27,27 @@ Stellaris 把这些收敛到一处：
 
 ```mermaid
 flowchart TD
-    subgraph 外设层（零特权）
-        QQ["QQ / 平台协议端"]
+    subgraph EXT["外设层 零特权"]
+        QQ["QQ 平台协议端"]
         Bili["B站订阅与巡检"]
         Web["Dify / NextChat / Cline"]
     end
 
-    subgraph 中枢 :18895
-        GW["通用网关 /v1/chat/completions"]
-        Persona["人格内核<br/>好感度 · 亲疏温差 · 去句号"]
-        Timeline["自传时间轴<br/>三维召回 · 事实沉淀"]
-        Ledger["Token 账本<br/>通道 + 工具归因"]
-        Shelf["工具货架<br/>分类 · 裁剪 · 提权"]
+    subgraph HUB["中枢 18895"]
+        GW["通用网关 /v1"]
+        Persona["人格内核"]
+        Timeline["自传时间轴"]
+        Ledger["Token 账本"]
+        Shelf["工具货架"]
     end
 
-    QQ & Bili & Web <== OpenAI /v1 ==> GW
-    GW <==> Persona & Timeline & Ledger & Shelf
+    QQ -->|OpenAI /v1| GW
+    Bili -->|OpenAI /v1| GW
+    Web -->|OpenAI /v1| GW
+    GW --> Persona
+    GW --> Timeline
+    GW --> Ledger
+    GW --> Shelf
 ```
 
 ## 能力
