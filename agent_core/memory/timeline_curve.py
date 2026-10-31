@@ -21,6 +21,7 @@ ENV_BUDGET = "HUB_TIMELINE_BUDGET"
 DEFAULT_TIER_SHARES = (0.30, 0.40, 0.30)
 DEFAULT_LEVELS = (1.00, 0.85, 0.60)
 TAIL_ENTRY_CHARS = 80  # 尾段按字数压：一条最多 80 字，不再按比例
+DEDUPE_PREFIX = 12     # 近似去重：前 12 字相同视为同一条
 _CLAUSE_ENDS = "。！？；\n"
 MIN_COMPRESS_CHARS = 100   # 短句本来就是一句话，压它只会压出歧义
 _QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ('"', '"'))
@@ -104,6 +105,7 @@ def build_curve(
     levels: Sequence[float] = DEFAULT_LEVELS,
     line_overhead: int = 0,
     allow_overflow: bool = True,
+    dedupe: bool = True,
 ) -> List[CurveEntry]:
     """按新→旧铺满预算，并按字数份额分层压缩。"""
     ordered = sorted(events, key=lambda item: float(getattr(item, "timestamp", 0) or 0),
@@ -111,11 +113,16 @@ def build_curve(
     boundaries = _tier_boundaries(budget_chars, tier_shares)
     entries: List[CurveEntry] = []
     used = 0
+    seen = set()
     for event in ordered:
         text = str(getattr(event, "narrative", "") or "")
         cost = len(text) + max(0, line_overhead)
         if not text:
             continue
+        fingerprint = _fingerprint(text)
+        if dedupe and fingerprint and fingerprint in seen:
+            continue  # 近似重复：新的已经收过，旧的跳过
+        seen.add(fingerprint)
         if used + cost > budget_chars:
             # 允许整条浮动：还没到预算就再收一条，避免尾部出现半条缝
             if allow_overflow and used < budget_chars:
@@ -140,6 +147,22 @@ def build_curve(
         ))
         used += cost
     return entries
+
+
+_BOILERPLATE = ("说：「", "回答：「", "说:「")
+
+
+def _fingerprint(text: str) -> str:
+    """去重指纹：先剥掉「某某说：」这类开头，再取前 N 字。"""
+    import re
+
+    compact = re.sub(r"[\s\u3000]+", "", str(text or ""))
+    for mark in _BOILERPLATE:
+        index = compact.find(mark)
+        if index >= 0:
+            compact = compact[index + len(mark):]
+            break
+    return compact[:DEDUPE_PREFIX]
 
 
 def _tier_boundaries(budget: int, shares: Sequence[float]) -> List[float]:

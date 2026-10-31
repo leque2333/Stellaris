@@ -20,10 +20,14 @@ class _Event:
 
 
 def _events(count, length=100):
-    return [
-        _Event(f"e{index}", timestamp=1000 + index, narrative=("甲" * (length - 1)) + "。")
-        for index in range(count)
-    ]
+    rows = []
+    for index in range(count):
+        prefix = f"第{index}条"
+        rows.append(_Event(
+            f"e{index}", timestamp=1000 + index,
+            narrative=prefix + "甲" * max(1, length - len(prefix)),
+        ))
+    return rows
 
 
 class TierTest(unittest.TestCase):
@@ -89,7 +93,7 @@ class CompressTest(unittest.TestCase):
 
 class TailByCharsTest(unittest.TestCase):
     def test_tail_entry_capped_by_chars(self):
-        events = [_Event(f"e{index}", timestamp=100 - index, narrative="字" * 100) for index in range(10)]
+        events = [_Event(f"e{index}", timestamp=100 - index, narrative=f"第{index}条" + "字" * 96) for index in range(10)]
         entries = curve.build_curve(events, budget_chars=1000)
         tail = [e for e in entries if e.tier >= 2]
         self.assertTrue(tail)
@@ -97,11 +101,28 @@ class TailByCharsTest(unittest.TestCase):
             self.assertLessEqual(item.kept_chars, curve.TAIL_ENTRY_CHARS + 1)
 
     def test_middle_still_ratio(self):
-        events = [_Event(f"m{index}", timestamp=100 - index, narrative="字" * 100) for index in range(10)]
-        entries = curve.build_curve(events, budget_chars=1000)
+        events = [_Event(f"m{index}", timestamp=100 - index, narrative=f"第{index}条" + "字" * 196) for index in range(10)]
+        entries = curve.build_curve(events, budget_chars=2000)
         middle = [e for e in entries if e.tier == 1]
         self.assertTrue(middle)
         self.assertLess(middle[0].kept_chars, middle[0].original_chars)
+
+
+class DedupeTest(unittest.TestCase):
+    def test_same_prefix_keeps_newest(self):
+        events = [
+            _Event("new", timestamp=200, narrative="乐阙说：「今天吃什么」；安桉回答：「随便」"),
+            _Event("old", timestamp=100, narrative="乐阙说：「今天吃什么」；安桉回答：「都行」"),
+        ]
+        entries = curve.build_curve(events, budget_chars=1000)
+        self.assertEqual([e.event_id for e in entries], ["new"])
+
+    def test_different_prefix_kept(self):
+        events = [
+            _Event("a", timestamp=200, narrative="乐阙说：「今天吃什么」"),
+            _Event("b", timestamp=100, narrative="安桉说：「我想吃鱼」"),
+        ]
+        self.assertEqual(len(curve.build_curve(events, budget_chars=1000)), 2)
 
 
 class SummaryTest(unittest.TestCase):
