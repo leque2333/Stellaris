@@ -88,15 +88,6 @@ _MEMORY_TOOL_BLOCK = (
 )
 
 
-_TIME_ANCHORS = ("前天", "昨天", "上次", "上回", "之前", "那次", "记得", "说过", "聊过", "前阵子")
-
-
-def _time_anchor_query(text) -> bool:
-    """用户话里有没有「翻旧账」的信号；命中就先查一次记忆库。"""
-    value = str(text or "")
-    return any(word in value for word in _TIME_ANCHORS)
-
-
 _STOP_WORDS = {
     "记得", "说过", "聊过", "什么", "怎么", "那个", "这个", "上次", "之前", "前天", "昨天",
     "那事", "的事", "事情", "还有", "我们", "你", "我", "吗", "呢", "的", "了", "吧", "啊",
@@ -106,8 +97,6 @@ _STOP_WORDS = {
 def _prefetch_terms(user_query: str) -> list:
     """把「还记得小鱼干那事吗」变成 [小鱼干, 那事] 这类可检索的词。"""
     text = str(user_query or "")
-    for word in _TIME_ANCHORS:
-        text = text.replace(word, " ")
     try:
         import jieba
 
@@ -2857,8 +2846,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return ctx
 
     def _prefetch_memory_block(self, ctx):
-        """用户话里带了时间锚点就先翻库：流式/非流式都能用。"""
-        if not _time_anchor_query(ctx.get("user_query") or ""):
+        """默认不预取：让模型自己判断要不要回忆，只在开了兜底时才查。"""
+        import os
+
+        if os.getenv("HUB_MEMORY_PREFETCH", "0") != "1":
             return ""
         from agent_core.memory import deep_recall
 

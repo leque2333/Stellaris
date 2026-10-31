@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""时间锚点预取：流式/非流式都能用的记忆检索。"""
+"""记忆检索的默认行为：不靠关键词猜，交给模型；兜底预取可手动开。"""
 
+import os
 import sys
 import tempfile
 import unittest
@@ -16,16 +17,6 @@ from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import SQLiteStore  # noqa: E402
 
 
-class AnchorTest(unittest.TestCase):
-    def test_hits(self):
-        for text in ("你还记得我前天说过什么吗", "昨天那个事", "上次聊的那个"):
-            self.assertTrue(server._time_anchor_query(text), text)
-
-    def test_misses(self):
-        for text in ("今天天气不错", "帮我查一下代码", ""):
-            self.assertFalse(server._time_anchor_query(text), text)
-
-
 class PrefetchTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="prefetch_"))
@@ -39,30 +30,38 @@ class PrefetchTest(unittest.TestCase):
                 actor_id="master", actor_name="master", narrative=narrative,
                 person_id="master",
             ))
+        self._old = os.environ.pop("HUB_MEMORY_PREFETCH", None)
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop("HUB_MEMORY_PREFETCH", None)
+        else:
+            os.environ["HUB_MEMORY_PREFETCH"] = self._old
 
     def _handler(self):
         handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
         handler._memory_store = lambda: self.store
         return handler
 
-    def test_block_when_anchor_and_hit(self):
+    def test_default_is_off(self):
+        block = self._handler()._prefetch_memory_block(
+            {"user_query": "还记得小鱼干那事吗", "person_id": "master"}
+        )
+        self.assertEqual(block, "")
+
+    def test_fallback_when_enabled(self):
+        os.environ["HUB_MEMORY_PREFETCH"] = "1"
         block = self._handler()._prefetch_memory_block(
             {"user_query": "还记得小鱼干那事吗", "person_id": "master"}
         )
         self.assertIn("记忆库·按时间检索", block)
         self.assertIn("小鱼干", block)
 
-    def test_empty_without_anchor(self):
-        block = self._handler()._prefetch_memory_block(
-            {"user_query": "小鱼干收到了吗", "person_id": "master"}
-        )
-        self.assertEqual(block, "")
-
-    def test_empty_without_hit(self):
-        block = self._handler()._prefetch_memory_block(
-            {"user_query": "还记得火箭发射吗", "person_id": "master"}
-        )
-        self.assertEqual(block, "")
+    def test_terms_are_plain_words(self):
+        terms = server._prefetch_terms("还记得小鱼干那事吗")
+        self.assertTrue(terms)
+        self.assertNotIn("吗", terms)
+        self.assertNotIn("记得", terms)
 
 
 if __name__ == "__main__":
