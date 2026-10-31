@@ -248,6 +248,42 @@ class TimelineOps:
             ).fetchall()
         return [self._row_to_event(r) for r in rows]
 
+    def search_narratives(
+        self,
+        terms: List[str],
+        *,
+        start_ts: Optional[float] = None,
+        end_ts: Optional[float] = None,
+        person_ids: Optional[Iterable[str]] = None,
+        limit: int = 200,
+        match_all: bool = True,
+    ) -> List[TimelineEvent]:
+        """按关键词 + 时间范围翻时间轴；默认要求全部命中，precision 更稳。"""
+        terms = [str(term).strip() for term in terms or [] if str(term).strip()]
+        if not terms:
+            return []
+        joiner = " AND " if match_all else " OR "
+        clauses = ["(" + joiner.join("narrative LIKE ?" for _ in terms) + ")"]
+        params: List[Any] = [f"%{term}%" for term in terms]
+        if start_ts is not None:
+            clauses.append("timestamp >= ?")
+            params.append(float(start_ts))
+        if end_ts is not None:
+            clauses.append("timestamp <= ?")
+            params.append(float(end_ts))
+        if person_ids:
+            ids = [str(item) for item in person_ids]
+            clauses.append(f"person_id IN ({','.join('?' for _ in ids)})")
+            params.extend(ids)
+        params.append(int(limit))
+        sql = (
+            "SELECT * FROM agent_timeline WHERE " + " AND ".join(clauses)
+            + " ORDER BY timestamp DESC LIMIT ?"
+        )
+        with self._connect() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
     def surrounding(self, event_id: str, before_n: int = 2, after_n: int = 2) -> List[TimelineEvent]:
         with self._connect() as conn:
             target = conn.execute("SELECT * FROM agent_timeline WHERE event_id = ?", (event_id,)).fetchone()

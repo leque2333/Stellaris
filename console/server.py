@@ -1374,6 +1374,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._handle_archive_post(path, body)
         if path == '/hub/v1/knowledge/ingest':
             return self._post_hub_ingest(body)
+        if path == '/hub/v1/memory/search':
+            return self._post_memory_search(body)
         self.send_response(404)
         self.end_headers()
 
@@ -1664,6 +1666,50 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._send_json(backend.test_compute_provider(body.get('provider_key', '')))
 
     # ---------------- POST：知识库入库 ----------------
+    def _post_memory_search(self, body):
+        """深时检索：时间范围 + 关键词 → 时间轴命中，按字数闸门返回。"""
+        _, err = self._hub_client(require_admin=True)
+        if err:
+            return self._hub_error(err)
+        from agent_core.memory import deep_recall
+
+        terms = deep_recall.parse_terms(body.get('query') or body.get('keywords') or '')
+        if not terms:
+            return self._send_json({'ok': False, 'error': '缺少关键词'}, status=400)
+        start_ts = deep_recall.parse_time_bound(body.get('start'))
+        end_ts = deep_recall.parse_time_bound(body.get('end'))
+        try:
+            budget = max(500, min(int(body.get('budget') or deep_recall.DEFAULT_BUDGET), 50_000))
+        except (TypeError, ValueError):
+            budget = deep_recall.DEFAULT_BUDGET
+        store = self._memory_store()
+        if store is None:
+            return self._send_json({'ok': False, 'error': '记忆库不可用'}, status=503)
+        person_id = str(body.get('person_id') or '') or None
+        common = dict(start_ts=start_ts, end_ts=end_ts,
+                      person_ids=[person_id] if person_id else None, limit=500)
+        rows = store.search_narratives(terms, **common)
+        if not rows and len(terms) > 1:
+            rows = store.search_narratives(terms, match_all=False, **common)
+        hits = [
+            deep_recall.Hit(
+                event_id=str(getattr(row, 'event_id', '')),
+                time_str=str(getattr(row, 'time_str', '')),
+                timestamp=float(getattr(row, 'timestamp', 0) or 0),
+                narrative=str(getattr(row, 'narrative', '') or ''),
+                source=str(getattr(row, 'source_module', '') or ''),
+            )
+            for row in rows
+        ]
+        total = sum(len(hit.narrative) for hit in hits)
+        kept, mode = deep_recall.trim_hits(hits, budget)
+        return self._send_json({
+            'ok': True,
+            **deep_recall.summarize(kept, mode, total),
+            'query': terms,
+            'records': [hit.as_dict() for hit in kept],
+        })
+
     def _post_hub_ingest(self, body):
         _, err = self._hub_client(require_admin=True)
         if err:

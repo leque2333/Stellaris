@@ -466,11 +466,30 @@ prompt    3.7k（基础） → 8.7k tokens
 
 ### 6.4 需要新增的东西
 
-| 组件 | 作用 |
+| 组件 | 状态 |
 |---|---|
-| `POST /hub/v1/memory/search` | 按时间范围 + 关键词检索时间轴与明细，带字数闸门 |
-| 工具描述 | 让执行 AI 知道「何时该搜记忆库」以及参数格式 |
-| 换页控制器 | 临时腾预算 / 结束后压缩与回收，保证总字数不超预算 |
+| `POST /hub/v1/memory/search` | ✅ 已实现（2026-10-31） |
+| 工具描述（AstrBot 侧） | 待做 |
+| 换页控制器 | 待做 |
+
+接口用法：
+
+```powershell
+curl.exe -X POST http://127.0.0.1:18895/hub/v1/memory/search `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer <客户端 Key>" `
+  -d '{"query":"小鱼干 科技新闻","start":"2026-10-29","end":"2026-10-31 23:59","budget":8000}'
+```
+
+```json
+{"ok": true, "mode": "compressed", "hits": 112, "chars": 7974,
+ "original_chars": 19704, "needs_ai_summary": true, "records": [...]}
+```
+
+- 关键词默认 **AND**（全词命中）；没结果才自动降级成 OR
+- `start` / `end` 支持 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`、unix 秒
+- `budget` 默认 8000，最大 50000；`person_id` 可选
+- 只返回时间轴叙述，原文不进这次响应（避免一次灌满上下文）
 
 ### 6.5 与现有实现的衔接
 
