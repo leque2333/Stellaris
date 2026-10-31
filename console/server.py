@@ -36,7 +36,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import backend
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.getenv("CONSOLE_PORT", 18890))
+# 端口：命令行参数优先（只认纯数字），其次环境变量，最后默认 18890。
+# 不这么写的话，被 unittest / import 时会拿 argv[1] 当端口直接崩。
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else int(os.getenv("CONSOLE_PORT", 18890))
 os.environ["CONSOLE_PORT"] = str(PORT)
 STATIC_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.dirname(STATIC_DIR)
@@ -75,6 +77,76 @@ def _is_tool_result(message) -> bool:
     """是不是工具返回的那一条（role == tool）。"""
     return isinstance(message, dict) and message.get("role") == "tool"
 
+
+def _join_tool_names(tool_calls):
+    """本轮实际调用的工具名，去重后逗号拼起来（容忍非列表输入）。"""
+    if not isinstance(tool_calls, (list, tuple)):
+        return ""
+    names = []
+    for call in tool_calls:
+        name = ((call or {}).get("function") or {}).get("name")
+        if name and name not in names:
+            names.append(str(name))
+    return ",".join(names)
+
+
+def _narrative_of(ctx, content):
+    """一句自传体叙述：谁说了什么、它怎么回。"""
+    if ctx["is_logic_task"]:
+        return f"{ctx['actor_name']}提出了复杂逻辑任务；{_persona_name()}调度幕后工兵推导并转述：「{content[:50]}」"
+    return f"{ctx['actor_name']}说：「{ctx['user_query'][:50]}」；{_persona_name()}回答：「{content[:50]}」"
+
+
+def _record_fact_usage(p_in, p_out):
+    """AI 抽事实的 token 走 memory.facts 通道记账。"""
+    backend.record_token_usage_event("memory.fact_extraction", p_in, p_out, source="memory.facts")
+
+
+def _extract_facts_with_ai(person_id, user_query):
+    """AI 抽事实：慢，放后台跑；token 也记账。"""
+    try:
+        from agent_core.memory.facts import FactStore
+
+        FactStore().store_extracted(
+            person_id, user_query, use_ai=True, source="ai_extract",
+            usage_cb=_record_fact_usage,
+        )
+    except Exception:
+        pass
+
+
+def _evaluate_affection(ctx, content):
+    """好感度评估失败静默：别让记忆副作用影响对话。"""
+    try:
+        _affection_step(ctx, content)
+    except Exception:
+        pass
+
+
+def _affection_step(ctx, content):
+    """未定给初始值，已定给增量；clamp 由 ProfileManager 负责。"""
+    from agent_core.profile import ProfileManager
+    from agent_core.profile.affection_ai import estimate_affection_delta, estimate_initial_affection
+    from agent_core.storage import get_store
+
+    person_id = ctx.get("person_id") or ctx["actor_id"]
+    profile_manager = ProfileManager(get_store())
+    current = profile_manager.get_affection(person_id)
+    user_text = ctx.get("user_query") or ""
+    if current is None:
+        value = estimate_initial_affection(user_text, content)
+        if value is not None:
+            profile_manager.set_affection(person_id, value, reason="首次交流，AI 给出初始好感")
+        return
+    result = estimate_affection_delta(user_text, content, int(current))
+    if result:
+        delta, reason = result
+        profile_manager.update_affection(person_id, delta, reason)
+
+
+def _ledger_tool_calls(accumulator):
+    """流式只给了 tool_calls 增量，这里还原成账本要的形状。"""
+    return [{"function": {"name": name}} for name in accumulator.tool_call_names]
 
 def _asset_version() -> int:
     """静态资源版本号：取 static/js、static/css 与 index.html 的最新 mtime。"""
@@ -3143,15 +3215,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return None
 
     def _gateway_record(self, ctx, content, p_in, p_out, has_tool_calls=False, detail_id="", tool_calls=None):
-        # 把本轮实际调用的工具名记进账本，方便按「通道 + 工具」归因
-        names = []
-        for _tc in (tool_calls or []):
-            _fn = ((_tc or {}).get("function") or {}).get("name")
-            if _fn and _fn not in names:
-                names.append(str(_fn))
-        tools = ",".join(names)
-        if tools:
-            has_tool_calls = True
+        """账本 + 时间轴 + 事实/好感度：一次请求的记忆副作用都在这。"""
+        tools = _join_tool_names(tool_calls)
+        self._record_usage(ctx, p_in, p_out, tools)
+        if has_tool_calls or tools or not content or not ctx["user_query"]:
+            return None
+        if not ctx["perms"].get("allow_ingest_timeline", True):
+            return None
+        narrative = _narrative_of(ctx, content)
+        event_id = self._ingest_timeline(ctx, narrative, detail_id)
+        if event_id and not ctx.get("is_guest"):
+            self._remember_facts(ctx, event_id, narrative)
+            self._start_affection_eval(ctx, content)
+        return event_id
+
+    def _record_usage(self, ctx, p_in, p_out, tools):
+        """记一笔 token 流水；失败不影响对话。"""
         try:
             backend.record_token_usage_event(
                 ctx.get("actual_model") or ctx["req_model"],
@@ -3159,101 +3238,54 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             )
         except Exception:
             pass
-        if has_tool_calls or not content or not ctx["user_query"]:
-            return None
-        if not ctx["perms"].get("allow_ingest_timeline", True):
-            return None
-        event_id = None
+
+    def _ingest_timeline(self, ctx, narrative, detail_id):
+        """成功对话才进时间轴；出错就当没记过。"""
         try:
-            if ctx["is_logic_task"]:
-                narrative = f"{ctx['actor_name']}提出了复杂逻辑任务；{_persona_name()}调度幕后工兵推导并转述：「{content[:50]}」"
-            else:
-                narrative = f"{ctx['actor_name']}说：「{ctx['user_query'][:50]}」；{_persona_name()}回答：「{content[:50]}」"
-            evt = backend.ingest_timeline_event(
+            event = backend.ingest_timeline_event(
                 source=ctx["channel_id"],
                 actor_name=ctx["actor_name"],
                 narrative=narrative,
-                payload={
-                    "actor_id": ctx["actor_id"],
-                    "archive_id": ctx.get("archive_id"),
-                    "person_id": ctx.get("person_id") or ctx["actor_id"],
-                    "importance": 2.0 if ctx["actor_id"] == "master" else 1.0,
-                    "channel": ctx["channel_id"],
-                    "detail_id": detail_id,
-                },
+                payload=self._timeline_payload(ctx, detail_id),
                 session_window_seconds=0,
             )
-            event_id = evt if isinstance(evt, str) else None
-            if event_id and not ctx.get("is_guest"):
-                try:
-                    from agent_core.memory.facts import FactStore
-                    store_facts = FactStore()
-                    store_facts.index_event(event_id, narrative)
-                    person_id = ctx.get("person_id") or ctx["actor_id"]
-                    # 统一写入 user_facts（source=ai_extract）；不再写没人读的 memory_facts
-                    stored = store_facts.store_extracted(
-                        person_id,
-                        ctx["user_query"],
-                        use_ai=False,
-                        source="ai_extract",
-                    )
-                    if not stored:
-                        def _ai_extract():
-                            try:
-                                def _usage(p_in, p_out):
-                                    backend.record_token_usage_event(
-                                        "memory.fact_extraction",
-                                        p_in,
-                                        p_out,
-                                        source="memory.facts",
-                                    )
-
-                                FactStore().store_extracted(
-                                    person_id,
-                                    ctx["user_query"],
-                                    use_ai=True,
-                                    source="ai_extract",
-                                    usage_cb=_usage,
-                                )
-                            except Exception:
-                                pass
-
-                        threading.Thread(target=_ai_extract, daemon=True).start()
-
-                    # 好感度自动评估（方案 A）：未定给初始值，已定给 delta
-                    def _eval_affection():
-                        try:
-                            from agent_core.profile import ProfileManager
-                            from agent_core.profile.affection_ai import (
-                                estimate_affection_delta,
-                                estimate_initial_affection,
-                            )
-                            from agent_core.storage import get_store
-
-                            pm = ProfileManager(get_store())
-                            current = pm.get_affection(person_id)
-                            user_text = ctx.get("user_query") or ""
-                            if current is None:
-                                value = estimate_initial_affection(user_text, content)
-                                if value is not None:
-                                    pm.set_affection(
-                                        person_id, value,
-                                        reason="首次交流，AI 给出初始好感",
-                                    )
-                                return
-                            result = estimate_affection_delta(user_text, content, int(current))
-                            if result:
-                                delta, reason = result
-                                pm.update_affection(person_id, delta, reason)
-                        except Exception:
-                            pass
-
-                    threading.Thread(target=_eval_affection, daemon=True).start()
-                except Exception:
-                    pass
         except Exception:
-            pass
-        return event_id
+            return None
+        return event if isinstance(event, str) else None
+
+    def _timeline_payload(self, ctx, detail_id):
+        """时间轴附加字段：档案归属、重要度、来源明细。"""
+        return {
+            "actor_id": ctx["actor_id"],
+            "archive_id": ctx.get("archive_id"),
+            "person_id": ctx.get("person_id") or ctx["actor_id"],
+            "importance": 2.0 if ctx["actor_id"] == "master" else 1.0,
+            "channel": ctx["channel_id"],
+            "detail_id": detail_id,
+        }
+
+    def _remember_facts(self, ctx, event_id, narrative):
+        """事件入图 + 规则抽事实；抽不到再让 AI 后台补一次。"""
+        person_id = ctx.get("person_id") or ctx["actor_id"]
+        try:
+            from agent_core.memory.facts import FactStore
+
+            fact_store = FactStore()
+            fact_store.index_event(event_id, narrative)
+            # 统一写 user_facts（source=ai_extract）；memory_facts 已没人读
+            stored = fact_store.store_extracted(
+                person_id, ctx["user_query"], use_ai=False, source="ai_extract",
+            )
+        except Exception:
+            return
+        if not stored:
+            threading.Thread(
+                target=_extract_facts_with_ai, args=(person_id, ctx["user_query"]), daemon=True
+            ).start()
+
+    def _start_affection_eval(self, ctx, content):
+        """好感度评估放后台线程，慢也不挡回复。"""
+        threading.Thread(target=_evaluate_affection, args=(ctx, content), daemon=True).start()
 
     def _gateway_auth_error(self, code):
         mapping = {
@@ -3389,13 +3421,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         inv_model = self._complete_model_invocation(ctx, store, inv_channel)
         return {"store": store, "inv_channel": inv_channel, "inv_model": inv_model}
 
-    def _complete_model_invocation(self, ctx, store, inv_channel):
+    def _complete_model_invocation(self, ctx, store, inv_channel, summary="人格模型调用"):
         """真有人格模型调用才开子 invocation，空记录不进时间轴。"""
         if not (store and ctx["compute_mgr"] and ctx["user_query"]):
             return None
         return self._l1_start(
             store, ctx, "model", "llm.persona",
-            parent_id=inv_channel, summary="人格模型调用",
+            parent_id=inv_channel, summary=summary,
         )
 
     def _complete_reply(self, ctx):
@@ -3526,29 +3558,36 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "tool_gate": ctx.get("tool_gate"),
         }, invocation_id=state["inv_model"] or state["inv_channel"])
 
-    def _log_gate_decision(self, ctx, out):
+    def _log_gate_decision(self, ctx, out, stream=False):
         """工具货架逐轮明细：只有真过了闸门才记。"""
         gate_info = ctx.get("tool_gate")
         if not gate_info:
             return
-        self._gate_log(ctx, dict(
+        record = dict(
             gate_info,
             trace=ctx.get("trace_id"),
             channel=ctx.get("channel_id"),
             actor=ctx.get("actor_id"),
             platform=ctx.get("platform"),
-            tool_calls=[((tc.get("function") or {}).get("name")) for tc in (out["tool_calls"] or [])],
             expanded=bool(ctx.get("tool_expanded")),
             compression=ctx.get("tool_compression"),
-        ))
+        )
+        if stream:
+            record["stream"] = True
+        else:
+            record["tool_calls"] = [
+                ((tc.get("function") or {}).get("name")) for tc in (out.get("tool_calls") or [])
+            ]
+        self._gate_log(ctx, record)
 
-    def _complete_invocations(self, ctx, state, out, event_id):
+    def _complete_invocations(self, ctx, state, out, event_id, record_tools=True):
         """工具与调用收尾：工具请求一条条记，再统一 finish。"""
         store = state["store"]
         if not store:
             return
-        for tool_call in out["tool_calls"] or []:
-            self._record_tool_call(ctx, state, tool_call)
+        if record_tools:  # 流式路径不单独记 tool invocation，只记名字
+            for tool_call in out["tool_calls"] or []:
+                self._record_tool_call(ctx, state, tool_call)
         status = "fallback" if out["fallback"] else "ok"
         tokens = f"{out['in']}+{out['out']} tokens"
         for inv in (state["inv_model"], state["inv_channel"]):
@@ -3599,6 +3638,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         }
 
     def _gateway_stream(self, ctx):
+        self._stream_prepare(ctx)
+        accumulator = _StreamAccumulator()
+        state = self._stream_begin(ctx)
+        pump = self._stream_pump(ctx, accumulator)
+        if pump["aborted"]:  # 客户端断开：不再记账，避免半截数据进库
+            return
+        out = self._stream_output(ctx, accumulator, pump["wrote"])
+        detail_id = self._stream_audit(ctx, state, out)
+        event_id = self._gateway_record(
+            ctx, out["content"], out["in"], out["out"], out["tool_call_flag"],
+            detail_id=detail_id or "", tool_calls=out["tool_calls"],
+        )
+        self._complete_invocations(ctx, state, out, event_id, record_tools=False)
+
+    def _stream_prepare(self, ctx):
+        """SSE 响应头：先发头，后面才能边生成边下推。"""
         self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -3609,9 +3664,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self.send_header(key, str(value))
         self.end_headers()
 
-        accum = _StreamAccumulator()
-        wrote = False
-
+    def _stream_begin(self, ctx):
+        """流式也要开 invocation：通道一条、人格模型一条。"""
         store = self._memory_store()
         inv_channel = self._l1_start(
             store, ctx, "channel", ctx["channel_id"],
@@ -3625,93 +3679,84 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "stream": True,
             "system_prompt": ctx["sys_prompt"],
         }, invocation_id=inv_channel)
-        inv_model = None
-        if store and ctx["compute_mgr"] and ctx["user_query"]:
-            inv_model = self._l1_start(
-                store, ctx, "model", "llm.persona",
-                parent_id=inv_channel, summary="人格模型流式调用",
-            )
+        inv_model = self._complete_model_invocation(ctx, store, inv_channel, "人格模型流式调用")
+        return {"store": store, "inv_channel": inv_channel, "inv_model": inv_model}
+
+    def _stream_pump(self, ctx, accumulator):
+        """转发上游 SSE；返回 {wrote: 是否写过内容, aborted: 是否要中止}。"""
+        pump = {"wrote": False, "aborted": False}
         try:
             if ctx["compute_mgr"] and ctx["user_query"]:
-                active_msgs = [{"role": "system", "content": ctx["sys_prompt"]}] + [
-                    m for m in ctx["messages"] if m.get("role") != "system"
-                ]
-                for chunk in ctx["compute_mgr"].stream_chat_completion(
-                    "persona_slot", active_msgs, current_port=PORT, timeout=180, extra=ctx["extra"]
-                ):
-                    wrote = True
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-                    accum.feed(chunk)
-
-            if not wrote:
-                fallback = self._gateway_fallback(ctx)
-                accum.content.append(fallback)
-                chunk = {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
-                    "object": "chat.completion.chunk",
-                    "created": int(time.time()),
-                    "model": ctx["req_model"],
-                    "choices": [{"index": 0, "delta": {"content": fallback}, "finish_reason": None}],
-                }
-                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
-                self.wfile.flush()
-
-            if not accum.saw_done:
+                pump["wrote"] = self._stream_forward(ctx, accumulator)
+            if not pump["wrote"]:
+                self._stream_fallback_chunk(ctx, accumulator)
+            if not accumulator.saw_done:
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
-            return
-        except Exception as e:
-            print(f"[Gateway] 流式异常: {e}", flush=True)
+            pump["aborted"] = True  # 客户端跑了，后面的记账也没人看
+        except Exception as exc:
+            print(f"[Gateway] 流式异常: {exc}", flush=True)
+        return pump
 
-        content = "".join(accum.content)
-        usage = accum.usage or {}
-        p_in = int(usage.get("prompt_tokens") or max(10, len(ctx["user_query"]) * 2 + len(ctx["sys_prompt"]) // 4))
-        p_out = int(usage.get("completion_tokens") or max(5, len(content) // 2))
+    def _stream_forward(self, ctx, accumulator):
+        """把上游 chunk 原样写给客户端，边写边喂累加器。"""
+        active_msgs = [{"role": "system", "content": ctx["sys_prompt"]}] + [
+            m for m in ctx["messages"] if m.get("role") != "system"
+        ]
+        wrote = False
+        for chunk in ctx["compute_mgr"].stream_chat_completion(
+            "persona_slot", active_msgs, current_port=PORT, timeout=180, extra=ctx["extra"]
+        ):
+            wrote = True
+            self.wfile.write(chunk)
+            self.wfile.flush()
+            accumulator.feed(chunk)
+        return wrote
 
-        # 工具货架：流式路径同样记录上下文与决策
-        self._gate_note(ctx, content, accum.tool_calls)
-        gate_info = ctx.get("tool_gate")
-        if gate_info:
-            self._gate_log(ctx, dict(
-                gate_info,
-                trace=ctx.get("trace_id"),
-                channel=ctx.get("channel_id"),
-                actor=ctx.get("actor_id"),
-                platform=ctx.get("platform"),
-                stream=True,
-                expanded=bool(ctx.get("tool_expanded")),
-                compression=ctx.get("tool_compression"),
-            ))
+    def _stream_fallback_chunk(self, ctx, accumulator):
+        """上游一个字都没吐：推一条兜底话术，别让前端空转。"""
+        fallback = self._gateway_fallback(ctx)
+        accumulator.content.append(fallback)
+        chunk = {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": ctx["req_model"],
+            "choices": [{"index": 0, "delta": {"content": fallback}, "finish_reason": None}],
+        }
+        self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"))
+        self.wfile.flush()
 
-        detail_id = None
-        if store:
-            detail_id = self._l3(store, "llm_response", {
-                "content": content,
-                "usage": usage,
-                "finish_reason": accum.finish_reason,
-                "fallback": not wrote,
-                "tool_gate": gate_info,
-            }, invocation_id=inv_model or inv_channel)
-        event_id = self._gateway_record(
-            ctx, content, p_in, p_out, accum.tool_calls, detail_id=detail_id or "",
-            tool_calls=accum.tool_calls,
-        )
+    def _stream_output(self, ctx, accumulator, wrote):
+        """流结束后的汇总：正文、usage、token 估算、工具名。"""
+        content = "".join(accumulator.content)
+        usage = accumulator.usage or {}
+        p_in, p_out = self._estimate_tokens(ctx, content, usage)
+        return {
+            "content": content,
+            "usage": usage,
+            "finish_reason": accumulator.finish_reason,
+            "fallback": not wrote,
+            "tool_calls": _ledger_tool_calls(accumulator),
+            "tool_call_flag": bool(accumulator.tool_calls),
+            "in": p_in,
+            "out": p_out,
+        }
 
-        if store:
-            status = "ok" if wrote else "fallback"
-            for inv in (inv_model, inv_channel):
-                if not inv:
-                    continue
-                try:
-                    store.finish_invocation(
-                        inv, status=status, event_id=event_id,
-                        summary=f"{p_in}+{p_out} tokens",
-                    )
-                except Exception:
-                    pass
-
+    def _stream_audit(self, ctx, state, out):
+        """闸门留痕 + llm_response 留档（流式版）。"""
+        self._gate_note(ctx, out["content"], out["tool_call_flag"])
+        self._log_gate_decision(ctx, out, stream=True)
+        if not state["store"]:
+            return None
+        return self._l3(state["store"], "llm_response", {
+            "content": out["content"],
+            "usage": out["usage"],
+            "finish_reason": out["finish_reason"],
+            "fallback": out["fallback"],
+            "tool_gate": ctx.get("tool_gate"),
+        }, invocation_id=state["inv_model"] or state["inv_channel"])
 
 class _StreamAccumulator:
     """从上游 SSE 中累计文本/tool_calls/usage，用于流结束后记账与回灌"""
@@ -3723,32 +3768,52 @@ class _StreamAccumulator:
         self.finish_reason = None
         self.saw_done = False
         self.tool_calls = False
+        self.tool_call_names = []
 
     def feed(self, chunk):
+        """按行拆 SSE：一行一个 data: 载荷，喂完就丢。"""
         self.buf += chunk
         while b"\n" in self.buf:
             line, self.buf = self.buf.split(b"\n", 1)
-            line = line.strip()
-            if not line.startswith(b"data:"):
-                continue
-            data = line[5:].strip()
-            if data == b"[DONE]":
-                self.saw_done = True
-                continue
-            try:
-                obj = json.loads(data.decode("utf-8", "ignore"))
-            except Exception:
-                continue
-            if obj.get("usage"):
-                self.usage = obj["usage"]
-            for choice in obj.get("choices") or []:
-                if choice.get("finish_reason"):
-                    self.finish_reason = choice["finish_reason"]
-                delta = choice.get("delta") or {}
-                if delta.get("content"):
-                    self.content.append(delta["content"])
-                if delta.get("tool_calls"):
-                    self.tool_calls = True
+            self._feed_line(line.strip())
+
+    def _feed_line(self, line):
+        """只认 data: 行；[DONE] 单独标记，其余解成 JSON。"""
+        if not line.startswith(b"data:"):
+            return
+        data = line[5:].strip()
+        if data == b"[DONE]":
+            self.saw_done = True
+            return
+        obj = self._decode(data)
+        if obj is not None:
+            self._feed_object(obj)
+
+    def _decode(self, data):
+        """半行垃圾很常见，解不开就跳过。"""
+        try:
+            return json.loads(data.decode("utf-8", "ignore"))
+        except Exception:
+            return None
+
+    def _feed_object(self, obj):
+        """usage / finish_reason 可能出现在任意一块里。"""
+        if obj.get("usage"):
+            self.usage = obj["usage"]
+        for choice in obj.get("choices") or []:
+            if choice.get("finish_reason"):
+                self.finish_reason = choice["finish_reason"]
+            self._feed_delta(choice.get("delta") or {})
+
+    def _feed_delta(self, delta):
+        """正文按块拼；tool_calls 只记名字，账本要按工具归因。"""
+        if delta.get("content"):
+            self.content.append(delta["content"])
+        for call in delta.get("tool_calls") or []:
+            self.tool_calls = True
+            name = ((call or {}).get("function") or {}).get("name")
+            if name and name not in self.tool_call_names:
+                self.tool_call_names.append(name)
 
 
 class ReusableThreadingServer(ThreadingHTTPServer):
