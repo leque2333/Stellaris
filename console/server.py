@@ -123,6 +123,36 @@ def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
     return max(MIN_TIMELINE_CHARS, budget - max(0, int(reserved)))
 
 
+RECALL_DEDUPE_SECONDS = 600
+
+
+def _recall_writeback(store, session, kept, mode) -> str:
+    """把这次检索回来的旧事压缩一次，写到时间轴最靠前的位置。"""
+    import time
+
+    from agent_core.memory.timeline_curve import compress_narrative
+    from agent_core.models import TimelineEvent
+
+    if store is None or not kept:
+        return ""
+    person = str(session.get("person_id") or session.get("actor_id") or "master")
+    recent = store.list_candidates(person_ids=[person], limit=1)
+    if recent:
+        last = recent[0]
+        fresh = time.time() - float(last.timestamp) < RECALL_DEDUPE_SECONDS
+        if fresh and "回忆：" in (last.narrative or ""):
+            return ""  # 刚写过，别重复灌
+    body = "；".join(hit.narrative for hit in kept[:3])
+    text = compress_narrative("回忆：" + body, 0.6)
+    store.append_event(TimelineEvent(
+        event_id="", timestamp=time.time(), source_module="memory_recall",
+        actor_id=person, actor_name=str(session.get("actor_name") or person),
+        narrative=text, person_id=person, importance=1.5,
+        metadata={"recall": True, "mode": mode, "hits": len(kept)},
+    ))
+    return text
+
+
 def _memory_tool_prompt(stream: bool = False) -> str:
     """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
     import os
@@ -2886,6 +2916,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         kept, mode = deep_recall.trim_hits(hits, 2_000)
         if not kept:
             return ""
+        _recall_writeback(store, ctx, kept, mode)
         lines = [f"\n\n【记忆库·按时间检索】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
         return "\n".join(lines)
@@ -3301,6 +3332,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         kept, mode = deep_recall.trim_hits(hits, deep_recall.DEFAULT_BUDGET // 2)
         if not kept:
             return "【记忆库】没有匹配的旧记录。"
+        _recall_writeback(store, ctx, kept, mode)
         lines = [f"【记忆库检索结果】mode={mode}，共 {len(kept)} 条："]
         lines.extend(f"- [{hit.time_str}] {hit.narrative}" for hit in kept)
         return "\n".join(lines)
