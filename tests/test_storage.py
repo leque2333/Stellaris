@@ -8,6 +8,7 @@
 import json
 import shutil
 import sqlite3
+import os
 import sys
 import tempfile
 import time
@@ -29,11 +30,13 @@ from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]
 
-FIXTURE = Path(r"D:\机器人_完整版\data\memory.db")
+FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\机器人_完整版\data\memory.db"))
 
 
 class StorageTestBase(unittest.TestCase):
     def setUp(self):
+        if not FIXTURE.is_file():
+            raise unittest.SkipTest(f"需要基线库：{FIXTURE}（可用 HUB_TEST_DB 指定）")
         self.tmp = Path(tempfile.mkdtemp(prefix="anan_store_"))
         self.db = self.tmp / "memory.db"
         if FIXTURE.exists():

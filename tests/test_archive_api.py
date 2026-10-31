@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from agent_core.identity import IdentityResolver  # noqa: E402
 
-FIXTURE = Path(r"D:\机器人_完整版\data\memory.db")
+FIXTURE = Path(os.getenv("HUB_TEST_DB", r"D:\机器人_完整版\data\memory.db"))
 
 
 def free_port():
@@ -31,6 +31,8 @@ def free_port():
 class ArchiveApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if not FIXTURE.is_file():
+            raise unittest.SkipTest(f"需要基线库：{FIXTURE}（可用 HUB_TEST_DB 指定）")
         cls.tmp = Path(tempfile.mkdtemp(prefix="anan_archive_api_"))
         cls.db = cls.tmp / "memory.db"
         shutil.copy2(FIXTURE, cls.db)
