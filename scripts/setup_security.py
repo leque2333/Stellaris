@@ -60,6 +60,24 @@ def apply(
     return api_security.load_config()
 
 
+def docker_hint(config) -> str:
+    """开了 local_only 且没放行 docker 网段时，AstrBot 会被 403，提前提醒。"""
+    try:
+        import subprocess
+
+        out = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
+                             capture_output=True, text=True, timeout=5)
+        names = {line.strip() for line in (out.stdout or "").splitlines()}
+    except Exception:
+        return ""
+    if "astrbot" not in names or not config.get("local_only"):
+        return ""
+    if any("172.16" in str(item) for item in config.get("allow_cidrs") or []):
+        return ""
+    return ("提醒：AstrBot 在 docker 里，来源是 172.x；当前白名单没放行，"
+            "它会被 403。执行 `--lan` 或手动加 172.16.0.0/12。")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="初始化 / 调整 API 安全配置")
     parser.add_argument("--show", action="store_true", help="只打印当前配置")
@@ -99,6 +117,10 @@ def main() -> int:
     status = api_security.status()
     print(f"配置已写入：{api_security.config_path()}")
     print(json.dumps(status, ensure_ascii=False, indent=2))
+    hint = docker_hint(config)
+    if hint:
+        print(hint)
+
     if config["signature"]["enabled"]:
         print("\n提示：内网来源（本机 / docker / 局域网）已默认豁免签名，AstrBot 无需改动；")
         print("      外部客户端需按 docs/API_SECURITY.md 的算法加 X-Timestamp + X-Signature。")

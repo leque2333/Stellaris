@@ -168,6 +168,33 @@ python scripts\setup_security.py --rotate-secret --grace-minutes 30
 curl.exe "http://127.0.0.1:18895/api/audit?limit=50" -H "X-Session-Token: <token>"
 ```
 
+## 四·五、部署自检
+
+换机器、改目录名、开完开关之后，跑一遍：
+
+```powershell
+python scripts\check_deploy.py
+```
+
+它会逐项检查并给结论（退出码非 0 表示有失败项）：
+
+```text
+✓ 中枢端口       127.0.0.1:18895 在监听
+✓ docker 挂载   /AstrBot/data ← D:\机器人_完整版\astrbot\data
+✓ 安全配置       bind=0.0.0.0 local_only=False 签名=关
+✓ 客户端 Key    require_key=true，3 个客户端 / 3 个 Key
+✓ 审计日志       ... 2 个文件 · 4.7 KB · 保留 90 天
+```
+
+重点看两条：
+
+1. **docker 挂载**：目录改名后，容器挂载源可能消失，容器里变成悬空挂载
+   （`ls` 报 No such file），AstrBot 静默不工作
+2. **来源白名单**：`local_only` 开着但没放行 `172.16.0.0/12` 时，
+   docker 里的 AstrBot 会被 403
+
+第 2 条在 `setup_security.py` 里也会主动提醒（检测到 astrbot 容器时）。
+
 ## 五、回滚
 
 ```powershell

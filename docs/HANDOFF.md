@@ -1255,6 +1255,7 @@ input_price / cache_price / output_price / currency
 | `docs/ARCHIVE_PROFILE.md` | 档案画像说明（事实来源/好感度窗口/自定义设定） |
 | `agent_core/api_security.py` | 本机访问限制 + 请求签名（HMAC/防重放） |
 | `scripts/setup_security.py` | 初始化安全配置（生成密钥、开开关、--lan 放行内网） |
+| `scripts/check_deploy.py` | 部署自检：端口/挂载/密钥/安全配置/审计 |
 | `agent_core/audit_log.py` | 安全审计日志（登录/配置变更/签名拒绝）→ logs/audit.log |
 
 > **2026-10-31 部署陷阱：目录改名会让 docker 挂载失效。**
