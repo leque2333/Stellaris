@@ -66,6 +66,16 @@ def _header_text(value) -> str:
     return text
 
 
+def _tool_name_of(tool) -> str:
+    """工具条目有两种形状（裸 name / function.name），统一取名字。"""
+    return (tool.get("function") or {}).get("name") or tool.get("name") or ""
+
+
+def _is_tool_result(message) -> bool:
+    """是不是工具返回的那一条（role == tool）。"""
+    return isinstance(message, dict) and message.get("role") == "tool"
+
+
 def _asset_version() -> int:
     """静态资源版本号：取 static/js、static/css 与 index.html 的最新 mtime。"""
     latest = 0
@@ -2996,225 +3006,367 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _gateway_context(self, body):
         request = self._parse_gateway_request(body)
-        messages = request["messages"]
-        req_model = request["model"]
-        stream = request["stream"]
-        trace_id = request["trace_id"]
+        session = self._gateway_session(body, request)
+        if session.get("error"):
+            return {"error": session["error"]}
+        memory = self._gateway_memory(session)
+        compute = self._gateway_compute(session["user_query"])
+        tools = self._gateway_tools(body, request, session)
+        return self._gateway_ctx_build(body, request, session, memory, compute, tools)
+
+    def _gateway_session(self, body, request):
+        """鉴权 + 通道 + 身份：这一段决定"是谁在说话"。"""
         profile, auth_error = self._authenticate_gateway_client()
         if auth_error:
             return {"error": auth_error}
-        client_id = profile.id
         channel_id, channel_type = self._resolve_channel_ids(profile)
+        self._maybe_auto_provision()  # 陌生模块首次接入时后台登记一次
+        ids = self._gateway_ids(body, request["messages"], channel_id)
+        actor = self._gateway_actor(body, profile, ids, channel_id)
+        if actor.get("error"):
+            return actor
+        actor.update({
+            **ids,
+            "profile": profile,
+            "client_id": profile.id,
+            "channel_id": channel_id,
+            "channel_type": channel_type,
+        })
+        return actor
 
-        # 陌生模块首次通过 /v1 接入：后台登记为模块，并抓一次内部信息卡/二级插件
-        self._maybe_auto_provision()
-
+    def _gateway_ids(self, body, messages, channel_id):
+        """用户原话、平台 UID、平台名：后面到处都要用的三个值。"""
         user_query = self._strip_query_prefix(self._extract_user_query(messages))
         raw_user_id = self._extract_raw_user_id(body, user_query)
         platform_name = self._resolve_platform_name(body, channel_id)
-        display_name = _header_text(self.headers.get("X-User-Name"))
+        return {"user_query": user_query, "raw_user_id": raw_user_id, "platform": platform_name}
 
-        from agent_core.access_policy import load_policy
-        access_policy = load_policy()
-        actor_id, actor_name, role_type = self._resolve_gateway_actor(
-            profile, platform_name, raw_user_id, display_name
+    def _gateway_actor(self, body, profile, ids, channel_id):
+        """把平台身份换成中枢身份（actor / person / archive）。"""
+        display_name = _header_text(self.headers.get("X-User-Name"))
+        actor_id, _, _ = self._resolve_gateway_actor(
+            profile, ids["platform"], ids["raw_user_id"], display_name
         )
         perms = self._resolve_channel_perms(profile, channel_id)
-
+        from agent_core.access_policy import load_policy
 
         identity = self._resolve_archive_identity(
-            body, actor_id, platform_name, raw_user_id, profile, perms, access_policy
+            body, actor_id, ids["platform"], ids["raw_user_id"], profile, perms, load_policy()
         )
         if identity.get("error"):
-            return {"error": identity["error"]}
+            return identity
+        return self._identity_fields(identity)
 
-        actor_id = identity["actor_id"]
-        actor_name = identity["actor_name"]
-        role_type = identity["role_type"]
-        perms = identity["perms"]
-        person_id = identity["person_id"]
-        archive_id = identity["archive_id"]
-        is_guest = identity["is_guest"]
-        bound_archive = identity["bound_archive"]
-        current_affection = identity["affection"]
-        master_facts = identity["master_facts"]
-
-        recalled_memories = []
-        try:
-            from agent_core.timeline_hub import TimelineHub
-            th = TimelineHub()
-            if not is_guest and perms.get("allow_recall_memory", True) and len(user_query) >= 2:
-                recalled_memories = self._collect_recall_memories(
-                    th, user_query, actor_id, person_id, channel_id, channel_type
-                )
-        except Exception:
-            pass
-
-        # 档案映射已在召回前完成；这里只记录命中方式
-        bound_by = "default"
-        if bound_archive:
-            archive_id = bound_archive
-            bound_by = "binding"
-        elif actor_id == "master":
-            bound_by = "master"
-        elif archive_id:
-            bound_by = "actor"
-
-        # 事实层优先：确定的事实不靠语义碰运气；关系图补一跳
-        graph_lines = []
-        if not is_guest:
-            try:
-                from agent_core.memory.facts import FactStore
-                fact_store = FactStore()
-                fact_lines = fact_store.prompt_lines(person_id, user_query, limit=8)
-                if fact_lines:
-                    master_facts = list(master_facts or []) + fact_lines
-                graph = fact_store.graph(person_id)
-                for edge in graph.get("edges") or []:
-                    graph_lines.append(
-                        f"{actor_name} --{edge.get('predicate') or '关系'}--> "
-                        f"{edge.get('object_value') or ''}"
-                    )
-            except Exception:
-                pass
-
-        # AI 人格只走「人格设定」的全局人设卡；档案不再承载人设
-        sys_prompt = ""
-        try:
-            from agent_core.persona import PersonaManager
-            pm = PersonaManager()
-            if pm.get_base_prompt():
-                sys_prompt = pm.build_system_context(
-                    actor_id=actor_id, actor_name=actor_name, role_type=role_type,
-                    affection=current_affection, master_facts=master_facts,
-                    recalled_memories=recalled_memories,
-                    relations=graph_lines,
-                )
-        except Exception:
-            pass
-        if not sys_prompt:
-            sys_prompt = backend.get_current_persona().get("system_prompt", "")
-
-        compute_mgr = None
-        is_logic_task = False
-        actual_model = ""
-        try:
-            from agent_core.compute_providers import compute_manager
-            compute_mgr = compute_manager
-            is_logic_task = compute_mgr.is_logic_heavy_task(user_query)
-            actual_model = compute_mgr.resolve_model("persona_slot")
-        except Exception:
-            pass
-
-        extra = {k: body[k] for k in self.PASSTHROUGH_FIELDS if body.get(k) is not None}
-
-        # 工具按需加载：只把选中大类的工具交给主力 AI；判定无需工具时
-        # tools / tool_choice / parallel_tool_calls 三个字段整段删除。
-        decision = None
-        tools_all = list(body.get("tools") or [])
-        if tool_gate is not None and extra.get("tools"):
-            try:
-                # 权限硬拒绝：先按客户端把宿主机等敏感工具摘掉，再走分类裁剪
-                denied = tool_gate.client_denied(
-                    extra["tools"], client_id, getattr(profile, "tool_permissions", None)
-                )
-                if denied:
-                    extra["tools"] = [
-                        t for t in extra["tools"]
-                        if ((t.get("function") or {}).get("name") or t.get("name")) not in denied
-                    ]
-                    if not extra["tools"]:
-                        for key in ("tools", "tool_choice", "parallel_tool_calls"):
-                            extra.pop(key, None)
-
-                decision = tool_gate.decide(
-                    messages,
-                    extra.get("tools"),
-                    channel_id=channel_id,
-                    actor_id=actor_id,
-                    client_id=client_id,
-                    platform=platform_name,
-                    channel_type=channel_type,
-                    client_perms=getattr(profile, "tool_permissions", None),
-                    # 档案级工具策略要的是本轮解析出的档案 ID，ctx 此时还没构建
-                    archive_id=str(archive_id or ""),
-                )
-                if denied and not decision.applied:
-                    decision.applied = True
-                    decision.payload_tools = list(extra.get("tools") or [])
-                    decision.tools_after = len(decision.payload_tools)
-                    decision.drop_tool_fields = decision.tools_after == 0
-                extra = tool_gate.apply(decision, extra)
-                if decision.applied and decision.tools_after < decision.tools_before:
-                    # 裁剪后某些客户端会带 tool_choice:"auto"，上游可能 400，统一剥掉
-                    extra = tool_gate.strip_choice_fields(extra)
-                tool_gate.remember(decision.session_key, messages)
-            except Exception as _gate_err:
-                print(f"[ToolShelves] 闸门跳过，全量透传: {_gate_err}", flush=True)
-                decision = None
-
-        # P3 结果压缩：工具刚返回的生肉在送进主力 AI 前先由执行 AI 清洗
-        compress_info = None
-        if tool_gate is not None and any(
-            isinstance(m, dict) and m.get("role") == "tool" for m in messages
-        ):
-            try:
-                comp_cfg = tool_gate.cfg.compression()
-                if comp_cfg.get("enabled"):
-                    from agent_core.tool_shelves.classifier import complete_once
-                    from agent_core.tool_shelves.cleaner import compress_messages
-                    from agent_core.tool_shelves.metrics import metrics as shelf_metrics
-
-                    def _complete(system, user, cfg):
-                        return complete_once(
-                            system, user, tool_gate.cfg.get(),
-                            slot=str(cfg.get("slot") or "logic_slot"),
-                            timeout_ms=cfg.get("timeout_ms"),
-                            temperature=cfg.get("temperature"),
-                            max_tokens=cfg.get("max_tokens"),
-                        )
-
-                    messages, comp_records = compress_messages(
-                        messages, comp_cfg, user_query=user_query, complete_once=_complete,
-                    )
-                    if comp_records:
-                        compress_info = {
-                            "tools": len(comp_records),
-                            "raw_chars": sum(int(r.get("raw_chars") or 0) for r in comp_records),
-                            "clean_chars": sum(int(r.get("clean_chars") or 0) for r in comp_records),
-                            "truncated": sum(1 for r in comp_records if r.get("truncated")),
-                            "model_calls": sum(1 for r in comp_records if r.get("model")),
-                            "errors": sum(1 for r in comp_records if r.get("error")),
-                            "records": comp_records,
-                        }
-                        shelf_metrics.record_compression(comp_records)
-            except Exception as _comp_err:
-                print(f"[ToolShelves] 结果压缩跳过，原文透传: {_comp_err}", flush=True)
-                compress_info = None
-
+    def _identity_fields(self, identity):
+        """身份解析结果 → 统一字段；档案绑定在这里就生效。"""
+        archive_id, bound_by = self._gateway_binding(identity)
         return {
-            "body": body, "messages": messages, "req_model": req_model,
-            "actual_model": actual_model,
-            "channel_id": channel_id, "channel_type": channel_type, "stream": stream, "user_query": user_query,
-            "actor_id": actor_id, "actor_name": actor_name, "role_type": role_type,
-            "is_guest": is_guest,
-            "perms": perms, "sys_prompt": sys_prompt, "compute_mgr": compute_mgr,
-            "is_logic_task": is_logic_task, "extra": extra,
-            "has_tools": bool(extra.get("tools")),
-            "tools_all": tools_all,
-            "tool_gate": decision.as_dict() if decision is not None else None,
-            "tool_gate_state": {"decision": decision},
-            "tool_compression": compress_info,
-            "client_id": client_id,
-            "trace_id": trace_id,
+            "actor_id": identity["actor_id"],
+            "actor_name": identity["actor_name"],
+            "role_type": identity["role_type"],
+            "perms": identity["perms"],
+            "person_id": identity["person_id"],
             "archive_id": archive_id,
-            "person_id": person_id,
-            "platform": platform_name,
-            "sender_uid": raw_user_id,
-            "affection": current_affection,
+            "is_guest": identity["is_guest"],
+            "bound_archive": identity["bound_archive"],
+            "affection": identity["affection"],
+            "master_facts": identity["master_facts"],
             "bound_by": bound_by,
         }
 
+    def _gateway_binding(self, identity):
+        """档案绑定优先；没绑定时按 master / actor / 默认 归类。"""
+        archive_id = identity["archive_id"]
+        if identity["bound_archive"]:
+            return identity["bound_archive"], "binding"
+        if identity["actor_id"] == "master":
+            return archive_id, "master"
+        if archive_id:
+            return archive_id, "actor"
+        return archive_id, "default"
+
+    def _gateway_memory(self, session):
+        """召回 + 事实 + 系统提示词：这一段决定"它记得什么"。"""
+        recalled = self._gateway_recall(session)
+        master_facts, relations = self._gateway_facts(session)
+        sys_prompt = self._gateway_system_prompt(session, master_facts, recalled, relations)
+        return {
+            "recalled": recalled,
+            "master_facts": master_facts,
+            "relations": relations,
+            "sys_prompt": sys_prompt,
+        }
+
+    def _gateway_recall(self, session):
+        """长期记忆召回；访客、没权限、查询太短都不查。"""
+        if session["is_guest"] or not session["perms"].get("allow_recall_memory", True):
+            return []
+        if len(session["user_query"]) < 2:
+            return []
+        try:
+            from agent_core.timeline_hub import TimelineHub
+
+            return self._collect_recall_memories(
+                TimelineHub(),
+                session["user_query"],
+                session["actor_id"],
+                session["person_id"],
+                session["channel_id"],
+                session["channel_type"],
+            )
+        except Exception:
+            return []
+
+    def _gateway_facts(self, session):
+        """事实层优先：确定的事实不靠语义碰运气，关系图再补一跳。"""
+        master_facts = list(session["master_facts"] or [])
+        if session["is_guest"]:
+            return master_facts, []
+        try:
+            from agent_core.memory.facts import FactStore
+
+            fact_store = FactStore()
+            fact_lines = fact_store.prompt_lines(
+                session["person_id"], session["user_query"], limit=8
+            )
+            if fact_lines:
+                master_facts = master_facts + list(fact_lines)
+            graph = fact_store.graph(session["person_id"])
+            return master_facts, self._relation_lines(graph, session["actor_name"])
+        except Exception:
+            return master_facts, []
+
+    def _relation_lines(self, graph, actor_name):
+        """关系图 → 一行一条，进系统提示词当背景。"""
+        lines = []
+        for edge in graph.get("edges") or []:
+            lines.append(
+                f"{actor_name} --{edge.get('predicate') or '关系'}--> "
+                f"{edge.get('object_value') or ''}"
+            )
+        return lines
+
+    def _gateway_system_prompt(self, session, master_facts, recalled, relations):
+        """人设提示词；人设卡组装不出来就退到控制台配置的老提示词。"""
+        prompt = self._persona_system_prompt(session, master_facts, recalled, relations)
+        return prompt or backend.get_current_persona().get("system_prompt", "")
+
+    def _persona_system_prompt(self, session, master_facts, recalled, relations):
+        """AI 人格只走「人格设定」的全局人设卡；档案不再承载人设。"""
+        try:
+            from agent_core.persona import PersonaManager
+
+            persona = PersonaManager()
+            if not persona.get_base_prompt():
+                return ""
+            return persona.build_system_context(
+                actor_id=session["actor_id"],
+                actor_name=session["actor_name"],
+                role_type=session["role_type"],
+                affection=session["affection"],
+                master_facts=master_facts,
+                recalled_memories=recalled,
+                relations=relations,
+            )
+        except Exception:
+            return ""
+
+    def _gateway_compute(self, user_query):
+        """模型路由：判断是不是逻辑重活，解析人格槽位的实际模型。"""
+        try:
+            from agent_core.compute_providers import compute_manager
+        except Exception:
+            return {"compute_mgr": None, "is_logic_task": False, "actual_model": ""}
+        state = {"compute_mgr": compute_manager, "is_logic_task": False, "actual_model": ""}
+        try:
+            state["is_logic_task"] = compute_manager.is_logic_heavy_task(user_query)
+            state["actual_model"] = compute_manager.resolve_model("persona_slot")
+        except Exception:
+            pass
+        return state
+
+    def _gateway_tools(self, body, request, session):
+        """透传字段 + 工具闸门 + 工具结果压缩。"""
+        extra = {k: body[k] for k in self.PASSTHROUGH_FIELDS if body.get(k) is not None}
+        decision, extra = self._gateway_tool_gate(request["messages"], extra, session)
+        messages, compression = self._gateway_compress(request["messages"], session["user_query"])
+        return {
+            "extra": extra,
+            "messages": messages,
+            "tools_all": list(body.get("tools") or []),
+            "decision": decision,
+            "compression": compression,
+        }
+
+    def _gateway_tool_gate(self, messages, extra, session):
+        """工具闸门：权限硬拒绝 → 分类裁剪；任何异常都全量透传。"""
+        if tool_gate is None or not extra.get("tools"):
+            return None, extra
+        try:
+            extra, denied = self._gateway_tool_hard_deny(extra, session)
+            decision = self._gateway_tool_decide(messages, extra, session)
+            extra = self._gateway_tool_apply(decision, extra, denied, messages)
+            return decision, extra
+        except Exception as exc:
+            print(f"[ToolShelves] 闸门跳过，全量透传: {exc}", flush=True)
+            return None, extra
+
+    def _gateway_tool_hard_deny(self, extra, session):
+        """权限硬拒绝：先按客户端把宿主机等敏感工具摘掉，再走分类裁剪。"""
+        client_perms = getattr(session["profile"], "tool_permissions", None)
+        denied = tool_gate.client_denied(extra["tools"], session["client_id"], client_perms)
+        if not denied:
+            return extra, denied
+        extra["tools"] = [t for t in extra["tools"] if _tool_name_of(t) not in denied]
+        if not extra["tools"]:
+            for key in ("tools", "tool_choice", "parallel_tool_calls"):
+                extra.pop(key, None)
+        return extra, denied
+
+    def _gateway_tool_decide(self, messages, extra, session):
+        """问闸门要一份裁剪决策；档案级策略用本轮解析出的档案 ID。"""
+        return tool_gate.decide(
+            messages,
+            extra.get("tools"),
+            channel_id=session["channel_id"],
+            actor_id=session["actor_id"],
+            client_id=session["client_id"],
+            platform=session["platform"],
+            channel_type=session["channel_type"],
+            client_perms=getattr(session["profile"], "tool_permissions", None),
+            archive_id=str(session["archive_id"] or ""),
+        )
+
+    def _gateway_tool_apply(self, decision, extra, denied, messages):
+        """把决策落到 extra 上；裁剪过就顺手剥掉 tool_choice 类字段。"""
+        if denied and not decision.applied:
+            decision.applied = True
+            decision.payload_tools = list(extra.get("tools") or [])
+            decision.tools_after = len(decision.payload_tools)
+            decision.drop_tool_fields = decision.tools_after == 0
+        out = tool_gate.apply(decision, extra)
+        if decision.applied and decision.tools_after < decision.tools_before:
+            # 裁剪后某些客户端仍带 tool_choice:"auto"，上游可能 400，统一剥掉
+            out = tool_gate.strip_choice_fields(out)
+        tool_gate.remember(decision.session_key, messages)
+        return out
+
+    def _gateway_compress(self, messages, user_query):
+        """P3 结果压缩：工具返回的生肉在送进主力 AI 前先由执行 AI 清洗。"""
+        cfg = self._compression_cfg(messages)
+        if not cfg:
+            return messages, None
+        cleaned, records = self._compress_tool_results(messages, cfg, user_query)
+        if cleaned is None:
+            return messages, None
+        return cleaned, (self._compression_summary(records) if records else None)
+
+    def _compression_cfg(self, messages):
+        """要不要压缩：没有工具结果、或压缩没开，都返回 None。"""
+        if tool_gate is None or not any(_is_tool_result(m) for m in messages):
+            return None
+        try:
+            cfg = tool_gate.cfg.compression()
+        except Exception:
+            return None
+        return cfg if cfg.get("enabled") else None
+
+    def _compress_tool_results(self, messages, cfg, user_query):
+        """调执行 AI 清洗工具结果；失败返回 (None, None) 表示原文透传。"""
+        try:
+            from agent_core.tool_shelves.cleaner import compress_messages
+            from agent_core.tool_shelves.metrics import metrics as shelf_metrics
+
+            cleaned, records = compress_messages(
+                messages,
+                cfg,
+                user_query=user_query,
+                complete_once=self._compression_completer(),
+            )
+            if records:
+                shelf_metrics.record_compression(records)
+            return cleaned, records
+        except Exception as exc:
+            print(f"[ToolShelves] 结果压缩跳过，原文透传: {exc}", flush=True)
+            return None, None
+
+    def _compression_completer(self):
+        """清洗用的执行 AI 调用器：槽位 / 超时 / 温度都按配置走。"""
+        from agent_core.tool_shelves.classifier import complete_once
+
+        def complete(system, user, cfg):
+            return complete_once(
+                system,
+                user,
+                tool_gate.cfg.get(),
+                slot=str(cfg.get("slot") or "logic_slot"),
+                timeout_ms=cfg.get("timeout_ms"),
+                temperature=cfg.get("temperature"),
+                max_tokens=cfg.get("max_tokens"),
+            )
+
+        return complete
+
+    def _compression_summary(self, records):
+        """压缩指标：工具页要看的总量 + 明细。"""
+        return {
+            "tools": len(records),
+            "raw_chars": sum(int(r.get("raw_chars") or 0) for r in records),
+            "clean_chars": sum(int(r.get("clean_chars") or 0) for r in records),
+            "truncated": sum(1 for r in records if r.get("truncated")),
+            "model_calls": sum(1 for r in records if r.get("model")),
+            "errors": sum(1 for r in records if r.get("error")),
+            "records": records,
+        }
+
+    def _gateway_ctx_build(self, body, request, session, memory, compute, tools):
+        """拼 ctx：_gateway_complete / _gateway_stream 都读这个 dict。"""
+        decision = tools["decision"]
+        ctx = {
+            "body": body,
+            "messages": tools["messages"],
+            "req_model": request["model"],
+            "stream": request["stream"],
+            "trace_id": request["trace_id"],
+            "user_query": session["user_query"],
+            "extra": tools["extra"],
+            "has_tools": bool(tools["extra"].get("tools")),
+            "tools_all": tools["tools_all"],
+            "tool_gate": decision.as_dict() if decision is not None else None,
+            "tool_gate_state": {"decision": decision},
+            "tool_compression": tools["compression"],
+        }
+        ctx.update(self._gateway_ctx_identity(session))
+        ctx.update(self._gateway_ctx_model(memory, compute))
+        return ctx
+
+    def _gateway_ctx_identity(self, session):
+        """ctx 的身份部分：谁在说话、属于哪个档案。"""
+        return {
+            "channel_id": session["channel_id"],
+            "channel_type": session["channel_type"],
+            "actor_id": session["actor_id"],
+            "actor_name": session["actor_name"],
+            "role_type": session["role_type"],
+            "is_guest": session["is_guest"],
+            "perms": session["perms"],
+            "client_id": session["client_id"],
+            "archive_id": session["archive_id"],
+            "person_id": session["person_id"],
+            "platform": session["platform"],
+            "sender_uid": session["raw_user_id"],
+            "affection": session["affection"],
+            "bound_by": session["bound_by"],
+        }
+
+    def _gateway_ctx_model(self, memory, compute):
+        """ctx 的模型 / 提示词部分。"""
+        return {
+            "sys_prompt": memory["sys_prompt"],
+            "compute_mgr": compute["compute_mgr"],
+            "is_logic_task": compute["is_logic_task"],
+            "actual_model": compute["actual_model"],
+        }
     def _gateway_fallback(self, ctx):
         q = ctx["user_query"]
         if ctx["is_logic_task"]:
