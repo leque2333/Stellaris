@@ -107,6 +107,36 @@ class AuditLogTest(unittest.TestCase):
         self.assertEqual(info["retention_days"], 30.0)
         self.assertEqual(info["oldest"], "audit-2026-02-01.log")
 
+    def test_compress_old_file(self):
+        os.environ["HUB_AUDIT_COMPRESS_AFTER_DAYS"] = "1"
+        old = self._write_file("audit-2026-01-01.log", lines=2)
+        os.utime(old, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+        fresh = self._write_file("audit-2026-01-02.log", lines=2)
+        done = audit_log.compress_old()
+        self.assertIn(old.name + ".gz", done)
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+        self.assertEqual(len(audit_log.tail(10)), 4)
+        # 压缩后保留原时间，否则保留策略会从压缩时刻重算
+        self.assertLess(abs((Path(self.dir) / (old.name + ".gz")).stat().st_mtime
+                            - (time.time() - 3 * 86400)), 120)
+
+    def test_tail_reads_gz(self):
+        os.environ["HUB_AUDIT_COMPRESS_AFTER_DAYS"] = "1"
+        old = self._write_file("audit-2026-01-01.log", lines=3)
+        os.utime(old, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+        audit_log.compress_old()
+        events = audit_log.tail(10)
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0]["event"], "x")
+
+    def test_stats_counts_compressed(self):
+        os.environ["HUB_AUDIT_COMPRESS_AFTER_DAYS"] = "1"
+        old = self._write_file("audit-2026-01-01.log")
+        os.utime(old, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+        audit_log.compress_old()
+        self.assertEqual(audit_log.stats()["compressed"], 1)
+
     def test_migrate_legacy(self):
         legacy = Path(self.dir) / "audit.log"
         legacy.write_text('{"event": "old"}\n', encoding="utf-8")

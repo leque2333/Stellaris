@@ -28,7 +28,8 @@ DEDUPE_SECONDS = 60.0
 _LAST_PRUNE = 0.0
 PRUNE_INTERVAL = 3600.0
 SEGMENTS_PER_DAY = 3
-LOG_NAME = re.compile(r"^audit-(\d{4}-\d{2}-\d{2})(?:\.(\d))?\.log$")
+DEFAULT_COMPRESS_AFTER_DAYS = 7
+LOG_NAME = re.compile(r"^audit-(\d{4}-\d{2}-\d{2})(?:\.(\d))?\.log(\.gz)?$")
 
 
 def _env_float(name: str, default: float) -> float:
@@ -55,6 +56,10 @@ def max_total_bytes() -> int:
 
 def max_file_bytes() -> int:
     return int(_env_float("HUB_AUDIT_MAX_FILE_MB", 5) * 1024 * 1024)
+
+
+def compress_after_days() -> float:
+    return _env_float("HUB_AUDIT_COMPRESS_AFTER_DAYS", DEFAULT_COMPRESS_AFTER_DAYS)
 
 
 def log_path(day: Optional[time.struct_time] = None) -> Path:
@@ -116,7 +121,33 @@ def _maybe_prune(now: float) -> None:
     if now - _LAST_PRUNE < PRUNE_INTERVAL:
         return
     _LAST_PRUNE = now
+    compress_old(now)
     prune()
+
+
+def compress_old(now: Optional[float] = None) -> List[str]:
+    """超过 compress_after_days 的明文日志压成 .gz，原文件删掉。"""
+    import gzip
+
+    now_ts = time.time() if now is None else now
+    threshold = compress_after_days() * 86400
+    done: List[str] = []
+    for path in _segments():
+        if path.suffix == ".gz" or LOG_NAME.match(path.name) is None:
+            continue
+        try:
+            if now_ts - path.stat().st_mtime <= threshold:
+                continue
+            target = path.with_name(path.name + ".gz")
+            stamp = path.stat().st_mtime
+            with open(path, "rb") as source, gzip.open(target, "wb") as sink:
+                sink.write(source.read())
+            os.utime(target, (stamp, stamp))  # 保留原时间，否则保留天数会从压缩时刻重算
+            path.unlink()
+            done.append(target.name)
+        except OSError:
+            continue
+    return done
 
 
 def prune(now: Optional[float] = None) -> List[str]:
@@ -148,6 +179,17 @@ def prune(now: Optional[float] = None) -> List[str]:
     return removed
 
 
+def _read_lines(path: Path) -> List[str]:
+    """普通文件直接读，归档文件走 gzip。"""
+    if path.suffix == ".gz":
+        import gzip
+
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+            return handle.readlines()
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.readlines()
+
+
 def tail(limit: int = 200) -> List[Dict[str, Any]]:
     """读最近 N 条（最新在前），跨文件拼接。"""
     if limit <= 0:
@@ -155,8 +197,7 @@ def tail(limit: int = 200) -> List[Dict[str, Any]]:
     collected: List[Dict[str, Any]] = []
     for path in reversed(_segments()):
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                lines = handle.readlines()
+            lines = _read_lines(path)
         except OSError:
             continue
         for line in reversed(lines):
@@ -184,6 +225,8 @@ def stats() -> Dict[str, Any]:
         "retention_days": retention_days(),
         "max_total_mb": round(max_total_bytes() / 1024 / 1024, 1),
         "max_file_mb": round(max_file_bytes() / 1024 / 1024, 1),
+        "compressed": sum(1 for path in segments if path.suffix == ".gz"),
+        "compress_after_days": compress_after_days(),
     }
 
 

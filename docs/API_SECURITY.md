@@ -211,6 +211,7 @@ curl.exe "http://127.0.0.1:18895/api/audit?limit=100" -H "X-Session-Token: <toke
 ```text
 文件名      logs/audit-YYYY-MM-DD.log（按天分文件）
 单文件上限  5 MB，超了切 audit-日期.1.log（每天最多 3 段）
+压缩        7 天前的明文压成 audit-日期.log.gz，读取时自动解压
 保留天数    90 天，更旧的自动删
 总量上限    256 MB，超了从最旧的文件开始删
 ```
@@ -221,6 +222,7 @@ curl.exe "http://127.0.0.1:18895/api/audit?limit=100" -H "X-Session-Token: <toke
 | `HUB_AUDIT_RETENTION_DAYS` | `90` | 保留天数 |
 | `HUB_AUDIT_MAX_TOTAL_MB` | `256` | 总量上限 |
 | `HUB_AUDIT_MAX_FILE_MB` | `5` | 单文件上限 |
+| `HUB_AUDIT_COMPRESS_AFTER_DAYS` | `7` | 多少天前的日志压缩成 .gz（0 表示不压缩） |
 
 清理动作在每次写入后触发，但**最多每小时跑一次**，不会每条日志都扫目录。
 旧的单文件 `audit.log` 会在中枢启动时自动收编成 `audit-日期.log`，不丢历史。
@@ -229,6 +231,7 @@ curl.exe "http://127.0.0.1:18895/api/audit?limit=100" -H "X-Session-Token: <toke
 - 同一 `(事件, IP, 错误码)` 60 秒内只记一次，防止被 401 刷爆磁盘
 - 配置变更 / 密钥轮换 / 登录成功**不去重**，保证每次操作都有记录
 - 控制台「安全日志」顶部会显示：条数 · 文件数 · 占用 · 保留天数
+- 压缩只影响磁盘占用，`/api/audit` 读取行为不变（跨文件、跨压缩包拼接）
 
 ## 三、回滚
 
