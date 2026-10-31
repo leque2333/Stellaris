@@ -3372,21 +3372,29 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return {"message": message, "finish_reason": finish, "usage": usage}
 
     def _complete_with_memory_lookup(self, ctx, active_msgs, message, usage):
-        """模型要求查旧记忆时：查一次、把结果追加进消息、再让它答。"""
+        """模型要回忆时可以连续查几轮，累计不超上限，再把结果交给它作答。"""
         if not message:
             return message
-        request = _parse_memory_directive(message.get("content") or "")
-        if not request:
-            return message
-        found = self._run_memory_lookup(ctx, request)
-        active_msgs = self._rebuild_prompt_with_recall(ctx, found) or active_msgs
-        extra = [{"role": "user", "content": found + "\n\n请根据以上检索结果回答我上一个问题。"}]
-        retry_msgs = active_msgs + [message] + extra
-        again, _, usage2, _ = self._persona_request(ctx, retry_msgs, dict(ctx.get("extra") or {}))
-        if again and (again.get("content") or "").strip():
-            return _strip_memory_directive(again)
+        messages = list(active_msgs)
+        used = 0
+        for _ in range(3):
+            request = _parse_memory_directive(message.get("content") or "")
+            if not request or used >= RECALL_MAX_CHARS:
+                break
+            found = self._run_memory_lookup(ctx, request)
+            used += len(found)
+            rebuilt = self._rebuild_prompt_with_recall(ctx, found)
+            if rebuilt:
+                messages = rebuilt
+            messages = messages + [message, {
+                "role": "user",
+                "content": found + "\n\n请根据以上检索结果回答我上一个问题。",
+            }]
+            again, _, _, _ = self._persona_request(ctx, messages, dict(ctx.get("extra") or {}))
+            if not again:
+                break
+            message = again
         stripped = _strip_memory_directive(message)
-        # 复答为空：首轮如果还有正文就用它，否则交给兜底话术
         return stripped if (stripped.get("content") or "").strip() else None
 
     RECALL_SOFT_LIMIT = 3_000
@@ -3458,7 +3466,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         ]
         kept, mode = deep_recall.trim_hits(hits, RECALL_MAX_CHARS)
         if not kept:
-            return "【记忆库】没有匹配的旧记录。"
+            return ("【记忆库】没有找到相关记录。请用你自己的语气说明你暂时想不起来了，"
+                    "不要提数据库、检索、记录库这类词，也不要编造内容。")
         _recall_writeback(store, ctx, kept, mode)
         self._timeline_restore(ctx)
         lines = [f"【记忆库检索结果】mode={mode}，共 {len(kept)} 条："]
