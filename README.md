@@ -22,6 +22,19 @@ QQ / B站 / 群聊 / 其他客户端
 
 ---
 
+## 界面
+
+![仪表盘](docs/images/dashboard.png)
+
+<details>
+<summary>工具页 / 账单流水</summary>
+
+![工具页](docs/images/tools.png)
+
+![账单流水](docs/images/ledger.png)
+
+</details>
+
 ## 三个目标
 
 1. **所有 AI 入口统一走中枢**
@@ -201,3 +214,15 @@ python -m unittest discover -s tests -t .
 - [清理记录](docs/CLEANUP_REPORT.md)
 - [交接文档](docs/HANDOFF.md)
 
+## 许可证
+
+[AGPL-3.0](LICENSE)
+
+修改后的代码必须以相同许可证开源，包括以网络服务形式提供的情况。商业闭源使用需另行授权。
+
+## 参与
+
+- 提交前跑一遍测试：`python -m unittest discover -s tests -t .`
+- 代码约定见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全相关问题请走 [SECURITY.md](SECURITY.md)，不要开公开 issue
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)

@@ -1,0 +1,8 @@
+# Stellaris 中枢运行依赖
+# 安装：pip install -r requirements.txt
+
+aiohttp>=3.9.0
+numpy>=1.24.0
+jieba>=0.42.1
+psutil>=5.9.0
+mcp>=1.0.0

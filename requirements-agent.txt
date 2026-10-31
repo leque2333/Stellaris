@@ -1,3 +1,1 @@
-aiohttp>=3.9.0
-numpy>=1.24.0
-jieba>=0.42.1
+# 已合并到 requirements.txt，此文件仅为兼容旧脚本保留，可删除。
