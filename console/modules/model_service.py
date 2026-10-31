@@ -4,17 +4,18 @@ Stellaris Console - Model Service
 大模型管理、双凭证池调度、厂商智能嗅探与 Token 账本
 """
 
-import datetime
-import json
 import os
-import time
-import urllib.error
+import json
 import urllib.request
-
+import urllib.error
+import time
+import datetime
+from .common import (
+    MODELS_CONFIG_PATH,
+    UPSTREAM_CACHE_PATH,
+    get_db_connection
+)
 from agent_core.storage import get_store
-
-from .common import MODELS_CONFIG_PATH, UPSTREAM_CACHE_PATH, get_db_connection
-
 
 def sniff_provider_from_key(key: str) -> dict:
     k = (key or "").strip()
@@ -644,250 +645,313 @@ def _build_currency_balances(cfg: dict, currency_meta: dict, spent_by_currency: 
     return primary, balances
 
 
-def get_token_analytics():
-    get_store()  # 确保数据库已迁移到最新 schema（token_usage_ledger 兼容视图存在）
-    try:
-        from .system_service import backfill_token_costs, backfill_usage_meta
-        backfill_token_costs()
-        backfill_usage_meta()
-    except Exception:
-        pass
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("""
-        SELECT SUM(input_tokens) as total_in,
-               SUM(output_tokens) as total_out,
-               SUM(cache_tokens) as total_cache,
-               SUM(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN cost_usd ELSE 0 END) as total_cost,
-               COUNT(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN id ELSE NULL END) as total_calls
+def _fetch_ledger_totals(cursor) -> dict:
+    """全量账本合计：token、成本、调用次数（充值记录不计入调用数）。"""
+    cursor.execute("""
+        SELECT SUM(input_tokens) AS total_in,
+               SUM(output_tokens) AS total_out,
+               SUM(cache_tokens) AS total_cache,
+               SUM(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN cost_usd ELSE 0 END) AS total_cost,
+               COUNT(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN id ELSE NULL END) AS total_calls
         FROM token_usage_ledger
     """)
-    row = c.fetchone()
-    total_in = row["total_in"] or 0
-    total_out = row["total_out"] or 0
-    total_cache = row["total_cache"] or 0
-    total_cost = row["total_cost"] or 0.0
-    total_calls = row["total_calls"] or 0
+    row = cursor.fetchone()
+    return {
+        "input": row["total_in"] or 0,
+        "output": row["total_out"] or 0,
+        "cache": row["total_cache"] or 0,
+        "cost": row["total_cost"] or 0.0,
+        "calls": row["total_calls"] or 0,
+    }
 
-    # 今日数据统计
-    today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    c.execute("""
-        SELECT SUM(input_tokens) as today_in,
-               SUM(output_tokens) as today_out,
-               SUM(cache_tokens) as today_cache,
-               SUM(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN cost_usd ELSE 0 END) as today_cost,
-               COUNT(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN id ELSE NULL END) as today_calls
+
+def _fetch_today_totals(cursor, today_start: float) -> dict:
+    """今日合计，口径同上。"""
+    cursor.execute("""
+        SELECT SUM(input_tokens) AS today_in,
+               SUM(output_tokens) AS today_out,
+               SUM(cache_tokens) AS today_cache,
+               SUM(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN cost_usd ELSE 0 END) AS today_cost,
+               COUNT(CASE WHEN source NOT IN ('人工充值', '账户充值', '系统注资') THEN id ELSE NULL END) AS today_calls
         FROM token_usage_ledger
         WHERE timestamp >= ?
     """, (today_start,))
-    t_row = c.fetchone()
-    today_in = t_row["today_in"] or 0
-    today_out = t_row["today_out"] or 0
-    today_cache = t_row["today_cache"] or 0
-    today_cost = t_row["today_cost"] or 0.0
-    today_calls = t_row["today_calls"] or 0
+    row = cursor.fetchone()
+    return {
+        "input": row["today_in"] or 0,
+        "output": row["today_out"] or 0,
+        "cache": row["today_cache"] or 0,
+        "cost": row["today_cost"] or 0.0,
+        "calls": row["today_calls"] or 0,
+    }
 
-    # 按主/执行凭证 + 币种分桶；RMB 与 CNY 先归一再合并，避免同币种被拆成两行
-    c.execute("""
-        SELECT COALESCE(credential_type, '') AS credential_type,
-               COALESCE(currency, 'USD') AS currency,
-               COUNT(*) AS calls,
-               SUM(prompt_tokens) AS input_tokens,
-               SUM(completion_tokens) AS output_tokens,
-               SUM(cached_tokens) AS cached_tokens,
-               SUM(cost_usd) AS overall_cost,
-               SUM(CASE WHEN timestamp >= ? THEN cost_usd ELSE 0 END) AS today_cost,
-               COUNT(CASE WHEN timestamp >= ? THEN id ELSE NULL END) AS today_calls,
-               SUM(CASE WHEN timestamp >= ?
-                        THEN COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)
-                        ELSE 0 END) AS today_tokens
-        FROM token_usage
-        WHERE COALESCE(source, '') NOT IN ('人工充值', '账户充值', '系统注资')
-        GROUP BY credential_type, currency
-        ORDER BY credential_type, currency
-    """, (today_start, today_start, today_start))
 
+def _empty_credential_bucket(kind: str, currency: str) -> dict:
+    return {
+        "credential_type": kind, "currency": currency,
+        "today_calls": 0, "today_tokens": 0,
+        "overall_calls": 0, "overall_tokens": 0,
+        "today_cost": 0.0, "overall_cost": 0.0,
+        "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
+    }
+
+
+def _merge_credential_row(bucket: dict, row) -> None:
+    """把一行 SQL 结果累加进对应凭证桶。"""
+    input_tokens = int(row["input_tokens"] or 0)
+    output_tokens = int(row["output_tokens"] or 0)
+    bucket["today_calls"] += int(row["today_calls"] or 0)
+    bucket["today_tokens"] += int(row["today_tokens"] or 0)
+    bucket["overall_calls"] += int(row["calls"] or 0)
+    bucket["overall_tokens"] += input_tokens + output_tokens
+    bucket["today_cost"] += float(row["today_cost"] or 0)
+    bucket["overall_cost"] += float(row["overall_cost"] or 0)
+    bucket["input_tokens"] += input_tokens
+    bucket["output_tokens"] += output_tokens
+    bucket["cached_tokens"] += int(row["cached_tokens"] or 0)
+
+
+_CREDENTIAL_BUCKET_SQL = """
+    SELECT COALESCE(credential_type, '') AS credential_type,
+           COALESCE(currency, 'USD') AS currency,
+           COUNT(*) AS calls,
+           SUM(prompt_tokens) AS input_tokens,
+           SUM(completion_tokens) AS output_tokens,
+           SUM(cached_tokens) AS cached_tokens,
+           SUM(cost_usd) AS overall_cost,
+           SUM(CASE WHEN timestamp >= ? THEN cost_usd ELSE 0 END) AS today_cost,
+           COUNT(CASE WHEN timestamp >= ? THEN id ELSE NULL END) AS today_calls,
+           SUM(CASE WHEN timestamp >= ?
+                    THEN COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)
+                    ELSE 0 END) AS today_tokens
+    FROM token_usage
+    WHERE COALESCE(source, '') NOT IN ('人工充值', '账户充值', '系统注资')
+    GROUP BY credential_type, currency
+    ORDER BY credential_type, currency
+"""
+
+
+def _accumulate_bucket(bucket_map: dict, row) -> None:
+    """把一行分桶结果并进 bucket_map。"""
+    key = (str(row["credential_type"] or "").strip(), _normalize_currency(row["currency"]))
+    bucket = bucket_map.setdefault(key, _empty_credential_bucket(*key))
+    _merge_credential_row(bucket, row)
+
+
+def _fetch_credential_buckets(cursor, today_start: float) -> list:
+    """按「凭证类型 + 币种」分桶；RMB/CNY 先归一，避免同币种被拆成两行。"""
+    cursor.execute(_CREDENTIAL_BUCKET_SQL, (today_start, today_start, today_start))
     bucket_map = {}
-    for r in c.fetchall():
-        kind = str(r["credential_type"] or "").strip()
-        currency = _normalize_currency(r["currency"])
-        key = (kind, currency)
-        bucket = bucket_map.setdefault(key, {
-            "credential_type": kind,
-            "currency": currency,
-            "today_calls": 0,
-            "today_tokens": 0,
-            "overall_calls": 0,
-            "overall_tokens": 0,
-            "today_cost": 0.0,
-            "overall_cost": 0.0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_tokens": 0,
-        })
-        input_tokens = int(r["input_tokens"] or 0)
-        output_tokens = int(r["output_tokens"] or 0)
-        bucket["today_calls"] += int(r["today_calls"] or 0)
-        bucket["today_tokens"] += int(r["today_tokens"] or 0)
-        bucket["overall_calls"] += int(r["calls"] or 0)
-        bucket["overall_tokens"] += input_tokens + output_tokens
-        bucket["today_cost"] += float(r["today_cost"] or 0)
-        bucket["overall_cost"] += float(r["overall_cost"] or 0)
-        bucket["input_tokens"] += input_tokens
-        bucket["output_tokens"] += output_tokens
-        bucket["cached_tokens"] += int(r["cached_tokens"] or 0)
-
-    buckets = sorted(
+    for row in cursor.fetchall():
+        _accumulate_bucket(bucket_map, row)
+    return sorted(
         bucket_map.values(),
         key=lambda item: (item["credential_type"], _currency_sort_key(item["currency"])),
     )
-    cost_breakdown = []
-    for bucket in buckets:
-        currency = bucket["currency"]
-        cost_breakdown.append({
-            "credential_type": bucket["credential_type"],
-            "credential_label": _credential_label(bucket["credential_type"]),
-            "currency": currency,
-            "calls": bucket["overall_calls"],
-            "input_tokens": bucket["input_tokens"],
-            "output_tokens": bucket["output_tokens"],
-            "cached_tokens": bucket["cached_tokens"],
-            "total_tokens": bucket["overall_tokens"],
-            "cost": float(bucket["overall_cost"]),
-            "cost_formatted": _format_amount(bucket["overall_cost"], currency),
-            "today_cost": float(bucket["today_cost"]),
-            "today_cost_formatted": _format_amount(bucket["today_cost"], currency),
-            "today_calls": bucket["today_calls"],
-            "today_tokens": bucket["today_tokens"],
-        })
 
-    c.execute("""
+
+def _describe_bucket(bucket: dict) -> dict:
+    """单个凭证桶转成前端结构。"""
+    currency = bucket["currency"]
+    return {
+        "credential_type": bucket["credential_type"],
+        "credential_label": _credential_label(bucket["credential_type"]),
+        "currency": currency,
+        "calls": bucket["overall_calls"],
+        "input_tokens": bucket["input_tokens"],
+        "output_tokens": bucket["output_tokens"],
+        "cached_tokens": bucket["cached_tokens"],
+        "total_tokens": bucket["overall_tokens"],
+        "cost": float(bucket["overall_cost"]),
+        "cost_formatted": _format_amount(bucket["overall_cost"], currency),
+        "today_cost": float(bucket["today_cost"]),
+        "today_cost_formatted": _format_amount(bucket["today_cost"], currency),
+        "today_calls": bucket["today_calls"],
+        "today_tokens": bucket["today_tokens"],
+    }
+
+
+def _build_cost_breakdown(buckets: list) -> list:
+    """把桶转成前端直接渲染的结构。"""
+    return [_describe_bucket(bucket) for bucket in buckets]
+
+
+def _describe_recent_row(row) -> dict:
+    """流水行的 token 部分。"""
+    return {
+        # 字符串 ID：前端要对 id 做 length / slice(-8)
+        "id": str(row["id"]),
+        "timestamp": row["timestamp"],
+        "model_id": row["model_id"],
+        "model": row["model_id"],
+        "input_tokens": row["input_tokens"],
+        "input": row["input_tokens"],
+        "output_tokens": row["output_tokens"],
+        "output": row["output_tokens"],
+        "cache_tokens": row["cache_tokens"],
+        "cached": row["cache_tokens"],
+        "source": row["source"],
+    }
+
+
+def _describe_recent_billing(row) -> dict:
+    """流水行的计费部分；充值记录单独标出来。"""
+    cost_value = row["cost_usd"] or 0.0
+    is_recharge = (row["source"] or "") in _RECHARGE_SOURCES
+    currency = _normalize_currency(row["currency"])
+    symbol = _currency_symbol(currency)
+    kind = str(row["credential_type"] or "").strip()
+    return {
+        "credential_type": kind,
+        "credential_label": "充值" if is_recharge else _credential_label(kind),
+        "currency": currency,
+        "currency_symbol": symbol,
+        "cost_usd": cost_value,
+        "cost_formatted": f"+{symbol}{cost_value:.2f}" if is_recharge else f"{symbol}{cost_value:.4f}",
+        "is_recharge": is_recharge,
+    }
+
+
+def _build_recent_item(row) -> dict:
+    """单条流水 = token 部分 + 计费部分 + 时间。"""
+    item = _describe_recent_row(row)
+    item.update(_describe_recent_billing(row))
+    item["time"] = (
+        time.strftime("%H:%M:%S", time.localtime(row["timestamp"]))
+        if row["timestamp"] else "--:--:--"
+    )
+    return item
+
+
+def _fetch_recent_entries(cursor, limit: int = 30) -> list:
+    """最近若干条明细，账本页和概览页共用同一份。"""
+    cursor.execute("""
         SELECT id, timestamp, model AS model_id, prompt_tokens AS input_tokens,
                completion_tokens AS output_tokens, cached_tokens AS cache_tokens,
                source, cost_usd, credential_type, currency
         FROM token_usage
         ORDER BY timestamp DESC
-        LIMIT 30
-    """)
-    recent_ledger = []
-    recent_calls = []
-    for r in c.fetchall():
-        t_str = time.strftime('%H:%M:%S', time.localtime(r["timestamp"])) if r["timestamp"] else '--:--:--'
-        cost_val = r["cost_usd"] or 0.0
-        is_recharge = (r["source"] or "") in _RECHARGE_SOURCES
-        currency = _normalize_currency(r["currency"])
-        symbol = _currency_symbol(currency)
-        kind = str(r["credential_type"] or "").strip()
-        item = {
-            # 字符串 ID，兼容核心页面 / 明细表对 id.length、id.slice(-8) 的调用
-            "id": str(r["id"]),
-            "timestamp": r["timestamp"],
-            "model_id": r["model_id"],
-            "model": r["model_id"],
-            "input_tokens": r["input_tokens"],
-            "input": r["input_tokens"],
-            "output_tokens": r["output_tokens"],
-            "output": r["output_tokens"],
-            "cache_tokens": r["cache_tokens"],
-            "cached": r["cache_tokens"],
-            "source": r["source"],
-            "credential_type": kind,
-            "credential_label": "充值" if is_recharge else _credential_label(kind),
-            "currency": currency,
-            "currency_symbol": symbol,
-            "cost_usd": cost_val,
-            "cost_formatted": f"+{symbol}{cost_val:.2f}" if is_recharge else f"{symbol}{cost_val:.4f}",
-            "is_recharge": is_recharge,
-            "time": t_str
-        }
-        recent_ledger.append(item)
-        recent_calls.append(item)
-    daily_activity = _monthly_daily_activity(c)
-    conn.close()
+        LIMIT ?
+    """, (limit,))
+    return [_build_recent_item(row) for row in cursor.fetchall()]
 
-    # 读取额度信息
-    cfg = get_models_config()
-    currency_meta = _credential_currency_meta(cfg)
-    cfg_credits = cfg.get("credits", {})
-    total_granted = float(cfg_credits.get("total_quota", 0.0))
 
-    today_by_currency = {}
-    overall_by_currency = {}
+def _sum_costs_by_currency(buckets: list, field_name: str) -> dict:
+    """按币种累加金额；不同币种绝不直接相加。"""
+    totals = {}
     for bucket in buckets:
         currency = bucket["currency"]
-        today_by_currency[currency] = today_by_currency.get(currency, 0.0) + float(bucket["today_cost"])
-        overall_by_currency[currency] = overall_by_currency.get(currency, 0.0) + float(bucket["overall_cost"])
+        totals[currency] = totals.get(currency, 0.0) + float(bucket[field_name])
+    return totals
 
-    primary_currency, currency_balances = _build_currency_balances(
-        cfg, currency_meta, overall_by_currency
-    )
-    primary_balance = next(
-        (item["total"] for item in currency_balances if item["is_primary"]),
-        0.0,
-    )
-    main_today_cost = float(today_by_currency.get(primary_currency, 0.0))
-    main_overall_cost = float(overall_by_currency.get(primary_currency, 0.0))
-    credits_data = {
+
+def _rounded_currency_map(totals: dict) -> dict:
+    """币种 → 金额，保留 6 位小数并按币种排序。"""
+    return {
+        code: round(float(value), 6)
+        for code, value in sorted(totals.items(), key=lambda kv: _currency_sort_key(kv[0]))
+    }
+
+
+def _build_credits_block(cfg: dict, currency_meta, buckets: list) -> dict:
+    """额度信息：余额、各币种今日/累计消费。"""
+    today_by_currency = _sum_costs_by_currency(buckets, "today_cost")
+    overall_by_currency = _sum_costs_by_currency(buckets, "overall_cost")
+    primary_currency, currency_balances = _build_currency_balances(cfg, currency_meta, overall_by_currency)
+    primary_balance = next((item["total"] for item in currency_balances if item["is_primary"]), 0.0)
+    return {
         "balance": primary_balance,
         "balance_formatted": _format_signed_amount(primary_balance, primary_currency, 2),
         "currency": primary_currency,
         "primary_currency": primary_currency,
         "currency_count": len(currency_balances),
         "balances": currency_balances,
-        "total_granted": total_granted,
-        # 兼容旧字段：数字只代表主控币种，不再把不同币种硬加在一起
-        "today_cost": round(main_today_cost, 6),
+        "total_granted": float((cfg.get("credits") or {}).get("total_quota", 0.0)),
+        # 兼容旧字段：数字只代表主控币种，不再跨币种混加
+        "today_cost": round(float(today_by_currency.get(primary_currency, 0.0)), 6),
         "today_cost_formatted": _joined_amounts(today_by_currency) or _format_amount(0, primary_currency),
-        "today_cost_by_currency": {c: round(float(v), 6) for c, v in sorted(today_by_currency.items(), key=lambda kv: _currency_sort_key(kv[0]))},
-        "overall_cost": round(main_overall_cost, 6),
+        "today_cost_by_currency": _rounded_currency_map(today_by_currency),
+        "overall_cost": round(float(overall_by_currency.get(primary_currency, 0.0)), 6),
         "overall_cost_formatted": _joined_amounts(overall_by_currency) or _format_amount(0, primary_currency),
-        "overall_cost_by_currency": {c: round(float(v), 6) for c, v in sorted(overall_by_currency.items(), key=lambda kv: _currency_sort_key(kv[0]))},
+        "overall_cost_by_currency": _rounded_currency_map(overall_by_currency),
     }
 
-    today_data = {
-        "calls": today_calls,
-        "input_tokens": today_in,
-        "output_tokens": today_out,
-        "cached_tokens": today_cache,
-        "total_tokens": today_in + today_out
-    }
 
-    overall_data = {
-        "calls": total_calls,
-        "input_tokens": total_in,
-        "output_tokens": total_out,
-        "cached_tokens": total_cache,
-        "total_tokens": total_in + total_out
-    }
+def get_token_analytics():
+    """账单页汇总：总账、今日、凭证分桶、最近流水、额度。"""
+    _ensure_usage_backfilled()
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        today_start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        totals = _fetch_ledger_totals(cursor)
+        today = _fetch_today_totals(cursor, today_start)
+        buckets = _fetch_credential_buckets(cursor, today_start)
+        recent = _fetch_recent_entries(cursor)
+        daily_activity = _monthly_daily_activity(cursor)
+    finally:
+        conn.close()
+    return _assemble_analytics(totals, today, buckets, recent, daily_activity)
 
-    # 合计口径只保留 Token 与调用次数；金额在主控/执行分组内按币种分别核算
-    combined_data = {
-        "today_calls": today_calls,
-        "today_tokens": today_in + today_out,
-        "overall_calls": total_calls,
-        "overall_tokens": total_in + total_out,
-    }
 
-    accounting_groups = _build_accounting_groups(buckets, currency_meta)
+def _ensure_usage_backfilled() -> None:
+    """老库的历史记录缺成本/元信息，这里补一次；失败不影响读。"""
+    get_store()
+    try:
+        from .system_service import backfill_token_costs, backfill_usage_meta
+        backfill_token_costs()
+        backfill_usage_meta()
+    except Exception:
+        pass
 
-    return {
-        "total_input_tokens": total_in,
-        "total_output_tokens": total_out,
-        "total_cache_tokens": total_cache,
-        "total_tokens": total_in + total_out,
-        # 兼容字段：只给 USD 实际消费，跨币种请看 total_cost_by_currency
+
+def _assemble_analytics(totals: dict, today: dict, buckets: list, recent: list, daily_activity) -> dict:
+    """把各段结果拼成前端要的最终结构。"""
+    cfg = get_models_config()
+    currency_meta = _credential_currency_meta(cfg)
+    credits = _build_credits_block(cfg, currency_meta, buckets)
+    overall_by_currency = _sum_costs_by_currency(buckets, "overall_cost")
+    payload = {
+        "total_input_tokens": totals["input"],
+        "total_output_tokens": totals["output"],
+        "total_cache_tokens": totals["cache"],
+        "total_tokens": totals["input"] + totals["output"],
+        # 兼容字段：只给 USD 实际消费；跨币种请看 total_cost_by_currency
         "total_cost_usd": round(float(overall_by_currency.get("USD", 0.0)), 4),
-        "total_cost_by_currency": credits_data["overall_cost_by_currency"],
-        "recent_ledger": recent_ledger,
-        "recent_calls": recent_calls,
-        "credits": credits_data,
-        "today": today_data,
-        "overall": overall_data,
-        "combined": combined_data,
-        "accounting_groups": accounting_groups,
+        "total_cost_by_currency": credits["overall_cost_by_currency"],
+        "recent_ledger": recent,
+        "recent_calls": recent,
+        "credits": credits,
+        "today": _build_token_summary(today),
+        "overall": _build_token_summary(totals),
         "daily_activity": daily_activity,
-        "cost_breakdown": cost_breakdown,
+        "cost_breakdown": _build_cost_breakdown(buckets),
     }
+    payload["combined"] = _build_combined_summary(totals, today)
+    payload["accounting_groups"] = _build_accounting_groups(buckets, currency_meta)
+    return payload
+
+
+def _build_combined_summary(totals: dict, today: dict) -> dict:
+    """合计口径只留 Token 与调用次数；金额在各凭证分组内按币种单算。"""
+    return {
+        "today_calls": today["calls"],
+        "today_tokens": today["input"] + today["output"],
+        "overall_calls": totals["calls"],
+        "overall_tokens": totals["input"] + totals["output"],
+    }
+
+
+def _build_token_summary(block: dict) -> dict:
+    return {
+        "calls": block["calls"],
+        "input_tokens": block["input"],
+        "output_tokens": block["output"],
+        "cached_tokens": block["cache"],
+        "total_tokens": block["input"] + block["output"],
+    }
+
+
 
 def get_universal_models_list():
     cfg = get_models_config()
