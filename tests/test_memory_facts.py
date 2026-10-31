@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent_core.memory.facts import FactStore, extract_facts, _parse_json_array  # noqa: E402
+from agent_core.memory.facts import FactStore, _parse_json_array, extract_facts  # noqa: E402
 from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
 
 

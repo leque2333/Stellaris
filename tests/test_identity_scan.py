@@ -156,6 +156,7 @@ class IdentityHiddenTest(unittest.TestCase):
     def setUp(self):
         import os
         import shutil
+
         from agent_core import identity_scan as mod
 
         self.mod = mod

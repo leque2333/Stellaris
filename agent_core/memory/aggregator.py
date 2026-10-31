@@ -18,10 +18,9 @@ import json
 import logging
 import math
 import time
-
-from ..identity import IdentityResolver
 from typing import Any, Dict, List, Optional
 
+from ..identity import IdentityResolver
 from ..storage import Store, classify_source
 
 logger = logging.getLogger("SegmentAggregator")

@@ -1,18 +1,20 @@
 ﻿# -*- coding: utf-8 -*-
 """二级插件扫描：标准 metadata 与无 metadata 目录"""
 
+import asyncio
 import sys
 import tempfile
 import unittest
-import asyncio
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent_core.adapters.astrbot import ComponentScanner  # noqa: E402
-from agent_core.adapters.astrbot import HostResolver  # noqa: E402
+from agent_core.adapters.astrbot import (
+    ComponentScanner,  # noqa: E402
+    HostResolver,  # noqa: E402
+)
 from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
 
 

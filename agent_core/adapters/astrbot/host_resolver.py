@@ -13,8 +13,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .component_scanner import ComponentScanner, default_plugin_roots
 from ...storage import Store
+from .component_scanner import ComponentScanner, default_plugin_roots
 
 
 class HostResolver:

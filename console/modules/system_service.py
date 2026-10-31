@@ -4,21 +4,24 @@ Stellaris Console - System Service
 系统状态概览、自传时间轴与审计日志服务
 """
 
-import os
+import datetime
 import json
+import os
+import sqlite3
 import time
 import uuid
-import datetime
-import sqlite3
-from .common import (
-    get_db_connection,
-    sanitize_clean_text,
-    resolve_hub_db_path,
-    resolve_astrbot_cmd_config_path
-)
-from agent_core.storage import classify_source, get_store
+
 from agent_core.memory.embedding import embed_text_bytes
 from agent_core.persona_identity import get_persona_name
+from agent_core.storage import classify_source, get_store
+
+from .common import (
+    get_db_connection,
+    resolve_astrbot_cmd_config_path,
+    resolve_hub_db_path,
+    sanitize_clean_text,
+)
+
 
 def ingest_timeline_event(
     source: str,
@@ -356,7 +359,7 @@ def get_system_resources_metrics(force: bool = False):
                 if "powershell" in pname:
                     # 跳过纯 wrapper powershell 进程，直接抓背后的真实 python/exe
                     continue
-                
+
                 for rule in ai_service_rules:
                     if rule["name"] not in seen_names and rule["match"](cmd, pname, None):
                         seen_names.add(rule["name"])

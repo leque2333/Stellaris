@@ -47,7 +47,7 @@ class AnanAgent:
         self.persona_mgr = PersonaManager(persona_path=persona_path)
         self.llm = llm_client or LLMClient()
         self.tools = tools or tool_registry
-        
+
         # 挂载核心内置工具
         self._register_builtin_tools()
         logger.info("[AgentEngine] 智能体内核已就绪，角色=%s", IdentityResolver.get_bot_name())

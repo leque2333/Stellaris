@@ -4,18 +4,17 @@ Stellaris Console - Model Service
 大模型管理、双凭证池调度、厂商智能嗅探与 Token 账本
 """
 
-import os
-import json
-import urllib.request
-import urllib.error
-import time
 import datetime
-from .common import (
-    MODELS_CONFIG_PATH,
-    UPSTREAM_CACHE_PATH,
-    get_db_connection
-)
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+
 from agent_core.storage import get_store
+
+from .common import MODELS_CONFIG_PATH, UPSTREAM_CACHE_PATH, get_db_connection
+
 
 def sniff_provider_from_key(key: str) -> dict:
     k = (key or "").strip()

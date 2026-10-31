@@ -13,15 +13,14 @@ from typing import Any, Dict, List, Optional
 
 from ..connectors.ai_matcher import (
     _ReadOnlyTools,
-    _register_tools,
     _redact,
+    _register_tools,
     default_roots,
 )
 from ..llm import LLMClient
 from ..tools import ToolRegistry
 from .settings import build_llm, looks_like_failure
 from .workspace import WorkspaceTools
-
 
 SYSTEM_INVESTIGATE = """你是中枢的执行 AI，当前处于 investigate 模式，只做只读调查。
 规则：

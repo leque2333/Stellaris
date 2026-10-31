@@ -42,7 +42,7 @@ class LLMClient:
         self.proxy = proxy or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
         self.api_base = api_base.rstrip("/")
         self.uncensored = uncensored
-        
+
         # 若未显式传入配置，尝试从统一配置中自动提取
         if not self.api_key:
             self._load_from_config()
@@ -53,7 +53,7 @@ class LLMClient:
                 try:
                     with open(p, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
-                    
+
                     # 1. 优先从 models_config.json 中的 master_credentials 提取真实活跃凭据
                     master_creds = cfg.get("master_credentials", [])
                     for cred in master_creds:
@@ -75,7 +75,7 @@ class LLMClient:
                         if k and k != "none":
                             self.api_key = k
                             return
-                    
+
                     # 3. 从 models_config.json api_pool 提取
                     for item in cfg.get("api_pool", []):
                         k = item.get("key") or item.get("api_key")

@@ -4,10 +4,11 @@ Stellaris Core - 模组拓扑与父子级层级管理器 (Topology & Mod Manager
 提供类似游戏模组管理器 (Mod Organizer) 的树状/脑图模组吸附、协议兼容性语法检测与实时握手验证。
 """
 
-import os
 import json
+import os
 import time
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 
 class TopologyManager:
     """
@@ -50,14 +51,14 @@ class TopologyManager:
         "nonebot": {"parent_id": "hub", "type": "host", "protocol": "OpenAI /v1"},
         "control_host_pc": {"parent_id": "hub", "type": "host", "protocol": "Local IPC / Agent Bridge"},
         "host_pc": {"parent_id": "hub", "type": "host", "protocol": "Local IPC / Agent Bridge"},
-        
+
         # 专属子模组 / 管道中间件 (归属大模块宿主，不污染主大模型上下文)
         "astrbot_plugin_turnflow": {"parent_id": "astrbot", "type": "submod", "protocol": "Stellaris Core Lifecycle"},
         "astrbot_plugin_guard": {"parent_id": "astrbot", "type": "submod", "protocol": "AstrBot Plugin"},
         "astrbot_plugin_human_patrol": {"parent_id": "astrbot", "type": "submod", "protocol": "AstrBot Plugin"},
         "astrbot_plugin_anan_bridge": {"parent_id": "astrbot", "type": "submod", "protocol": "AstrBot Plugin"},
         "astrbot_plugin_system_probe": {"parent_id": "astrbot", "type": "submod", "protocol": "AstrBot Plugin"},
-        
+
         # 全局 AI 技能与核心记忆 (归属中枢，供大模型直接推理与调用)
         "astrbot_plugin_memory": {"parent_id": "hub", "type": "skill", "protocol": "OpenAI Function Calling"},
         "astrbot_plugin_bilibili": {"parent_id": "hub", "type": "skill", "protocol": "Stellaris Native"},
@@ -281,7 +282,7 @@ class TopologyManager:
                 # 检查双方运行健康状态 (存活握手)
                 child_health = m.get("health", {}).get("status", "unknown")
                 parent_health = "online" if pid == "hub" else mod_map[pid].get("health", {}).get("status", "unknown")
-                
+
                 handshake_status = "handshake_ok"
                 if child_health == "offline" or parent_health == "offline":
                     handshake_status = "peer_offline"

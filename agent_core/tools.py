@@ -52,7 +52,7 @@ class ToolRegistry:
         def decorator(func: Callable):
             tool_name = name or func.__name__
             tool_desc = (description or func.__doc__ or "No description provided").strip()
-            
+
             # 若未显式提供 parameters，自动从函数类型注解推断 Schema
             schema = parameters or self._infer_schema(func)
             is_async = inspect.iscoroutinefunction(func)

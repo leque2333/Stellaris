@@ -6,8 +6,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from .models import BridgeSpec, HubEvent
 from .ingest import BridgeIngestor
+from .models import BridgeSpec, HubEvent
 
 Emit = Callable[[HubEvent], Awaitable[Any]]
 

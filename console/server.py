@@ -23,16 +23,17 @@ Stellaris Console HTTP Server
 #   - 或一人一 Key，用 clients.json 的 default_actor / 档案映射。
 # ---------------------------------------------------------------------------
 
-import os
-import sys
 import json
+import os
+import re
+import sys
+import threading
 import time
 import uuid
-import re
-import threading
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse, unquote
+from urllib.parse import parse_qs, unquote, urlparse
+
 import backend
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.getenv("CONSOLE_PORT", 18890))
@@ -287,6 +288,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if err:
                 return self._hub_error(err)
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             return self._send_json({'object': 'list', 'data': ServiceRegistry(get_store()).list()})
@@ -296,6 +298,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if err:
                 return self._hub_error(err)
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             service_id = path.rstrip('/').rsplit('/', 1)[-1]
@@ -330,6 +333,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path == '/api/services':
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             return self._send_json({
@@ -838,8 +842,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return self._send_json({'ok': True, 'text': raw, 'truncated': False,
                                         'stats': {'tool': tool, 'passthrough': True}})
 
-            from agent_core.tool_shelves.cleaner import compress_tool_result
             from agent_core.tool_shelves.classifier import complete_once
+            from agent_core.tool_shelves.cleaner import compress_tool_result
 
             def _complete(system, user, cfg):
                 return complete_once(
@@ -1132,6 +1136,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if err:
                 return self._hub_error(err)
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             try:
@@ -1151,6 +1156,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             service_id, tool = parts[3], parts[5]
             args = body.get('args') if isinstance(body.get('args'), dict) else body
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             try:
@@ -1198,6 +1204,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path == '/api/services':
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             try:
@@ -1246,6 +1253,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path in ('/api/bridges/infer', '/api/bridges/attach'):
             import asyncio
+
             from agent_core.bridge import BridgeSpec, BridgeSpecInferer
 
             target = str(body.get('target') or body.get('path') or body.get('url') or '').strip()
@@ -1276,6 +1284,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path in ('/api/adapters/generate', '/api/adapters/attach'):
             import asyncio
+
             from agent_core.source import SourceSynthesizer
 
             repo = str(body.get('repo_path') or body.get('path') or '').strip()
@@ -1303,6 +1312,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if path == '/api/bridges/batch':
             import asyncio
+
             from agent_core.bridge import BridgeSpec, BridgeSpecInferer
 
             raw_targets = body.get('targets') or body.get('target') or []
@@ -1408,6 +1418,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     {"error": "未登录或登录已过期", "require_login": True}, status=401
                 )
             import asyncio
+
             from agent_core.connectors.ai_matcher import AIMatcher
             from agent_core.storage import get_store
 
@@ -1461,6 +1472,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     {"error": "未登录或登录已过期", "require_login": True}, status=401
                 )
             import asyncio
+
             from agent_core.connectors.ai_matcher import AIMatcher
             from agent_core.storage import get_store
 
@@ -1826,6 +1838,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send_json(res)
         elif path == '/api/hosts/resolve':
             from agent_core.module_resolver import resolve_module
+
             from agent_core.storage import get_store
 
             try:
@@ -1905,6 +1918,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             self._send_json({'ok': True, **saved})
         elif path == '/api/execution_ai/test':
             import asyncio
+
             from agent_core.execution.settings import test_connection
 
             try:
@@ -1982,6 +1996,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if err:
                 return self._hub_error(err)
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             service_id = path.rstrip('/').rsplit('/', 1)[-1]
@@ -2041,6 +2056,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._send_json({'ok': True, 'removed': removed})
         if path.startswith('/api/services/'):
             from agent_core.services import ServiceRegistry
+
             from agent_core.storage import get_store
 
             service_id = path.rsplit('/', 1)[-1]
@@ -2385,7 +2401,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         """通用 OpenAI 兼容接口：通用接入 + 身份认主 + TimelineHub记忆与好感 + 算力推导 + 黄金法则后处理"""
         messages = body.get('messages', [])
         req_model = body.get('model') or 'gemini-3.8-flash'
-        
+
         # 1. 识别来源通道
         channel_id = self.headers.get('X-Channel') or 'universal_proxy'
         channel_type = str(self.headers.get('X-Channel-Type') or '').strip().lower()
@@ -2772,8 +2788,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             or "web"
         )
         display_name = _header_text(self.headers.get("X-User-Name"))
-        from agent_core.identity import IdentityResolver
         from agent_core.access_policy import load_policy
+        from agent_core.identity import IdentityResolver
         access_policy = load_policy()
         if profile.default_actor == "guest":
             # 访客客户端不允许通过 body/header 冒充主人
@@ -2994,8 +3010,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             try:
                 comp_cfg = tool_gate.cfg.compression()
                 if comp_cfg.get("enabled"):
-                    from agent_core.tool_shelves.cleaner import compress_messages
                     from agent_core.tool_shelves.classifier import complete_once
+                    from agent_core.tool_shelves.cleaner import compress_messages
                     from agent_core.tool_shelves.metrics import metrics as shelf_metrics
 
                     def _complete(system, user, cfg):
@@ -3164,11 +3180,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     # 好感度自动评估（方案 A）：未定给初始值，已定给 delta
                     def _eval_affection():
                         try:
+                            from agent_core.profile import ProfileManager
                             from agent_core.profile.affection_ai import (
                                 estimate_affection_delta,
                                 estimate_initial_affection,
                             )
-                            from agent_core.profile import ProfileManager
                             from agent_core.storage import get_store
 
                             pm = ProfileManager(get_store())

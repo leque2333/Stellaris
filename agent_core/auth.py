@@ -4,12 +4,13 @@ Stellaris Core - 控制台安全身份与鉴权管理器 (Auth & Session Manager
 为公网映射环境提供现代化的密码校验、Session Token 会话生命周期与 RBAC 访问控制。
 """
 
-import os
-import json
-import time
-import secrets
 import hashlib
-from typing import Dict, Any, Optional, Tuple
+import json
+import os
+import secrets
+import time
+from typing import Any, Dict, Optional, Tuple
+
 
 class AuthManager:
     """
@@ -121,7 +122,7 @@ class AuthManager:
             return {"username": "admin", "admin": True}
         if not token:
             return None
-        
+
         sessions = cfg.get("sessions", {})
         session = sessions.get(token)
         if not session:

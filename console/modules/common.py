@@ -7,9 +7,9 @@ Stellaris Console - Common Paths and Utilities
 """
 
 import os
+import re
 import shutil
 import sqlite3
-import re
 import time
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

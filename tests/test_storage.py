@@ -20,9 +20,12 @@ if str(ROOT) not in sys.path:
 
 from agent_core.models import TimelineEvent  # noqa: E402
 from agent_core.storage import get_store, reset_stores  # noqa: E402
-from agent_core.storage.schema import apply_migrations, classify_source  # noqa: E402
+from agent_core.storage.schema import (  # noqa: E402
+    MIGRATIONS,  # noqa: E402
+    apply_migrations,
+    classify_source,
+)
 from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
-from agent_core.storage.schema import MIGRATIONS  # noqa: E402
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1][0]
 

@@ -13,7 +13,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_core.connectors.ai_matcher import (  # noqa: E402
-    AIMatcher, _ReadOnlyTools,
+    AIMatcher,
+    _ReadOnlyTools,
 )
 
 

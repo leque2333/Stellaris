@@ -23,129 +23,121 @@ for _p in (PROJECT_ROOT, CURRENT_DIR):
         sys.path.insert(0, _p)
 
 try:
-    from modules.system_service import (
-        ingest_timeline_event,
-        record_token_usage_event,
-        get_timeline_events,
-        get_system_summary,
-        get_system_resources_metrics
-    )
     from modules.common import (
-        resolve_hub_db_path,
-        resolve_custom_tools_path,
-        resolve_astrbot_plugins_dir,
-        resolve_astrbot_mcp_path,
-        resolve_astrbot_cmd_config_path,
-        resolve_astrbot_v4_db_path,
         get_db_connection,
-        sanitize_clean_text
+        resolve_astrbot_cmd_config_path,
+        resolve_astrbot_mcp_path,
+        resolve_astrbot_plugins_dir,
+        resolve_astrbot_v4_db_path,
+        resolve_custom_tools_path,
+        resolve_hub_db_path,
+        sanitize_clean_text,
+    )
+    from modules.compute_service import get_compute_config, save_compute_config, test_compute_provider
+    from modules.model_service import (
+        build_upstream_network_opener,
+        check_model_reasoning_support,
+        get_model_pricing_map,
+        get_model_reasoning_options,
+        get_models_config,
+        get_preset_models,
+        get_token_analytics,
+        get_universal_models_list,
+        handle_sniff_key,
+        save_credits,
+        save_models_config,
+        sniff_provider_from_key,
+        sync_models_from_upstream,
     )
     from modules.module_manager import (
-        get_module_permissions,
-        save_module_permissions,
-        get_module_states,
-        toggle_module_active,
-        get_custom_module_configs,
-        update_module_custom_category,
-        import_custom_module,
         delete_custom_module,
-        probe_single_module,
+        get_custom_module_configs,
+        get_module_permissions,
+        get_module_states,
+        get_modules_overview,
         get_topology_overview,
-        save_topology_overview,
-        validate_topology_overview,
+        import_custom_module,
         probe_all_modules,
-        get_modules_overview
+        probe_single_module,
+        save_module_permissions,
+        save_topology_overview,
+        toggle_module_active,
+        update_module_custom_category,
+        validate_topology_overview,
     )
     from modules.persona_service import (
         clean_persona_reply,
         get_current_persona,
+        get_persona_rules,
+        get_preset_personas,
         save_persona,
         save_persona_profile,
-        get_preset_personas,
-        get_persona_rules,
-        save_persona_rules
+        save_persona_rules,
     )
-    from modules.model_service import (
-        sniff_provider_from_key,
-        handle_sniff_key,
-        get_model_reasoning_options,
-        check_model_reasoning_support,
-        build_upstream_network_opener,
-        sync_models_from_upstream,
-        get_preset_models,
-        get_models_config,
-        save_models_config,
-        save_credits,
-        get_model_pricing_map,
-        get_token_analytics,
-        get_universal_models_list
-    )
-    from modules.compute_service import (
-        get_compute_config,
-        save_compute_config,
-        test_compute_provider
-    )
-except ImportError:
-    from console.modules.system_service import (
+    from modules.system_service import (
+        get_system_resources_metrics,
+        get_system_summary,
+        get_timeline_events,
         ingest_timeline_event,
         record_token_usage_event,
-        get_timeline_events,
-        get_system_summary,
-        get_system_resources_metrics
     )
+except ImportError:
     from console.modules.common import (
-        resolve_hub_db_path,
-        resolve_custom_tools_path,
-        resolve_astrbot_plugins_dir,
-        resolve_astrbot_mcp_path,
-        resolve_astrbot_cmd_config_path,
-        resolve_astrbot_v4_db_path,
         get_db_connection,
-        sanitize_clean_text
+        resolve_astrbot_cmd_config_path,
+        resolve_astrbot_mcp_path,
+        resolve_astrbot_plugins_dir,
+        resolve_astrbot_v4_db_path,
+        resolve_custom_tools_path,
+        resolve_hub_db_path,
+        sanitize_clean_text,
+    )
+    from console.modules.compute_service import get_compute_config, save_compute_config, test_compute_provider
+    from console.modules.model_service import (
+        build_upstream_network_opener,
+        check_model_reasoning_support,
+        get_model_pricing_map,
+        get_model_reasoning_options,
+        get_models_config,
+        get_preset_models,
+        get_token_analytics,
+        get_universal_models_list,
+        handle_sniff_key,
+        save_credits,
+        save_models_config,
+        sniff_provider_from_key,
+        sync_models_from_upstream,
     )
     from console.modules.module_manager import (
-        get_module_permissions,
-        save_module_permissions,
-        get_module_states,
-        toggle_module_active,
-        get_custom_module_configs,
-        update_module_custom_category,
-        import_custom_module,
         delete_custom_module,
-        probe_single_module,
+        get_custom_module_configs,
+        get_module_permissions,
+        get_module_states,
+        get_modules_overview,
         get_topology_overview,
-        save_topology_overview,
-        validate_topology_overview,
+        import_custom_module,
         probe_all_modules,
-        get_modules_overview
+        probe_single_module,
+        save_module_permissions,
+        save_topology_overview,
+        toggle_module_active,
+        update_module_custom_category,
+        validate_topology_overview,
     )
     from console.modules.persona_service import (
         clean_persona_reply,
         get_current_persona,
+        get_persona_rules,
+        get_preset_personas,
         save_persona,
         save_persona_profile,
-        get_preset_personas,
-        get_persona_rules,
-        save_persona_rules
+        save_persona_rules,
     )
-    from console.modules.model_service import (
-        sniff_provider_from_key,
-        handle_sniff_key,
-        get_model_reasoning_options,
-        check_model_reasoning_support,
-        build_upstream_network_opener,
-        sync_models_from_upstream,
-        get_preset_models,
-        get_models_config,
-        save_models_config,
-        save_credits,
-        get_model_pricing_map,
-        get_token_analytics,
-        get_universal_models_list
-    )
-    from console.modules.compute_service import (
-        get_compute_config,
-        save_compute_config,
-        test_compute_provider
+    from console.modules.system_service import (
+        get_system_resources_metrics,
+        get_system_summary,
+        get_timeline_events,
+        ingest_timeline_event,
+        record_token_usage_event,
     )
 

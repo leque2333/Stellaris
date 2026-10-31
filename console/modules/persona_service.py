@@ -11,15 +11,17 @@ Stellaris Console - Persona Service
 存储仍然是 data/persona.md，方便直接替换文件。
 """
 
-import os
 import json
+import os
 import re
+
+from agent_core.persona_identity import parse_persona_name
+
 from .common import (
     PERSONA_PATH,
     PERSONA_RULES_PATH,
     ensure_persona_file,
 )
-from agent_core.persona_identity import parse_persona_name
 
 DEFAULT_PERSONA_NAME = "助手"
 

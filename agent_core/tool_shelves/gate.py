@@ -20,8 +20,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from . import catalog, fastpath
-from .config import ShelfConfig, config as default_config
-from .session import SessionStore, session_store as default_session_store
+from .config import ShelfConfig
+from .config import config as default_config
+from .session import SessionStore
+from .session import session_store as default_session_store
 
 logger = logging.getLogger("ToolShelves.Gate")
 

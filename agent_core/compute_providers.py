@@ -13,8 +13,8 @@ import logging
 import os
 import re
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -163,11 +163,11 @@ class ComputeManager:
         if not user_text:
             return False
         text = user_text.lower()
-        
+
         # 1. 包含代码块或典型错误堆栈
         if "```" in user_text or "traceback" in text or "syntaxerror" in text or "exception" in text:
             return True
-        
+
         # 2. 强逻辑意图关键词
         logic_patterns = [
             r"重构", r"死锁", r"报错", r"排查", r"编写.*代码", r"写一个.*(函数|脚本|算法|类|模块)",

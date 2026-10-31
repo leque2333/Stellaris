@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agent_core.timeline_hub import TimelineHub  # noqa: E402
 from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
+from agent_core.timeline_hub import TimelineHub  # noqa: E402
 
 
 class RecallScopeTest(unittest.TestCase):

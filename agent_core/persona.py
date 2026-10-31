@@ -123,7 +123,7 @@ class PersonaManager:
                         return self._rules
             except Exception as e:
                 logger.warning(f"[PersonaManager] 读取规则文件 {self.rules_path} 异常: {e}，将采用默认规则")
-        
+
         self._rules = json.loads(json.dumps(DEFAULT_RULES))
         self.save_rules(self._rules)
         return self._rules
@@ -134,7 +134,7 @@ class PersonaManager:
             self.rules_path.parent.mkdir(parents=True, exist_ok=True)
             tiers = rules.get("affection_tiers", self._rules.get("affection_tiers", DEFAULT_RULES["affection_tiers"]))
             regex_rules = rules.get("speech_regex_rules", self._rules.get("speech_regex_rules", DEFAULT_RULES["speech_regex_rules"]))
-            
+
             clean_rules = {
                 "affection_tiers": tiers,
                 "speech_regex_rules": regex_rules,

@@ -26,8 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from console.modules import model_service  # noqa: E402
-from console.modules import system_service  # noqa: E402
+from console.modules import (
+    model_service,  # noqa: E402
+    system_service,  # noqa: E402
+)
 
 
 class TokenAnalyticsAccountingTest(unittest.TestCase):

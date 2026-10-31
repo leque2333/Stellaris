@@ -4,21 +4,22 @@ Stellaris Console - Module & Topology Manager
 模组生态总线、层级树状图、探针检测与权限控制 (RBAC)
 """
 
-import os
 import json
+import os
 import re
-import time
 import socket
+import time
 from urllib.parse import urlparse
+
 from .common import (
     BASE_DIR,
-    MODULES_STATE_PATH,
     CUSTOM_TOOLS_PATH,
-    TOPOLOGY_CONFIG_PATH,
     MODULES_PERMISSIONS_PATH,
-    resolve_custom_tools_path,
+    MODULES_STATE_PATH,
+    TOPOLOGY_CONFIG_PATH,
+    resolve_astrbot_mcp_path,
     resolve_astrbot_plugins_dir,
-    resolve_astrbot_mcp_path
+    resolve_custom_tools_path,
 )
 
 DEFAULT_PERMISSIONS = {
@@ -468,7 +469,7 @@ def execute_module_probe(module: dict, timeout: float = 0.6) -> dict:
                 "status_text": "插件已就绪",
                 "latency_ms": 0,
                 "target": "AstrBot 插件管线",
-                "diag_hint": f"插件代码与 metadata.yaml 均位于本地目录，已挂载",
+                "diag_hint": "插件代码与 metadata.yaml 均位于本地目录，已挂载",
                 "checked_at": int(time.time())
             }
         else:

@@ -14,8 +14,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agent_core.bridge import (  # noqa: E402
-    BridgeIngestor, BridgeSpec, HubEvent, JsonEventDriver, LogEventDriver,
-    SqliteEventDriver, default_engine,
+    BridgeIngestor,
+    BridgeSpec,
+    HubEvent,
+    JsonEventDriver,
+    LogEventDriver,
+    SqliteEventDriver,
+    default_engine,
 )
 from agent_core.storage.sqlite_store import SQLiteStore  # noqa: E402
 

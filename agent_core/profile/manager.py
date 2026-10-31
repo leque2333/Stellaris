@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..storage import Store
 from ..memory.fact_manager import FactManager
 from ..memory.reflection_engine import ReflectionEngine
+from ..storage import Store
 from .archives import ArchiveManager
 
 

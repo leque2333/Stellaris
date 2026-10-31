@@ -8,7 +8,6 @@ from console.modules.persona_service import (
     split_persona_text,
 )
 
-
 OLD_STYLE = """# 【星野：核心系统设定集】
 
 ## 一、 人物定位与精神底色

@@ -11,7 +11,7 @@
 任何异常都不允许影响对话：闸门失败一律全量放行。
 """
 
-from .gate import ToolGate, tool_gate  # noqa: F401
 from .cleaner import compress_messages, compress_tool_result  # noqa: F401
+from .gate import ToolGate, tool_gate  # noqa: F401
 
 __all__ = ["ToolGate", "tool_gate", "compress_messages", "compress_tool_result"]

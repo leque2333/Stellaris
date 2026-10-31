@@ -16,7 +16,6 @@ from typing import Any, Dict, List, Optional
 
 from .config import ShelfConfig
 
-
 # 工具来源：中枢不提供工具，这些全部来自 AstrBot（MCP / 插件 / 内置）
 _SOURCE_MAP = {
     "generate_image": "image-generator",

@@ -3,8 +3,8 @@
 
 from .drivers import HttpEventDriver, JsonEventDriver, LogEventDriver, SqliteEventDriver
 from .engine import BridgeDriver, BridgeEngine
-from .ingest import BridgeIngestor
 from .infer import BridgeSpecInferer
+from .ingest import BridgeIngestor
 from .manager import BridgeManager
 from .models import BridgeSpec, HubEvent
 
