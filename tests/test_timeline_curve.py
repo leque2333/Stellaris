@@ -40,6 +40,17 @@ class TierTest(unittest.TestCase):
         entries = curve.build_curve(_events(3, 10), budget_chars=100)
         self.assertEqual([item.event_id for item in entries], ["e2", "e1", "e0"])
 
+    def test_allow_overflow_keeps_whole_record(self):
+        events = _events(3, 100)  # 每条 100 字
+        entries = curve.build_curve(events, budget_chars=150, allow_overflow=True)
+        # 一条 100，第二条会到 200 > 150，但还没到预算前允许收下 -> 共 2 条
+        self.assertEqual(len(entries), 2)
+        self.assertLessEqual(sum(item.original_chars for item in entries), 200)
+
+    def test_no_overflow_when_disabled(self):
+        entries = curve.build_curve(_events(3, 100), budget_chars=150, allow_overflow=False)
+        self.assertEqual(len(entries), 1)
+
     def test_empty(self):
         self.assertEqual(curve.build_curve([], budget_chars=100), [])
 

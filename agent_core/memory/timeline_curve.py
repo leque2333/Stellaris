@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 
-DEFAULT_BUDGET_CHARS = 20_000
+DEFAULT_BUDGET_CHARS = 9_000
 ENV_BUDGET = "HUB_TIMELINE_BUDGET"
 DEFAULT_TIER_SHARES = (0.30, 0.40, 0.30)
 DEFAULT_LEVELS = (1.00, 0.85, 0.60)
@@ -90,7 +90,7 @@ def budget_chars() -> int:
     import os
 
     try:
-        value = int(os.getenv(ENV_BUDGET, "") or 8000)
+        value = int(os.getenv(ENV_BUDGET, "") or 9000)
     except ValueError:
         value = 8000
     return max(500, min(value, 200_000))
@@ -102,6 +102,7 @@ def build_curve(
     tier_shares: Sequence[float] = DEFAULT_TIER_SHARES,
     levels: Sequence[float] = DEFAULT_LEVELS,
     line_overhead: int = 0,
+    allow_overflow: bool = True,
 ) -> List[CurveEntry]:
     """按新→旧铺满预算，并按字数份额分层压缩。"""
     ordered = sorted(events, key=lambda item: float(getattr(item, "timestamp", 0) or 0),
@@ -112,8 +113,14 @@ def build_curve(
     for event in ordered:
         text = str(getattr(event, "narrative", "") or "")
         cost = len(text) + max(0, line_overhead)
-        if not text or used + cost > budget_chars:
-            break
+        if not text:
+            continue
+        if used + cost > budget_chars:
+            # 允许整条浮动：还没到预算就再收一条，避免尾部出现半条缝
+            if allow_overflow and used < budget_chars:
+                pass
+            else:
+                break
         tier = _tier_for(used, boundaries)
         meta = getattr(event, "metadata", {}) or {}
         already = bool(meta.get("compressed")) if isinstance(meta, dict) else False

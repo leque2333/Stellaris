@@ -113,6 +113,7 @@ def _prefetch_terms(user_query: str) -> list:
 
 
 MIN_TIMELINE_CHARS = 2_000
+RECALL_MAX_CHARS = 6_000
 
 
 def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
@@ -2949,7 +2950,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                             str(getattr(row, "narrative", "") or ""))
             for row in rows
         ]
-        kept, mode = deep_recall.trim_hits(hits, 2_000)
+        kept, mode = deep_recall.trim_hits(hits, RECALL_MAX_CHARS)
         if not kept:
             return ""
         _recall_writeback(store, ctx, kept, mode)
@@ -3409,7 +3410,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                             str(getattr(row, "narrative", "") or ""))
             for row in rows
         ]
-        kept, mode = deep_recall.trim_hits(hits, deep_recall.DEFAULT_BUDGET // 2)
+        kept, mode = deep_recall.trim_hits(hits, RECALL_MAX_CHARS)
         if not kept:
             return "【记忆库】没有匹配的旧记录。"
         _recall_writeback(store, ctx, kept, mode)
