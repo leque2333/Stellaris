@@ -75,6 +75,60 @@ def _split_conversation_id(raw):
     return "conversation", "", value
 
 
+_IMAGE_MARK = "[图片]"
+
+
+def _summarize_parts(parts) -> str:
+    """多模态内容 → 纯文本 + 图片短语（图片数量记下来，二进制丢掉）。"""
+    texts = []
+    images = 0
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            texts.append(str(part.get("text") or ""))
+        elif kind in ("image_url", "image", "input_image"):
+            images += 1
+    text = _scrub_binary("".join(texts))
+    if images:
+        text = f"{text} {_IMAGE_MARK}×{images}" if text else f"{_IMAGE_MARK}×{images}"
+    return text
+
+
+def _scrub_messages(messages):
+    """留档用的消息：图片一律换成短语，别把 base64 写进记忆库。"""
+    if not isinstance(messages, list):
+        return messages
+    cleaned = []
+    for message in messages:
+        if not isinstance(message, dict):
+            cleaned.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            cleaned.append({**message, "content": _summarize_parts(content)})
+        elif isinstance(content, str):
+            cleaned.append({**message, "content": _scrub_binary(content)})
+        else:
+            cleaned.append(message)
+    return cleaned
+
+
+def _scrub_binary(value) -> str:
+    """把 data:...;base64,... 换成一句短语，避免整段二进制进记忆。"""
+    text = str(value or "")
+    if "base64," not in text and "data:image" not in text:
+        return text
+    import re
+
+    def _replace(match):
+        head = match.group(0)
+        return f"[图片数据已省略 {len(head)} 字节]"
+
+    return re.sub(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=\s]+", _replace, text)
+
+
 def _header_text(value) -> str:
     """HTTP 头只保证 ASCII；中文名称由客户端 URL 编码，这里还原。"""
     text = str(value or "")
@@ -2170,19 +2224,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return channel_id, channel_type
 
     def _extract_user_query(self, messages):
-        """取最后一条 user 消息的纯文本。"""
+        """取最后一条 user 消息的纯文本；图片只留一句短语，不碰二进制。"""
         for message in reversed(messages):
             if message.get("role") != "user":
                 continue
             content = message.get("content")
             if isinstance(content, str):
-                return content
+                return _scrub_binary(content)
             if isinstance(content, list):
-                return "".join(
-                    part.get("text", "")
-                    for part in content
-                    if isinstance(part, dict) and part.get("type") == "text"
-                )
+                return _summarize_parts(content)
             return ""
         return ""
 
@@ -2958,7 +3008,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         # 记忆库要留"实际发给模型的东西"：system prompt 是中枢重建的，
         # 和 AstrBot 原样发来的 ctx["messages"] 里的 system 不是一回事
         self._l3(store, "llm_request", {
-            "messages": ctx["messages"],
+            "messages": _scrub_messages(ctx["messages"]),
             "system_prompt": ctx["sys_prompt"],
             "tools": ctx["extra"].get("tools"),
             "model": ctx["req_model"],
