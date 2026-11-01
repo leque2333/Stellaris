@@ -162,8 +162,12 @@ function renderArchiveDetail(archive) {
 
     const minInput = document.getElementById('affection-min');
     const maxInput = document.getElementById('affection-max');
+    const currentInput = document.getElementById('affection-current');
     if (minInput) minInput.value = (archive.affection_min === null || archive.affection_min === undefined) ? 0 : archive.affection_min;
     if (maxInput) maxInput.value = (archive.affection_max === null || archive.affection_max === undefined) ? 100 : archive.affection_max;
+    if (currentInput) {
+        currentInput.value = (archive.affection === null || archive.affection === undefined) ? '' : archive.affection;
+    }
 
     renderArchiveIdentities(archive.identities || []);
     renderArchiveAffection(archive.affection, archive.affection_min, archive.affection_max);
@@ -397,6 +401,38 @@ async function saveAffectionRange() {
     }
 }
 
+async function saveCurrentAffection() {
+    const archiveId = archivesState.current;
+    const input = document.getElementById('affection-current');
+    if (!archiveId || !input) return;
+    if (input.value === '') {
+        if (typeof showToast === 'function') showToast('留空表示好感度未定；要改值请填 0~100');
+        return;
+    }
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < 0 || value > 100) {
+        if (typeof showToast === 'function') showToast('好感度必须是 0~100 的整数');
+        return;
+    }
+    try {
+        const resp = await fetch('/api/affection/' + encodeURIComponent(archiveId), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ affection: value })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) {
+            if (typeof showToast === 'function') showToast(data.error || '保存失败');
+            return;
+        }
+        if (typeof showToast === 'function') showToast(`好感度已设为 ${data.affection}`);
+        if (typeof selectArchive === 'function') await selectArchive(archiveId);
+    } catch (e) {
+        console.warn('save current affection failed:', e);
+        if (typeof showToast === 'function') showToast('保存失败');
+    }
+}
+
 async function saveArchiveSettings() {
     const archiveId = archivesState.current;
     if (!archiveId) return;
@@ -427,6 +463,7 @@ window.closeCreateArchive = closeCreateArchive;
 window.submitCreateArchive = submitCreateArchive;
 window.saveArchive = saveArchive;
 window.saveAffectionRange = saveAffectionRange;
+window.saveCurrentAffection = saveCurrentAffection;
 window.saveArchiveSettings = saveArchiveSettings;
 
 window.previewAffectionRange = previewAffectionRange;

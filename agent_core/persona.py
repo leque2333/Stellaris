@@ -6,7 +6,6 @@ Stellaris Core - 人设引擎与后处理器 (Persona Kernel)
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -265,58 +264,6 @@ class PersonaManager:
             )
 
         return "\n\n".join(blocks)
-
-    def post_process_response(self, text: str) -> str:
-        """
-        遵循用户自定义口语规则的输出清洗（带代码块与链接防护罩）：
-        1. 保护多行代码块与行内代码
-        2. 保护 Markdown 超链接
-        3. 按顺序执行用户启用的自定义口语正则规则
-        4. 严密还原代码块与链接
-        """
-        if not text:
-            return ""
-        raw = str(text).strip()
-
-        # 1. 保护多行代码块 ```...``` 与 行内代码 `...`
-        code_snippets = []
-        def _save_code(m):
-            code_snippets.append(m.group(0))
-            return f"__CODE_SNIPPET_{len(code_snippets)-1}__"
-
-        masked = re.sub(r"```[\s\S]*?```", _save_code, raw)
-        masked = re.sub(r"`[^`\r\n]+`", _save_code, masked)
-
-        # 2. 保护 Markdown 链接 [text](url)
-        md_links = []
-        def _save_link(m):
-            md_links.append(m.group(0))
-            return f"__MD_LINK_{len(md_links)-1}__"
-
-        masked = re.sub(r"\[[^\]]+\]\([^\)]+\)", _save_link, masked)
-
-        # 3. 按配置依次应用用户自定义的口语正则替换
-        regex_rules = self._rules.get("speech_regex_rules", DEFAULT_RULES["speech_regex_rules"])
-        cleaned = masked
-        for rule in regex_rules:
-            if not rule.get("is_active", True):
-                continue
-            pat = rule.get("pattern", "")
-            rep = rule.get("replacement", "")
-            if not pat:
-                continue
-            try:
-                cleaned = re.sub(pat, rep, cleaned)
-            except Exception as e:
-                logger.warning(f"[PersonaManager] 执行正则规则 '{rule.get('name')}' 出错: {e}")
-
-        # 4. 无损还原 Markdown 链接与代码块
-        for i, link in enumerate(md_links):
-            cleaned = cleaned.replace(f"__MD_LINK_{i}__", link)
-        for i, code in enumerate(code_snippets):
-            cleaned = cleaned.replace(f"__CODE_SNIPPET_{i}__", code)
-
-        return cleaned.strip()
 
 
 # 全局单例

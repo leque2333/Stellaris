@@ -209,6 +209,12 @@ _READY_DBS: set = set()
 _READY_LOCK = threading.Lock()
 
 
+def reset_ready_cache() -> None:
+    """恢复快照后强制下一个 FactStore 重新建表 / FTS / 图。"""
+    with _READY_LOCK:
+        _READY_DBS.clear()
+
+
 class FactStore:
     def __init__(self, store: Any = None) -> None:
         self.store = store or get_store()

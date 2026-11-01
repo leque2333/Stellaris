@@ -100,6 +100,8 @@ tag_permission  admin / guest / system / unknown
 系统工具  → system_tools 元数据 → 中枢本地执行
 插件适配  → console/adapters（通用头 / JSON / 生成 Python）
 宿主机桥  → host_bridge（HTTP）
+平台识别  → DiscoveryService → platform_contexts（60s 一轮，AstrBot 上下文）
+工具页    → 配置 / 系统工具 / 通用插件扫描（设置里配目录）/ 链路观测
 ```
 
 当前系统工具：
@@ -119,6 +121,9 @@ data/persona.md             人格
 data/models_config.json     凭证 / 模型 / 分时价格
 data/compute_providers.json 算力路由
 data/tool_shelves.json      工具分类与权限
+data/plugin_scan.json       插件扫描目录（设置页可改）
+backups/                    迁移/手动/恢复快照（整库）
+data/backups/               导入前快照（整库）
 data/system_tools.json      系统工具开关
 data/token_alerts.json      Token 预警设置
 data/auth_config.json       控制台会话

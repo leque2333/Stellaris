@@ -326,12 +326,22 @@ def _stream_head_state(text: str) -> str:
 
 
 def _memory_tool_prompt(stream: bool = False) -> str:
-    """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
+    """记忆检索指令：流式/非流式都注入（流式由 _stream_recall 缓冲后重开）。"""
     from agent_core.memory import settings as memory_settings
 
-    if stream or not bool(memory_settings.get("memory_tool_enabled", True)):
+    if not bool(memory_settings.get("memory_tool_enabled", True)):
         return ""
     return _MEMORY_TOOL_BLOCK
+
+
+def _memory_tool_enabled() -> bool:
+    """执行侧也要校验：关掉开关后即使模型自己写出指令，也不查库。"""
+    from agent_core.memory import settings as memory_settings
+
+    try:
+        return bool(memory_settings.get("memory_tool_enabled", True))
+    except Exception:
+        return True
 
 
 def _parse_memory_directive(text) -> dict:
@@ -703,7 +713,6 @@ _CONSOLE_GET_ROUTES = {
     '/api/persona': '_get_persona',
     '/api/persona/rules': '_get_persona_rules',
     '/api/models/sync_upstream': '_get_models_sync',
-    '/api/sniff_key': '_get_sniff_key',
     '/api/models_config': '_get_models_config',
     '/api/compute/config': '_get_compute_config',
     '/api/ledger': '_get_ledger',
@@ -715,10 +724,8 @@ _CONSOLE_GET_ROUTES = {
     '/api/memory/facts': '_get_memory_facts',
     '/api/memory/graph': '_get_memory_graph',
     '/api/tools/shelves': '_get_tools_shelves',
-    '/api/tools/shelves/status': '_get_tools_shelves',
+    '/api/tools/plugin_scan': '_get_plugin_scan',
     '/api/identity/scan': '_get_identity_scan',
-    '/api/affection': '_get_affection',
-    '/api/affection/overview': '_get_affection',
     '/api/logs': '_get_logs',
     '/api/logs/alerts': '_get_log_alerts',
     '/api/tools': '_get_tools',
@@ -729,6 +736,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/deploy_check': '_get_deploy_check',
     '/api/memory/timeline_curve': '_get_timeline_curve',
     '/api/memory/settings': '_get_memory_settings',
+    '/api/memory/snapshots': '_get_memory_snapshots',
     '/api/memory/export': '_get_memory_export',
     '/api/token/alerts': '_get_token_alerts',
 }
@@ -738,11 +746,13 @@ _CONSOLE_GET_ROUTES = {
 _POST_ROUTES = {
     '/api/tools/shelves/reload': ('_post_shelves_reload', True),
     '/api/tools/shelves/metrics/reset': ('_post_shelves_metrics_reset', True),
+    '/api/tools/plugin_scan': ('_post_plugin_scan', True),
     '/api/tools/clean': ('_post_tool_clean', False),
     '/api/tools': ('_post_tool_update', True),
     '/api/tools/policy': ('_post_tool_policy', True),
     '/api/tools/policy/delete': ('_post_tool_policy_delete', True),
     '/api/identity/bind': ('_post_identity_bind', True),
+    '/api/identity/unbind': ('_post_identity_unbind', True),
     '/api/identity/hide': ('_post_identity_hide', True),
     '/api/ledger/clear': ('_post_ledger_clear', True),
     '/api/ledger/update': ('_post_ledger_update', True),
@@ -750,6 +760,9 @@ _POST_ROUTES = {
     '/api/memory/facts/rollback': ('_post_fact_rollback', True),
     '/api/memory/facts': ('_post_fact_upsert', True),
     '/api/memory/settings': ('_post_memory_settings', True),
+    '/api/memory/snapshots/create': ('_post_memory_snapshot_create', True),
+    '/api/memory/snapshots/restore': ('_post_memory_snapshot_restore', True),
+    '/api/memory/snapshots/delete': ('_post_memory_snapshot_delete', True),
     '/api/memory/import': ('_post_memory_import', True),
     '/api/token/alerts/settings': ('_post_token_alert_settings', True),
     '/api/auth/login': ('_post_login', False),
@@ -1058,8 +1071,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "tokens": backend.get_token_analytics(),
             "models_config": backend.redact_models_config(backend.get_models_config()),
             "timeline": backend.get_timeline_events(limit=60),
-            "modules": backend.get_modules_overview(),
-            "modules_permissions": backend.get_module_permissions(),
             "compute_config": backend.redact_compute_config(backend.get_compute_config()),
         })
 
@@ -1091,12 +1102,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._send_json(backend.get_token_analytics())
 
     def _get_tokens(self):
-        """首页轻量统计：只查账本，保证首屏数字快。"""
-        return self._send_json(backend.get_token_analytics())
-
-    def _get_sniff_key(self):
-        """已下线：Key 不该出现在 URL 里（会原样进访问日志）。"""
-        return self._send_json({'error': '该接口已下线'}, status=404)
+        """首页轻量统计：只回今日/累计/额度，5 秒轮询不跑账本页的重查询。"""
+        return self._send_json(backend.get_token_analytics(light=True))
 
     def _get_access_policy(self):
         from agent_core.access_policy import load_policy
@@ -1159,8 +1166,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _get_identity_scan(self):
         return self._send_json(self._identity_scan())
 
-    def _get_affection(self):
-        return self._send_json(self._affection_overview())
+    def _get_plugin_scan(self):
+        """插件工具扫描：配置 + 解析目录 + 插件/工具预览。"""
+        from agent_core.tool_shelves import plugin_scan
+
+        return self._send_json(plugin_scan.status())
 
     def _get_logs(self):
         return self._send_json(self._logs_payload())
@@ -1198,6 +1208,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         payload = memory_settings.public_payload()
         payload["stats"] = memory_settings.memory_stats(self._memory_store())
         return self._send_json(payload)
+
+    def _get_memory_snapshots(self):
+        """记忆库快照：整库副本列表 + 总占用。"""
+        from agent_core.memory import snapshots
+
+        return self._send_json(snapshots.status(db_path=self._memory_store().path))
 
     def _post_ledger_update(self, body):
         """修正单条流水的金额，用于厂商计费异常。"""
@@ -1293,6 +1309,68 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         return self._send_json(result)
+
+    # ---------------- POST：记忆库快照 ----------------
+    def _snapshot_db_path(self):
+        return self._memory_store().path
+
+    def _post_memory_snapshot_create(self, body):
+        from agent_core.memory import snapshots
+
+        try:
+            created = snapshots.create_snapshot("manual", db_path=self._snapshot_db_path())
+        except snapshots.SnapshotError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        try:
+            audit_log.record("memory_snapshot_create", dedupe=False,
+                             name=created["name"], size=created["size"])
+        except Exception:
+            pass
+        data = snapshots.status(db_path=self._snapshot_db_path())
+        data["created"] = created
+        return self._send_json(data)
+
+    def _post_memory_snapshot_restore(self, body):
+        from agent_core.memory import snapshots
+
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return self._send_json({'ok': False, 'error': '缺少 name'}, status=400)
+        try:
+            result = snapshots.restore_snapshot(name, db_path=self._snapshot_db_path())
+        except snapshots.SnapshotError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        except Exception as exc:
+            return self._send_json(
+                {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}, status=500
+            )
+        try:
+            audit_log.record("memory_snapshot_restore", dedupe=False,
+                             name=name, safety=result.get("safety", {}).get("name", ""))
+        except Exception:
+            pass
+        data = snapshots.status(db_path=self._snapshot_db_path())
+        data.update(result)
+        return self._send_json(data)
+
+    def _post_memory_snapshot_delete(self, body):
+        from agent_core.memory import snapshots
+
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return self._send_json({'ok': False, 'error': '缺少 name'}, status=400)
+        try:
+            removed = snapshots.delete_snapshot(name, db_path=self._snapshot_db_path())
+        except snapshots.SnapshotError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        try:
+            audit_log.record("memory_snapshot_delete", dedupe=False,
+                             name=name, size=removed.get("size", 0))
+        except Exception:
+            pass
+        data = snapshots.status(db_path=self._snapshot_db_path())
+        data["removed"] = removed
+        return self._send_json(data)
 
     def _get_deploy_check(self):
         """部署自检：端口 / docker 挂载 / 密钥 / 安全配置 / 审计日志。"""
@@ -1455,6 +1533,55 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._send_json({
             'ok': ok_count == len(results),
             'bound': ok_count,
+            'failed': len(results) - ok_count,
+            'results': results,
+        })
+
+    def _post_identity_unbind(self, body):
+        """解绑：从档案白名单与请求期绑定表里同时移除，别留半截。
+
+        前端「身份映射」把下拉改回「不配置」时调这个接口；
+        以前只删 platform_bindings 会留下 archive_identities，等于没解绑。
+        """
+        if not self._is_authenticated():
+            return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+        items = body.get('items') if isinstance(body, dict) else None
+        if not isinstance(items, list) or not items:
+            return self._send_json({'ok': False, 'error': 'items 必须是非空数组'}, status=400)
+
+        from agent_core.storage import get_store
+
+        store = get_store()
+        results = []
+        for raw in items:
+            if not isinstance(raw, dict):
+                results.append({'ok': False, 'error': 'item 必须是对象'})
+                continue
+            platform = str(raw.get('platform') or '').strip()
+            uid = str(raw.get('uid') or '').strip()
+            if not platform or not uid:
+                results.append({'ok': False, 'uid': uid, 'error': 'platform / uid 必填'})
+                continue
+            try:
+                identity_removed = store.unlink_identity(platform, uid)
+                binding_removed = store.unbind_context(platform, uid)
+                results.append({
+                    'ok': True, 'uid': uid, 'platform': platform,
+                    'identity_removed': bool(identity_removed),
+                    'binding_removed': bool(binding_removed),
+                })
+            except Exception as exc:
+                results.append({'ok': False, 'uid': uid, 'error': f'{type(exc).__name__}: {exc}'})
+
+        ok_count = sum(1 for r in results if r.get('ok'))
+        audit_log.record(
+            "identity_unbind", dedupe=False,
+            unbound=ok_count, failed=len(results) - ok_count,
+            uids=[str(r.get('uid') or '') for r in results][:20],
+        )
+        return self._send_json({
+            'ok': ok_count == len(results),
+            'unbound': ok_count,
             'failed': len(results) - ok_count,
             'results': results,
         })
@@ -1637,31 +1764,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "count": len(errors),
             "last": errors[-1] if errors else None,
         }
-
-    def _affection_overview(self):
-        """好感度模块：所有档案的当前值 + 浮动窗口。"""
-        try:
-            from agent_core.profile import ProfileManager
-            from agent_core.storage import get_store
-
-            store = get_store()
-            pm = ProfileManager(store)
-            items = []
-            for archive in store.list_archives():
-                aid = archive["archive_id"]
-                items.append({
-                    "archive_id": aid,
-                    "display_name": archive.get("display_name") or aid,
-                    "role": archive.get("role") or "guest",
-                    "status": archive.get("status") or "active",
-                    "affection": pm.get_affection(aid),
-                    "affection_min": archive.get("affection_min") if archive.get("affection_min") is not None else 0,
-                    "affection_max": archive.get("affection_max") if archive.get("affection_max") is not None else 100,
-                })
-            items.sort(key=lambda x: (x["role"] != "admin", x["display_name"]))
-            return {"ok": True, "items": items, "count": len(items)}
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     def _identity_scan(self):
         """罗列所有插件里的 UID，供人工配置用。只读，不写库。
@@ -2023,6 +2125,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._send_json({'ok': False, 'error': str(exc)}, status=500)
         return self._send_json({'ok': True})
 
+    def _post_plugin_scan(self, body):
+        """保存插件目录配置（设置页）；只接受目录列表 + auto 开关。"""
+        from agent_core.tool_shelves import plugin_scan
+
+        roots = body.get("roots")
+        if roots is None:
+            roots = []
+        if isinstance(roots, str):
+            roots = [line for line in roots.splitlines() if line.strip()]
+        if not isinstance(roots, list):
+            return self._send_json({'ok': False, 'error': 'roots 必须是数组或换行文本'}, status=400)
+        auto = body.get("auto")
+        try:
+            saved = plugin_scan.save_config(roots=[str(x) for x in roots], auto=auto)
+        except Exception as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=500)
+        audit_log.record(
+            "plugin_scan_update", dedupe=False,
+            roots=saved["config"]["roots"][:20], auto=saved["config"]["auto"],
+            invalid=saved["invalid"][:20],
+        )
+        payload = plugin_scan.status()
+        payload["invalid"] = saved["invalid"]
+        return self._send_json(payload)
+
     def _post_tool_clean(self, body):
         """P4 薄壳清洗：自带客户端 Key，不要求 Web 登录。"""
         return self._handle_tool_clean(body)
@@ -2333,7 +2460,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._send_json({'ok': False, 'error': '记忆库不可用'}, status=503)
         person_id = str(body.get('person_id') or '') or None
         common = dict(start_ts=start_ts, end_ts=end_ts,
-                      person_ids=[person_id] if person_id else None, limit=500)
+                      person_ids=[person_id] if person_id else None, limit=500,
+                      include_archived=True)
         rows = store.search_narratives(terms, **common)
         if not rows and len(terms) > 1:
             rows = store.search_narratives(terms, match_all=False, **common)
@@ -3701,7 +3829,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         terms = _prefetch_terms(ctx.get("user_query") or "")
         rows = store.search_narratives(
             terms, person_ids=[ctx["person_id"]] if ctx.get("person_id") else None,
-            limit=200, match_all=False,
+            limit=200, match_all=False, include_archived=True,
         ) if terms else []
         if not rows:
             return ""
@@ -4553,7 +4681,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _complete_with_memory_lookup(self, ctx, active_msgs, message, usage):
         """模型要回忆时可以连续查几轮，累计不超上限，再把结果交给它作答。"""
-        if not message:
+        if not message or not _memory_tool_enabled():
             return message
         messages = list(active_msgs)
         used, last_request = 0, None
@@ -4636,6 +4764,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "person_ids": [ctx["person_id"]] if ctx.get("person_id") else None,
             "sources": [request["source"]] if request.get("source") else None,
             "limit": 500,
+            "include_archived": True,
         }
         terms = deep_recall.parse_terms(request.get("keywords") or "")
         rows = store.search_narratives(terms, **common) if terms else []
@@ -4950,6 +5079,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         calls = list(message.get("tool_calls") or [])
         if not content and not calls:
             return False
+        if content and not calls:
+            # 完整结果回放路径可以做输出清洗；纯透传（_stream_forward）拿不到整段文本
+            content = backend.clean_persona_reply(content)
         for index, call in enumerate(calls):
             call.setdefault("index", index)
         finish = "tool_calls" if calls else (result.get("finish_reason") or "stop")
@@ -4992,7 +5124,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if state == "wait":
                     continue
                 if state == "directive":
-                    return self._stream_recall(ctx, active_msgs, head, accumulator)
+                    if not _memory_tool_enabled():
+                        decided = True  # 开关关着：把这一行当普通输出吐出去，不查库
+                    else:
+                        return self._stream_recall(ctx, active_msgs, head, accumulator)
                 decided = True
             for item in pending:
                 self._stream_write(item, accumulator)

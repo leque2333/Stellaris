@@ -55,45 +55,26 @@
 - QQ：`onebot_napcat:GroupMessage:<群号>` / `onebot_napcat:FriendMessage:<QQ>`
 
 发现结果写入 `platform_contexts`；用户只决定“这个上下文属于哪个人物档案”，写在 `platform_bindings`。
-双填嗅探：名称和 UID 各一格，多个用逗号分隔；同一条记录同时命中名称和 UID 判 `paired`，只命中一边判 `name` / `uid`，绑定记录 `confidence` 和 `verified_by`。
-执行 AI：双填框旁“AI 定位”会用只读工具（搜文本/读文件/看 SQLite/执行 SELECT）在 `HUB_SNIFF_ROOTS` 允许目录里找证据，返回 JSON 候选；工具结果脱敏，候选置信度封顶 0.85，仍需人确认绑定。
 运行时插件带 `X-Platform` + `X-External-Id`，中枢查绑定找人物档案。
 配置若被删，下一轮扫描把上下文标记为 `stale`，不会静默漂移。
 
-### 1.3 执行 AI（一个内核，两种 profile）
+> 双填嗅探 / 执行 AI 定位已随「模块管理」一起下线（见 [CLEANUP_REPORT.md](CLEANUP_REPORT.md)）。
+> 现行入口是控制台「身份映射」页 + `/api/identity/scan|bind|unbind`。
 
-| profile | 权限 | 用途 |
-|---|---|---|
-| `investigate` | 只读：搜文本、读文件、SQLite schema/select | 平台匹配、排查 |
-| `execute` | 工作区读写 + 白名单命令（python/pytest/node/npm/git） | 执行主模型下发的任务 |
+### 1.3 执行 AI / 插件注册表 / 桥接层（已下线）
 
-主模型通过 `delegate_execution(goal, mode)` 调用；执行 AI 不直接面向用户。
-每次执行写一条 L1 `invocations`（module=`execution_ai`），记录目标、mode、工具调用和结果摘要。
-写文件限制在工作区内，`data/memory.db`、密钥配置、`.git`、`backups` 受保护；命令禁止 shell 操作符。
-整机 shell / 网络留给独立插件，不放进这个执行层。
+2026-10-30 起，以下能力整体下线，路由一律 404：
 
-### 1.4 插件是数据，不是代码
-
-`plugins` 表只存：`plugin_id / name / root_path / protocol / spec / status`。
-协议探针只识别通用协议（`sqlite` / `json` / `log`），不认识“AstrBot”或“B站插件”。
-新增插件 = 扫描目录生成记录，不新增 Python 分支；控制台“插件注册表”从 `/api/plugins` 动态渲染。
-AstrBot / B站 的上下文读取也已迁成 `data/plugin_specs.json` 里的声明式 spec，代码里不再有这两个连接器类。
-
-### 1.5 通用桥接层
-
-`BridgeSpec` 只描述 source，不写插件名：
-
-```json
-{"source_id":"demo_sqlite","kind":"sqlite","scope":"plugin","locator":"messages.db",
- "options":{"table":"messages","cursor":"id","content":"content"}}
+```text
+/api/plugins                              插件注册表
+/api/execution_ai                         执行 AI
+/api/bridges/*                            通用桥接层
+/api/components|hosts|contexts|services   连接中心
 ```
 
-`BridgeEngine` 按 `kind` 选驱动（`sqlite` / `json` / `log` / `http`），把源事件统一成 `HubEvent`；
-`BridgeIngestor` 用 `event_key` 去重后写时间轴，`bridge_cursors` 保存增量位置。
-`BridgeSpecInferer` 可先探测目标（文件或 URL）、再让执行 AI 生成 spec，并用真实样本试读；AI 不可用时退回启发式。`/api/bridges/attach` 支持 `start:true`，推断通过后直接启动。
-`bridge_specs` 保存已启动的 spec（auto_start），重启后自动恢复；HTTP 驱动支持重试、页码/游标分页与批量导入。
-源码分析：`SourceAnalyzer` 扫仓库提取语言/框架/配置/DB/路由/日志，`SourceSynthesizer` 对发现的 DB/事件 JSON 生成候选 spec 并试读；不按插件名写死。
-OneBot 作为协议驱动后置，不改变这层抽象。
+`agent_core/bridge|plugins|execution|source` 只剩兼容代码，不在 Web 主路径上；
+新接入请走 `console/adapters`（通用头 / 声明式 JSON / 生成适配器），
+不要再按本节历史设计开发。
 
 ---
 
@@ -530,10 +511,12 @@ prompt    3.7k（基础） → 8.7k tokens
 
 实现进度（缓冲区）：
 
-- ✅ 表与迁移（v27 	imeline_buffer）+ 存取接口（push / peek / pop / stats / clear）
+- ✅ 表与迁移（v27 timeline_buffer）+ 存取接口（push / peek / pop / stats / clear）
 - ✅ 重启后仍在（落库）；按人隔离；先进先出
-- ⬜ 腾出/回填两个纯函数
-- ⬜ 接入检索路径（腾出 → 注入 → 回填 → 归档）
+- ✅ 腾出/回填：`store.release_tail` / `store.restore_buffer`
+- ⚠️ 回填条件偏保守：常驻窗口被填满时 `free` 基本为 0，`_timeline_restore` 很少真正搬回；
+  因此旧事件靠**深时检索**（`include_archived=True`）召回，不再依赖回填
+- ⚠️ `timeline_swap.py` 的纯函数版换页没有接入主路径，只在测试里用
 
 实现进度：
 
@@ -574,13 +557,16 @@ prompt    3.7k（基础） → 8.7k tokens
 
 - **流式也能检索**：模型在回复开头写 `[[记忆检索: ...]]`，中枢缓冲开头识别后
   查库重推；缓冲只覆盖开头几十字，没命中就直接放行，不影响首字延迟。
-- 流式请求**不注入上面那段说明**（`_memory_tool_prompt(stream=True)` 返回空）：
-  流式没法先等整轮回复再判断，只有模型自发写出指令时才会走 `_stream_recall`；
-  需要模型稳定使用这个能力时走非流式。
+- 指令说明**流式与非流式都会注入**（`_memory_tool_prompt()` 只看
+  `memory_tool_enabled`）：`_stream_recall` 已经支持流式重开，没有理由只让
+  非流式客户端知道这个能力。开关关掉后提示词与执行路径一起关闭。
 - 指令式（`[[记忆检索: ...]]`）**流式也支持**：开头先缓冲一小段，
   看到指令就丢掉这段、查库、让出预算重拼、换一轮流式重推；
   没有指令则原样吐出，零额外延迟。重开最多 2 轮（`MAX_STREAM_RECALL_DEPTH`），防止死循环。
 - 检索结果按字数闸门裁剪，默认取一半预算（4,000 字）
+- **归档事件可检索**：换页搬进 `timeline_buffer` 的旧事件默认不参与整段时间轴
+  注入，但深时检索（本指令与 `/hub/v1/memory/search`）带 `include_archived=True`，
+  仍能翻到这些经历；否则「超过 4,000 字就永远想不起来」。
 
 接口用法：
 

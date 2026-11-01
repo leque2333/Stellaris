@@ -106,7 +106,7 @@ HTTP 429，状态在内存里（重启清零），登录成功立刻解除。
 - 流式检索深度上限未阻止递归、工具闸门异常 fail-open
 - `/hub/v1/knowledge/search` guest Key 可搜全库 → 需管理员 Key
 - `do_DELETE` 未拦截已下线前缀（死分支仍可执行）
-- 新增 `.dockerignore`；`/api/sniff_key` GET 下线
+- 新增 `.dockerignore`；`/api/sniff_key` GET 已删除（连同 `handle_sniff_key` / `sniff_provider_from_key`）
 
 已修（2026-11-01，按验收审计）：
 

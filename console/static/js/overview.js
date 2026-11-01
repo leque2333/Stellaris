@@ -196,10 +196,6 @@
                     const el = document.getElementById(id);
                     if (el) el.innerText = value;
                 };
-                setText('hero-today-cost', credits.today_cost_formatted || '$0.0000');
-                setText('hero-today-tokens', `${(today.total_tokens || 0).toLocaleString()} Tokens`);
-                setText('hero-total-cost', credits.overall_cost_formatted || '$0.0000');
-                setText('hero-total-tokens', `${(overall.total_tokens || 0).toLocaleString()} Tokens`);
                 setText('m-today-tokens-breakdown', `In: ${(today.input_tokens || 0).toLocaleString()} · Out: ${(today.output_tokens || 0).toLocaleString()} · Cache: ${(today.cached_tokens || 0).toLocaleString()}`);
                 setText('m-today-cost-value', credits.today_cost_formatted || '$0.0000');
                 const activeMasterCred = ((globalModelsConfig && globalModelsConfig.master_credentials) || []).find(c => c.is_active !== false);
@@ -415,14 +411,6 @@
 
             syncActiveModelToAllDisplays(activeModelName, activeProvider, activeReasoning);
             applyHeroStripTheme();
-
-            // 同步顶部模型条单价展示
-            const inEl = document.getElementById('strip-rate-in');
-            if (inEl) inEl.innerText = `$${parseFloat(inPrice).toFixed(3)}/MTok`;
-            const cacheEl = document.getElementById('strip-rate-cache');
-            if (cacheEl) cacheEl.innerText = `$${parseFloat(cachePrice).toFixed(4)}/MTok`;
-            const outEl = document.getElementById('strip-rate-out');
-            if (outEl) outEl.innerText = `$${parseFloat(outPrice).toFixed(3)}/MTok`;
         }
 
 

@@ -136,12 +136,12 @@ def check_security(has_docker: bool) -> List[Check]:
 def check_clients() -> List[Check]:
     path = ROOT / "data" / "clients.json"
     if not path.exists():
-        return [_warn("客户端 Key", f"没有 {path}（require_key 默认关闭）")]
+        return [_warn("客户端 Key", f"没有 {path}（默认 require_key=true，/v1 与 /hub/v1 会拒绝所有匿名请求）")]
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     clients = data.get("clients") or []
     total_keys = sum(len(item.get("keys") or []) for item in clients)
     if not data.get("require_key"):
-        return [_warn("客户端 Key", "require_key=false：不带 Key 的请求会按默认主控放行")]
+        return [_warn("客户端 Key", "require_key=false：匿名请求按访客处理（管理接口仍要求 Key）")]
     if total_keys == 0:
         return [_fail("客户端 Key", "require_key=true 但一个 Key 都没有，谁都调不通")]
     return [_ok("客户端 Key", f"require_key=true，{len(clients)} 个客户端 / {total_keys} 个 Key")]

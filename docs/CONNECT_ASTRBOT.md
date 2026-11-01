@@ -87,10 +87,13 @@ data/clients.json                     # 中枢：登记 astrbot 客户端（没�
 
 ```text
 <AstrBot data>/mcp_hub_tools.py                      # 薄壳 MCP 服务
-<AstrBot data>/plugins/astrbot_plugin_hub_tool_executor/   # 执行器插件
+<AstrBot data>/plugins/astrbot_plugin_hub_tool_executor/   # 执行器插件（需自备）
 <AstrBot data>/mcp_server.json                       # 增加 hub-tools
 <AstrBot data>/cmd_config.json → plugin_set          # 启用插件
 ```
+
+> `astrbot_plugin_hub_tool_executor` 不在本仓库；没有该插件时 `--p4` 只复制
+> `mcp_hub_tools.py` 并跳过插件安装。不用 P4 就保持默认接入即可。
 
 ---
 

@@ -4,6 +4,7 @@ Stellaris Console - Model Service
 大模型管理、双凭证池调度、厂商智能嗅探与 Token 账本
 """
 
+import copy
 import datetime
 import json
 import os
@@ -15,31 +16,31 @@ from agent_core.storage import get_store
 
 from .common import MODELS_CONFIG_PATH, UPSTREAM_CACHE_PATH, get_db_connection
 
+# 配置/模型缓存按 mtime 失效：前端每 5 秒轮询账本，不能每次都重读 150KB+ JSON
+_JSON_CACHE: dict = {}
+# 历史流水补算：进程内 10 分钟最多跑一次（全表扫描，不能跟着轮询跑）
+_BACKFILL_INTERVAL = 600.0
+_BACKFILL_AT = [0.0]
 
-def sniff_provider_from_key(key: str) -> dict:
-    k = (key or "").strip()
-    if not k:
-        return {"provider": "Custom", "base_url": "https://api.openai.com/v1"}
-    if k.startswith("AIza") or k.startswith("AQ.") or "generativelanguage" in k:
-        return {"provider": "Google", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/"}
-    elif k.startswith("sk-ant-"):
-        return {"provider": "Anthropic", "base_url": "https://api.anthropic.com/v1"}
-    elif k.startswith("sk-or-"):
-        return {"provider": "OpenRouter", "base_url": "https://openrouter.ai/api/v1"}
-    elif k.startswith("sk-") and len(k) > 30 and any(c in k for c in "abcdef"):
-        if len(k) == 35 or "deepseek" in k.lower():
-            return {"provider": "DeepSeek", "base_url": "https://api.deepseek.com/v1"}
-        return {"provider": "OpenAI", "base_url": "https://api.openai.com/v1"}
-    elif "ollama" in k.lower() or "11434" in k:
-        return {"provider": "Ollama", "base_url": "http://127.0.0.1:11434/v1"}
-    elif "ide" in k.lower() or "session" in k.lower():
-        return {"provider": "IDE Bridge", "base_url": "http://127.0.0.1:18890/v1"}
-    else:
-        return {"provider": "Custom", "base_url": "https://api.openai.com/v1"}
 
-def handle_sniff_key(body: dict) -> dict:
-    key = body.get("key", "")
-    return sniff_provider_from_key(key)
+def _read_json_cached(path: str):
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cache_key = (str(path), float(mtime))
+    hit = _JSON_CACHE.get(str(path))
+    if hit and hit[0] == cache_key:
+        return hit[1]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    _JSON_CACHE[str(path)] = (cache_key, data)
+    return data
+
+
 
 def get_model_reasoning_options(model_id: str) -> list:
     mid = (model_id or "").lower()
@@ -51,12 +52,6 @@ def get_model_reasoning_options(model_id: str) -> list:
         return ["low", "medium", "high"]
     return ["none"]
 
-def check_model_reasoning_support(model_id: str) -> bool:
-    opts = get_model_reasoning_options(model_id)
-    return opts != ["none"]
-
-def build_upstream_network_opener():
-    return urllib.request.build_opener()
 
 def sync_models_from_upstream():
     try:
@@ -83,27 +78,18 @@ def sync_models_from_upstream():
             os.makedirs(os.path.dirname(UPSTREAM_CACHE_PATH), exist_ok=True)
             with open(UPSTREAM_CACHE_PATH, "w", encoding="utf-8") as f:
                 json.dump(models, f, ensure_ascii=False, indent=2)
+            _JSON_CACHE.pop(UPSTREAM_CACHE_PATH, None)
             return {"success": True, "count": len(models)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def get_preset_models():
-    data = []
-    if os.path.exists(UPSTREAM_CACHE_PATH):
-        try:
-            with open(UPSTREAM_CACHE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            pass
+    data = _read_json_cached(UPSTREAM_CACHE_PATH)
     if not data:
         sync_models_from_upstream()
-        if os.path.exists(UPSTREAM_CACHE_PATH):
-            try:
-                with open(UPSTREAM_CACHE_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                pass
-    return data or []
+        data = _read_json_cached(UPSTREAM_CACHE_PATH)
+    # 返回浅拷贝，调用方只能读；要加字段请构造新 dict，别原地改缓存
+    return list(data or [])
 
 def get_models_config():
     default_config = {
@@ -121,19 +107,20 @@ def get_models_config():
         "function_credentials": []
     }
     config = dict(default_config)
-    if os.path.exists(MODELS_CONFIG_PATH):
-        try:
-            with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-                config.update(saved)
-        except Exception:
-            pass
+    saved = _read_json_cached(MODELS_CONFIG_PATH)
+    if isinstance(saved, dict):
+        # 浅拷贝不够：下面会给 models 里的每一项补字段，不能污染缓存
+        config.update(copy.deepcopy(saved))
+    # 文件里不再保存 preset_templates（历史文件可能还有），一律以上游缓存为准
+    config.pop("preset_templates", None)
 
-    presets = get_preset_models()
-    for m in presets:
-        m["available_reasoning_efforts"] = get_model_reasoning_options(m.get("id", ""))
+    presets = [
+        dict(m, available_reasoning_efforts=get_model_reasoning_options(m.get("id", "")))
+        for m in get_preset_models() if isinstance(m, dict)
+    ]
     for m in config.get("models", []):
-        m["available_reasoning_efforts"] = get_model_reasoning_options(m.get("id", ""))
+        if isinstance(m, dict):
+            m["available_reasoning_efforts"] = get_model_reasoning_options(m.get("id", ""))
 
     config["preset_templates"] = presets
 
@@ -222,8 +209,12 @@ def save_models_config(new_config):
         downgraded = True
 
     os.makedirs(os.path.dirname(MODELS_CONFIG_PATH), exist_ok=True)
+    # preset_templates 是上游缓存的派生数据，不落盘（历史上这里把 192 条模型写了两份）
+    persisted = dict(new_config)
+    persisted.pop("preset_templates", None)
     with open(MODELS_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(new_config, f, ensure_ascii=False, indent=2)
+        json.dump(persisted, f, ensure_ascii=False, indent=2)
+    _JSON_CACHE.pop(MODELS_CONFIG_PATH, None)
 
     active_key = ""
     master_creds = new_config.get("master_credentials", [])
@@ -1062,8 +1053,12 @@ def _build_credits_block(cfg: dict, currency_meta, buckets: list) -> dict:
     }
 
 
-def get_token_analytics():
-    """账单页汇总：总账、今日、凭证分桶、最近流水、额度。"""
+def get_token_analytics(light: bool = False):
+    """账单页汇总：总账、今日、凭证分桶、最近流水、额度。
+
+    light=True 供仪表盘 5 秒轮询用：只回 today/overall/credits/daily_activity，
+    不查最近流水与账本页专用的成本分组。
+    """
     _ensure_usage_backfilled()
     conn = get_db_connection()
     try:
@@ -1072,15 +1067,22 @@ def get_token_analytics():
         totals = _fetch_ledger_totals(cursor)
         today = _fetch_today_totals(cursor, today_start)
         buckets = _fetch_credential_buckets(cursor, today_start)
-        recent = _fetch_recent_entries(cursor)
+        recent = [] if light else _fetch_recent_entries(cursor)
         daily_activity = _monthly_daily_activity(cursor)
     finally:
         conn.close()
-    return _assemble_analytics(totals, today, buckets, recent, daily_activity)
+    return _assemble_analytics(totals, today, buckets, recent, daily_activity, light=light)
 
 
 def _ensure_usage_backfilled() -> None:
-    """老库的历史记录缺成本/元信息，这里补一次；失败不影响读。"""
+    """老库的历史记录缺成本/元信息，这里补一次；失败不影响读。
+
+    仪表盘每 5 秒轮询一次账本，补算全表扫描不能跟着每 5 秒跑：进程内限频 10 分钟。
+    """
+    now = time.time()
+    if now - _BACKFILL_AT[0] < _BACKFILL_INTERVAL:
+        return
+    _BACKFILL_AT[0] = now
     get_store()
     try:
         from .system_service import backfill_token_costs, backfill_usage_meta
@@ -1090,7 +1092,8 @@ def _ensure_usage_backfilled() -> None:
         pass
 
 
-def _assemble_analytics(totals: dict, today: dict, buckets: list, recent: list, daily_activity) -> dict:
+def _assemble_analytics(totals: dict, today: dict, buckets: list, recent: list, daily_activity,
+                        light: bool = False) -> dict:
     """把各段结果拼成前端要的最终结构。"""
     cfg = get_models_config()
     currency_meta = _credential_currency_meta(cfg)
@@ -1110,10 +1113,11 @@ def _assemble_analytics(totals: dict, today: dict, buckets: list, recent: list, 
         "today": _build_token_summary(today),
         "overall": _build_token_summary(totals),
         "daily_activity": daily_activity,
-        "cost_breakdown": _build_cost_breakdown(buckets),
     }
     payload["combined"] = _build_combined_summary(totals, today)
-    payload["accounting_groups"] = _build_accounting_groups(buckets, currency_meta)
+    if not light:
+        payload["cost_breakdown"] = _build_cost_breakdown(buckets)
+        payload["accounting_groups"] = _build_accounting_groups(buckets, currency_meta)
     return payload
 
 

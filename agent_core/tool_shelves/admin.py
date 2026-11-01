@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import ShelfConfig
 
-# 工具来源：中枢不提供工具，这些全部来自 AstrBot（MCP / 插件 / 内置）
+# 工具来源：中枢不提供工具，这些全部来自外部宿主（AstrBot / NoneBot / 通用插件）
 _SOURCE_MAP = {
     "generate_image": "image-generator",
     "check_image_quota": "image-generator",
@@ -37,7 +37,7 @@ _SOURCE_MAP = {
 
 
 def tool_source(name: str) -> str:
-    return _SOURCE_MAP.get(str(name), "AstrBot")
+    return _SOURCE_MAP.get(str(name), "未登记插件")
 
 
 def _config_path(cfg: Optional[ShelfConfig] = None) -> Path:
@@ -130,7 +130,36 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 3) 网关见过的工具（配置没登记的）
+    # 3) AstrBot 插件内扫描到的工具：新装插件不用等一次网关流量
+    #    已知工具也用它刷新 source_group，让分组跟着插件 display_name 走
+    try:
+        from . import plugin_scan
+
+        for info in plugin_scan.tool_entries():
+            name = str(info.get("name") or "")
+            if not name:
+                continue
+            label = str(info.get("plugin") or "AstrBot 插件")
+            item = entries.get(name)
+            if item is not None:
+                if not item.get("system"):
+                    item["source_group"] = label
+                    item["framework"] = str(info.get("framework") or "")
+                continue
+            entries[name] = {
+                "name": name,
+                "mode": "unknown",
+                "category": "",
+                "approval": name in approval,
+                "source": "plugin",
+                "source_group": label,
+                "framework": str(info.get("framework") or ""),
+                "description": str(info.get("description") or ""),
+            }
+    except Exception:
+        pass
+
+    # 4) 网关见过的工具（配置没登记的）
     try:
         from . import registry
 
@@ -148,7 +177,7 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 4) 提权列表里有、但配置和 registry 都没有的
+    # 5) 提权列表里有、但配置和 registry 都没有的
     for name in approval:
         if name not in entries:
             entries[name] = {
@@ -162,6 +191,7 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
 
     for item in entries.values():
         item.setdefault("system", False)
+        item.setdefault("framework", "")
         item.setdefault("source_group", tool_source(item["name"]))
     items = sorted(entries.values(), key=lambda x: (x["mode"] != "direct", x["category"], x["name"]))
     cat_meta = [

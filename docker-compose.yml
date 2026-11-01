@@ -11,9 +11,6 @@ services:
       - "18895:18890" # 极简控制台网页端口（宿主 18895 → 容器 18890，与 README 一致）
     environment:
       - CONSOLE_PORT=18890
-      - ROBOT_BASE_DIR=/app
-      - MEMORY_DB_PATH=/app/data/memory.db
-      - PERSONA_FILE_PATH=/app/data/anan_persona.md
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
     volumes:

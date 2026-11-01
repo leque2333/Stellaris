@@ -30,14 +30,12 @@
         var currentLang = localStorage.getItem('hub_lang') || 'zh-CN';
         var globalConfig = null;
         var globalModelsConfig = null;
-        var globalModulesData = null;
                 var isInitialLoaded = false;
         var resourceMonitorTimer = null;
         var personaRules = null;
         window.currentLang = currentLang;
         window.globalConfig = globalConfig;
         window.globalModelsConfig = globalModelsConfig;
-        window.globalModulesData = globalModulesData;
                 window.resourceMonitorTimer = resourceMonitorTimer;
 
         function escapeHtml(str) {
@@ -59,15 +57,13 @@
                 nav_persona: '人格设定',
                 nav_ledger: '账单流水',
                 title_ledger: '账单流水与消费明细',
-                nav_manage: '模块和工具',
                 nav_settings: '设置',
-                nav_modules: '模块和工具',
+                nav_logout: '退出',
                 status_online: '运行中',
                 title_overview: '仪表盘',
                 title_timeline: '时间轴',
                 title_persona: '人格设定',
                 title_settings: '系统设置',
-                title_modules: '模块和工具',
                 type_core: '独立架构',
                 label_reasoning_effort: '思考强度',
                 label_reasoning_effort_short: '思考:',
@@ -92,7 +88,6 @@
                 modal_credits_input: '配额总额 ($ USD)',
                 modal_credits_btn: '保存配额',
                 btn_cancel: '取消',
-                empty_activity: '暂无调用流水记录',
                 timeline_title: '时间轴',
                 timeline_desc: '按插件记录交互；群聊标群名，私聊标对方昵称',
                 persona_title: '系统提示词在线配置',
@@ -148,15 +143,13 @@
                 nav_persona: 'Persona',
                 nav_ledger: 'Ledger',
                 title_ledger: 'Billing & Token Ledger',
-                nav_manage: 'Manage',
                 nav_settings: 'Settings',
-                nav_modules: 'Modules & Tools',
+                nav_logout: 'Sign out',
                 status_online: 'Live',
                 title_overview: 'Overview Dashboard',
                 title_timeline: 'Timeline',
                 title_persona: 'Persona Config',
                 title_settings: 'Settings',
-                title_modules: 'Modules & Tools',
                 type_core: 'Core Engine',
                 label_reasoning_effort: 'Reasoning Effort',
                 label_reasoning_effort_short: 'Thinking:',
@@ -181,7 +174,6 @@
                 modal_credits_input: 'Credit Allowance ($ USD)',
                 modal_credits_btn: 'Save Quota',
                 btn_cancel: 'Cancel',
-                empty_activity: 'No activity records found',
                 timeline_title: 'Timeline',
                 timeline_desc: 'Plugin interactions by channel; groups show group names, private chats show nicknames',
                 persona_title: 'System Prompt Editor',
@@ -288,27 +280,15 @@
 
 
         // 显式挂载到全局 window 对象，确保内联 onclick 永不丢失上下文
-        window.navigateMobileTab = navigateMobileTab;
         window.toggleSidebar = toggleSidebar;
         window.navigateTab = navigateTab;
         window.loadData = loadData;
         // window.loadDetailedLedger mounted in ledger.js
-        // window.openModManager mounted in mod_manager.js
         window.openSettingsTab = openSettingsTab;
-
-        function navigateMobileTab(tabId, el) {
-            navigateTab(tabId);
-            document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
-            if (el) el.classList.add('active');
-        }
 
         function navigateTab(tabId, el) {
             toggleSidebar(false);
             // 同步移动端底部快捷栏状态
-            document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
-            if (tabId === 'tab-overview') document.getElementById('mob-nav-overview')?.classList.add('active');
-            else if (tabId === 'tab-timeline') document.getElementById('mob-nav-timeline')?.classList.add('active');
-            else if (tabId === 'tab-ledger') document.getElementById('mob-nav-ledger')?.classList.add('active');
             document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
             const footerBtn = document.getElementById('footer-settings-btn');
             if (footerBtn) footerBtn.classList.remove('active');
@@ -355,7 +335,6 @@
                 'tab-archives': '档案',
                 'tab-identity': '身份映射',
                 'tab-tools': '工具',
-                'tab-bridges': '桥接管理',
                 'tab-settings': pack.title_settings
             };
             const titleEl = document.getElementById('view-title');
@@ -400,7 +379,6 @@
 
                 // Token 与 账本统计
                 const tkToday = (data.tokens && data.tokens.today) ? data.tokens.today : {};
-                const tkAll = (data.tokens && data.tokens.overall) ? data.tokens.overall : {};
                 const credits = (data.tokens && data.tokens.credits) ? data.tokens.credits : {
                     balance_formatted: '$0.00',
                     today_cost_formatted: '$0.0000',
@@ -410,10 +388,6 @@
 
                 // 1. 核心余额看板（余额交给 updateCurrencyAndBalances 统一做数字滚动，避免这里直接覆盖）
                 if (document.getElementById('hero-credits-balance')) {
-                    document.getElementById('hero-today-cost').innerText = credits.today_cost_formatted || '$0.0000';
-                    document.getElementById('hero-today-tokens').innerText = `${(tkToday.total_tokens || 0).toLocaleString()} Tokens`;
-                    document.getElementById('hero-total-cost').innerText = credits.overall_cost_formatted || '$0.0000';
-                    document.getElementById('hero-total-tokens').innerText = `${(tkAll.total_tokens || 0).toLocaleString()} Tokens`;
                     const quotaSymbol = credits.currency === 'CNY' ? '¥' : '$';
                     document.getElementById('hero-granted-quota').innerText = quotaSymbol + Number(credits.total_granted || 0).toFixed(2);
                 }
@@ -440,92 +414,6 @@
                 }
 
                 
-                // 2.5 渲染各工具与外接端 Token 消耗分布 (无工具载入时保持开发端纯净空载，彻底隐藏)
-                const panelModBreakdown = document.getElementById('panel-modules-breakdown');
-                const modBreakdownContainer = document.getElementById('overview-modules-breakdown');
-                const mbList = (data.tokens && data.tokens.modules_breakdown) ? data.tokens.modules_breakdown : [];
-
-                if (!mbList || mbList.length === 0) {
-                    // 开发端基础骨架状态：未载入工具或无调用时，彻底隐藏此板块，不显示任何硬编码占位
-                    if (panelModBreakdown) panelModBreakdown.style.display = 'none';
-                } else {
-                    if (panelModBreakdown) panelModBreakdown.style.display = 'block';
-                    if (modBreakdownContainer) {
-                        let totalCallsSum = 0;
-                        mbList.forEach(m => totalCallsSum += (m.calls || 0));
-                        const badgeEl = document.getElementById('modules-total-calls-badge');
-                        if (badgeEl) badgeEl.innerText = `${totalCallsSum.toLocaleString()} 次总调用`;
-                        let mbHtml = '';
-                        mbList.forEach(m => {
-                            const pct = Math.min(100, Math.max(0, m.percent || 0));
-                            mbHtml += `
-                                <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); border-radius: var(--radius-sm);">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <div style="display: flex; align-items: center; gap: 8px;">
-                                            <span style="width: 8px; height: 8px; border-radius: 50%; background: ${m.color || '#38bdf8'}; display: inline-block;"></span>
-                                            <span style="font-weight: 600; font-size: 13px; color: var(--text-primary); font-family: var(--font-mono);">${m.name || m.id}</span>
-                                        </div>
-                                        <div style="display: flex; align-items: center; gap: 16px; font-size: 12px;">
-                                            <span style="color: var(--text-muted);">${(m.calls || 0).toLocaleString()} 次调用</span>
-                                            <span style="color: var(--text-primary); font-family: var(--font-mono);">${(m.tokens || 0).toLocaleString()} Tokens</span>
-                                            <span style="color: var(--accent-green, #10b981); font-weight: 600; font-family: var(--font-mono);">${m.cost_formatted || '$0.0000'}</span>
-                                            <span style="color: var(--accent-cyan, #38bdf8); font-family: var(--font-mono); min-width: 42px; text-align: right;">${pct.toFixed(1)}%</span>
-                                        </div>
-                                    </div>
-                                    <div style="width: 100%; height: 5px; background: rgba(255,255,255,0.06); border-radius: 3px; overflow: hidden;">
-                                        <div style="width: ${pct}%; height: 100%; background: ${m.color || '#38bdf8'}; transition: width 0.3s ease;"></div>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                        modBreakdownContainer.innerHTML = mbHtml;
-                    }
-                }
-
-                // 3. 主页实时调用流水与账本表格
-                const ovTableBody = document.getElementById('overview-activity-body');
-                if (ovTableBody) {
-                    const calls = (data.tokens && data.tokens.recent_calls) ? data.tokens.recent_calls : [];
-                    if (calls.length === 0) {
-                        ovTableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 36px 16px;">${pack.empty_activity}</td></tr>`;
-                    } else {
-                        let html = '';
-                        calls.forEach(r => {
-                            const isRecharge = Boolean(r.is_recharge || (r.source && r.source.includes('充值')));
-                            if (isRecharge) {
-                                html += `
-                                    <tr style="background: rgba(34, 197, 94, 0.04);">
-                                        <td style="color: var(--text-muted);">#${r.id ? r.id.slice(-8) : ''}</td>
-                                        <td>
-                                            <span class="badge" style="background: rgba(34, 197, 94, 0.15); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); font-size: 11px; padding: 2px 7px;">
-                                                + 账户充值
-                                            </span>
-                                        </td>
-                                        <td style="color: var(--text-muted);">--</td>
-                                        <td style="color: var(--text-muted);">--</td>
-                                        <td style="color: var(--text-muted);">--</td>
-                                        <td style="color: #22c55e; font-family: var(--font-mono); font-weight: 700;">${escapeHtml(r.cost_formatted || '+$0.00')}</td>
-                                        <td style="color: var(--text-muted); font-size: 12px;">${escapeHtml(r.time || '')}</td>
-                                    </tr>
-                                `;
-                            } else {
-                                html += `
-                                    <tr>
-                                        <td style="color: var(--text-muted);">#${r.id ? (r.id.length > 10 ? escapeHtml(r.id.slice(-8)) : escapeHtml(r.id)) : ''}</td>
-                                        <td style="color: var(--primary); font-weight: 600;">${escapeHtml(r.model || '')}</td>
-                                        <td>${(r.input || 0).toLocaleString()}</td>
-                                        <td style="color: var(--accent-green);">${(r.cached || 0).toLocaleString()}</td>
-                                        <td style="color: var(--accent-amber);">${(r.output || 0).toLocaleString()}</td>
-                                        <td style="color: var(--text-primary); font-family: var(--font-mono); font-weight: 600;">${escapeHtml(r.cost_formatted || '$0.0000')}</td>
-                                        <td style="color: var(--text-muted); font-size: 12px;">${escapeHtml(r.time || '')}</td>
-                                    </tr>
-                                `;
-                            }
-                        });
-                        ovTableBody.innerHTML = html;
-                    }
-                }
-
                 // 4. 渲染时间轴
                 const timelineEvents = data.timeline || [];
                 const fullContainer = document.getElementById('timeline-full-list');
@@ -605,16 +493,16 @@
                     if (apiModelEl && data.models_config && data.models_config.active_model) {
                         apiModelEl.value = data.models_config.active_model;
                     }
-                    const portEl = document.getElementById('settings-port-input');
-                    if (portEl && window.location.port) {
-                        portEl.value = window.location.port;
+                    const portEl = document.getElementById('settings-port-value');
+                    if (portEl) {
+                        portEl.innerText = window.location.port
+                            || (window.location.protocol === 'https:' ? '443' : '80');
                     }
                 } catch (e) {}
 
-                // 渲染模型配置与算力矩阵 (确保模型和 Key 立即回填)
+                // 渲染模型配置 (确保模型和 Key 立即回填)
                 // renderModelsConfigUI is replaced by renderCredentialsPoolUI
                 renderCredentialsPoolUI();
-                loadComputeMatrix();
                 if (typeof updateCurrencyAndBalances === 'function') updateCurrencyAndBalances();
 
                 // 统计由 startHubApp 统一并发触发，避免这里二次 pollMetrics 覆盖动画

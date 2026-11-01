@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """时间轴有界化：超出保留字数的旧事件搬进缓冲区，之后可以接回。"""
 
+import shutil
 import sys
 import tempfile
 import unittest
@@ -91,6 +92,65 @@ class HandlerWiringTest(unittest.TestCase):
         handler._timeline_restore({"person_id": "master"})
         after = len(self.store.list_candidates(person_ids=["master"], limit=100))
         self.assertGreaterEqual(after, before)
+
+
+class ArchivedSearchTest(unittest.TestCase):
+    """换页搬走的旧事件：默认不参与检索，深时检索（include_archived）必须能翻到。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="arch_"))
+        self.store = SQLiteStore(self.dir / "memory.db")
+        for index in range(6):
+            self.store.append_event(TimelineEvent(
+                event_id=f"a{index}", timestamp=1793000000 + index, source_module="qq",
+                actor_id="master", actor_name="乐阙",
+                narrative=f"青柠暗号{index}" + "字" * 95,
+                person_id="master",
+            ))
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_archived_event_is_hidden_by_default(self):
+        self.store.release_tail("master", keep_chars=300)
+        rows = self.store.search_narratives(["青柠暗号0"], person_ids=["master"], limit=10)
+        self.assertEqual(rows, [])
+
+    def test_archived_event_is_recallable_when_requested(self):
+        self.store.release_tail("master", keep_chars=300)
+        rows = self.store.search_narratives(
+            ["青柠暗号0"], person_ids=["master"], limit=10, include_archived=True,
+        )
+        self.assertEqual([row.event_id for row in rows], ["a0"])
+
+    def test_archived_event_still_visible_in_console_list(self):
+        self.store.release_tail("master", keep_chars=300)
+        # 控制台时间轴走 list_events，不按 visibility 过滤：界面仍能看到全部
+        self.assertEqual(len(self.store.list_events(limit=100)), 6)
+
+
+class MemoryLookupWiringTest(unittest.TestCase):
+    """生产检索路径必须显式带 include_archived，否则 F1 会悄悄回归。"""
+
+    def test_run_memory_lookup_includes_archived(self):
+        import server
+
+        calls = {}
+
+        class FakeStore:
+            def search_narratives(self, terms, **kwargs):
+                calls.update(kwargs)
+                return []
+
+        handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
+        handler._memory_store = lambda: FakeStore()
+        handler._timeline_restore = lambda ctx: 0
+        handler._related_facts = lambda ctx, terms: []
+        handler._compress_recall_text = lambda ctx, text, terms=None: text
+
+        out = handler._run_memory_lookup({"person_id": "master"}, {"keywords": "青柠"})
+        self.assertIn("没有找到", out)
+        self.assertTrue(calls.get("include_archived"))
 
 
 if __name__ == "__main__":

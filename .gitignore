@@ -25,6 +25,7 @@ backups/
 # 私人敏感档案与日志 (Private Archives & Logs)
 # ==========================================
 *.log
+logs/
 stderr.log
 stdout.log
 

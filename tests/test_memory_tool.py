@@ -77,14 +77,17 @@ class PromptMountTest(unittest.TestCase):
         os.environ.pop("HUB_MEMORY_TOOL", None)
         self.assertIn("记忆检索", server._memory_tool_prompt())
 
-    def test_stream_never_mounted(self):
+    def test_stream_also_mounted(self):
         os.environ.pop("HUB_MEMORY_TOOL", None)
-        self.assertEqual(server._memory_tool_prompt(stream=True), "")
+        # 流式也有 _stream_recall，指令提示词必须一起给，否则模型永远不会用
+        self.assertIn("记忆检索", server._memory_tool_prompt(stream=True))
 
     def test_can_disable(self):
         os.environ["HUB_MEMORY_TOOL"] = "0"
         try:
             self.assertEqual(server._memory_tool_prompt(), "")
+            self.assertEqual(server._memory_tool_prompt(stream=True), "")
+            self.assertFalse(server._memory_tool_enabled())
         finally:
             os.environ.pop("HUB_MEMORY_TOOL", None)
 

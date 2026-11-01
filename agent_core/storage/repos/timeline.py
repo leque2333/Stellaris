@@ -280,14 +280,21 @@ class TimelineOps:
         sources: Optional[Iterable[str]] = None,
         limit: int = 200,
         match_all: bool = True,
+        include_archived: bool = False,
     ) -> List[TimelineEvent]:
-        """按关键词 + 时间范围翻时间轴；默认要求全部命中，precision 更稳。"""
+        """按关键词 + 时间范围翻时间轴；默认要求全部命中，precision 更稳。
+
+        include_archived=True 时把换页搬进缓冲区的旧事件也纳入检索：
+        这些事件已经不在常驻窗口里，但仍是这个人的真实经历，
+        深时检索（[[记忆检索]] / /hub/v1/memory/search）必须能翻到。
+        """
         terms = [str(term).strip() for term in terms or [] if str(term).strip()]
         if not terms:
             return []
         joiner = " AND " if match_all else " OR "
-        clauses = ["(" + joiner.join("narrative LIKE ?" for _ in terms) + ")",
-                   "COALESCE(visibility, 'private') != 'archived'"]
+        clauses = ["(" + joiner.join("narrative LIKE ?" for _ in terms) + ")"]
+        if not include_archived:
+            clauses.append("COALESCE(visibility, 'private') != 'archived'")
         params: List[Any] = [f"%{term}%" for term in terms]
         if start_ts is not None:
             clauses.append("timestamp >= ?")

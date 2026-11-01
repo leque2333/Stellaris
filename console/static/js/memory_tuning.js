@@ -404,19 +404,9 @@ function mtApplyPayload(data) {
     mtRenderGroups();
     mtRenderPresets();
     mtRenderStats(data.stats || {});
-    mtRenderSourceFoot(data);
+    mtLoadSnapshots();
     mtUpdateDirty();
     mtSchedulePreview(0);
-}
-
-function mtRenderSourceFoot(data) {
-    const foot = document.getElementById('mt-source-foot');
-    if (!foot) return;
-    const envCount = (data.params || []).filter((item) => item.locked).length;
-    const parts = ['配置文件：' + (data.path || 'data/memory_settings.json')];
-    parts.push(envCount ? envCount + ' 项由环境变量接管，面板不可覆盖' : '环境变量优先；当前没有被接管的参数');
-    parts.push('所有参数保存后即时生效，不需要重启');
-    foot.textContent = parts.join('　·　');
 }
 
 function mtRenderStats(stats) {
@@ -449,6 +439,130 @@ function mtSetPortabilityStatus(text, cls) {
     if (!el) return;
     el.textContent = text || '';
     el.className = 'mt-portability-status' + (cls ? ' ' + cls : '');
+}
+
+// ---------------- 快照与恢复（整库副本，不做自动清理） ----------------
+function mtSetSnapshotStatus(text, cls) {
+    const el = document.getElementById('mt-snapshot-status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'mt-portability-status' + (cls ? ' ' + cls : '');
+}
+
+function mtBindSnapshotActions() {
+    const list = document.getElementById('mt-snapshot-list');
+    if (!list || list.dataset.bound === '1') return;
+    list.dataset.bound = '1';
+    list.addEventListener('click', (event) => {
+        const button = event.target.closest ? event.target.closest('[data-snapshot-action]') : null;
+        if (!button || !list.contains(button)) return;
+        const name = button.getAttribute('data-snapshot-name') || '';
+        const action = button.getAttribute('data-snapshot-action');
+        if (action === 'restore') mtRestoreSnapshot(name);
+        if (action === 'delete') mtDeleteSnapshot(name);
+    });
+}
+
+function mtRenderSnapshots(data) {
+    const list = document.getElementById('mt-snapshot-list');
+    const usage = document.getElementById('mt-snapshot-usage');
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (usage) usage.textContent = `${data.count || 0} 份 · ${data.total_text || '0 B'}`;
+    if (!list) return;
+    if (!items.length) {
+        list.innerHTML = '<div class="mt-portability-status">还没有快照；点「立即备份」会生成第一份。</div>';
+        return;
+    }
+    list.innerHTML = items.map((item) => {
+        const schema = item.schema_version ? ` · schema ${item.schema_version}` : '';
+        return `
+            <div class="mt-snapshot-row">
+                <div class="mt-snapshot-main">
+                    <span class="mt-snapshot-name">${escapeHtml(item.name)}</span>
+                    <span class="mt-snapshot-meta">${escapeHtml(item.kind_label || '快照')} · ${escapeHtml(item.size_text || '')} · ${escapeHtml(item.created_text || '')}${schema}</span>
+                </div>
+                <div class="mt-snapshot-actions">
+                    <button class="btn btn-secondary" type="button" data-snapshot-action="restore" data-snapshot-name="${escapeHtml(item.name)}">恢复</button>
+                    <button class="btn btn-secondary" type="button" data-snapshot-action="delete" data-snapshot-name="${escapeHtml(item.name)}">删除</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+async function mtLoadSnapshots() {
+    const list = document.getElementById('mt-snapshot-list');
+    if (!list) return;
+    mtBindSnapshotActions();
+    try {
+        const res = await fetch('/api/memory/snapshots', { cache: 'no-store' });
+        if (res.status === 401) return;
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || '读取失败');
+        mtRenderSnapshots(data);
+    } catch (error) {
+        list.innerHTML = '<div class="mt-portability-status error">快照读取失败：'
+            + escapeHtml(error.message || error) + '</div>';
+    }
+}
+
+async function mtCreateSnapshot() {
+    mtSetSnapshotStatus('正在备份当前记忆库…');
+    try {
+        const res = await fetch('/api/memory/snapshots/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || '备份失败');
+        mtRenderSnapshots(data);
+        const created = data.created && data.created.name ? data.created.name : '';
+        mtSetSnapshotStatus(created ? `已备份：${created}` : '备份完成', 'ok');
+        if (typeof showToast === 'function') showToast('记忆库已备份');
+    } catch (error) {
+        mtSetSnapshotStatus('备份失败：' + (error.message || error), 'error');
+    }
+}
+
+async function mtRestoreSnapshot(name) {
+    if (!name) return;
+    if (!window.confirm(`恢复快照 ${name}？\n\n当前记忆会被覆盖；恢复前会自动再备份一份当前库。`)) return;
+    mtSetSnapshotStatus('正在恢复…');
+    try {
+        const res = await fetch('/api/memory/snapshots/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || '恢复失败');
+        mtRenderSnapshots(data);
+        const safety = data.safety && data.safety.name ? data.safety.name : '';
+        mtSetSnapshotStatus(`已恢复 ${name}${safety ? '；恢复前快照：' + safety : ''}`, 'ok');
+        if (typeof showToast === 'function') showToast('记忆库已恢复');
+        if (typeof loadMemoryTuning === 'function') loadMemoryTuning(true);
+    } catch (error) {
+        mtSetSnapshotStatus('恢复失败：' + (error.message || error), 'error');
+    }
+}
+
+async function mtDeleteSnapshot(name) {
+    if (!name) return;
+    if (!window.confirm(`删除快照 ${name}？\n\n只删这一份备份文件，不动当前记忆库。`)) return;
+    mtSetSnapshotStatus('正在删除…');
+    try {
+        const res = await fetch('/api/memory/snapshots/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || '删除失败');
+        mtRenderSnapshots(data);
+        mtSetSnapshotStatus(`已删除 ${name}`, 'ok');
+    } catch (error) {
+        mtSetSnapshotStatus('删除失败：' + (error.message || error), 'error');
+    }
 }
 
 async function mtExportMemory() {

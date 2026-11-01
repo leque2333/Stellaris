@@ -5,6 +5,7 @@ const identityMapState = {
     groups: [],
     archives: [],
     dirty: new Map(),   // key = platform|uid -> { platform, uid, archive_id, display_name }
+    unbind: new Map(),  // key = platform|uid -> { platform, uid }（原来是已配置，现在改回不配置）
     loaded: false,
     showHidden: false,
 };
@@ -146,13 +147,30 @@ function onIdentityGroupChange(select) {
     if (toggle) toggle.innerText = '▾';
 }
 
+function identityFindHit(platform, uid) {
+    for (const group of identityMapState.groups) {
+        for (const hit of group.uids || []) {
+            if (hit.uid === uid && identityPlatform(hit) === platform) return hit;
+        }
+    }
+    return null;
+}
+
 function onIdentityRowChange(select) {
     const uid = select.dataset.uid || '';
     const platform = select.dataset.platform || '';
     const key = `${platform}|${uid}`;
     if (!select.value) {
         identityMapState.dirty.delete(key);
+        // 原本已配置的 UID 改回「不配置」= 解绑，不再只是从待保存列表里删掉
+        const hit = identityFindHit(platform, uid);
+        if (hit && hit.configured) {
+            identityMapState.unbind.set(key, { platform, uid });
+        } else {
+            identityMapState.unbind.delete(key);
+        }
     } else {
+        identityMapState.unbind.delete(key);
         const archive = identityFindArchive(select.value);
         identityMapState.dirty.set(key, {
             platform,
@@ -167,7 +185,7 @@ function onIdentityRowChange(select) {
 function updateIdentityDirtyHint() {
     const el = document.getElementById('identity-scan-summary');
     if (!el) return;
-    const n = identityMapState.dirty.size;
+    const n = identityMapState.dirty.size + identityMapState.unbind.size;
     if (!n) return;
     const base = el.dataset.base || el.innerText;
     el.dataset.base = base;
@@ -253,24 +271,45 @@ function toggleIdentityShowHidden(checked) {
 
 async function saveIdentityMap() {
     const items = Array.from(identityMapState.dirty.values());
-    if (!items.length) {
+    const unbinds = Array.from(identityMapState.unbind.values());
+    if (!items.length && !unbinds.length) {
         if (typeof showToast === 'function') showToast('没有需要保存的改动');
         else alert('没有需要保存的改动');
         return;
     }
     try {
-        const res = await fetch('/api/identity/bind', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items }),
-        });
-        const data = await res.json();
-        const ok = data.ok ? data.bound : 0;
-        const failed = data.failed || 0;
-        const msg = failed ? `已保存 ${ok} 项，失败 ${failed} 项` : `已保存 ${ok} 项映射`;
+        let ok = 0;
+        let failed = 0;
+        if (items.length) {
+            const res = await fetch('/api/identity/bind', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items }),
+            });
+            const data = await res.json();
+            ok += data.bound || 0;
+            failed += data.failed || 0;
+        }
+        if (unbinds.length) {
+            const res = await fetch('/api/identity/unbind', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: unbinds }),
+            });
+            const data = await res.json();
+            ok += data.unbound || 0;
+            failed += data.failed || 0;
+        }
+        const parts = [];
+        if (items.length) parts.push(`绑定 ${items.length}`);
+        if (unbinds.length) parts.push(`解绑 ${unbinds.length}`);
+        const msg = failed
+            ? `已保存 ${ok} 项，失败 ${failed} 项`
+            : `已保存 ${ok} 项映射（${parts.join(' / ')}）`;
         if (typeof showToast === 'function') showToast(msg);
         else alert(msg);
         identityMapState.dirty.clear();
+        identityMapState.unbind.clear();
         await loadIdentityScan();
     } catch (err) {
         if (typeof showToast === 'function') showToast('保存失败：' + (err.message || err));

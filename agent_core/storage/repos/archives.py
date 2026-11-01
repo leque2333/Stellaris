@@ -85,6 +85,15 @@ class ArchiveOps:
             )
         return identity_id
 
+    def unlink_identity(self, platform: str, platform_user_id: str) -> bool:
+        """解绑一个平台身份；返回是否真的删掉了（console 的「改回不配置」）。"""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM archive_identities WHERE platform = ? AND platform_user_id = ?",
+                (str(platform), str(platform_user_id)),
+            )
+        return bool(cur.rowcount)
+
     def find_archive_by_identity(self, platform: str, platform_user_id: str) -> Optional[Dict[str, Any]]:
         with self._connect() as conn:
             row = conn.execute(

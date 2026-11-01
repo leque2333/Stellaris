@@ -1,5 +1,45 @@
 # 更新记录
 
+## 2026-11-01（第二轮：功能审计修复）
+
+> 审计报告：[docs/FUNCTION_REVIEW_20261101.md](docs/FUNCTION_REVIEW_20261101.md)。
+> 测试 645 → **679 全绿**，ruff 全绿。
+
+### 功能
+
+- **归档记忆可召回**：`search_narratives` 新增 `include_archived`，`[[记忆检索]]`、`/hub/v1/memory/search` 与预取统一带 `True`。修复「超过 4,000 字的旧事件搬进缓冲区后永远想不起来」
+- **记忆检索开关真正生效**：`memory_tool_enabled` 在执行侧校验；指令提示词改为流式/非流式都注入（流式 `_stream_recall` 本来就在）
+- **移动端导航**：恢复悬浮菜单按钮（此前被 `display:none !important` 隐藏，手机上只能停在仪表盘）
+- **退出登录**：侧栏新增「退出」按钮
+- **身份解绑**：新增 `POST /api/identity/unbind` + `store.unlink_identity`，同时清 `archive_identities` 与 `platform_bindings`；身份映射页把下拉改回「不配置」即解绑
+- **好感度当前值可编辑**：档案详情新增输入框，接回 `PATCH /api/affection/<id>`
+- **输出清洗**：口语正则规则加代码块/行内代码/Markdown 链接防护；完整结果回放的流式路径也清洗
+- **设置页端口**：按当前 `location` 显示，不再硬编码 18890
+- **工具页接回通用插件扫描**：`tool_shelves/plugin_scan.py` 不再绑定 AstrBot —— AstrBot（`@filter.llm_tool`）、NoneBot、LangBot / Dify 的 manifest、通用 Python 装饰器（`@tool` / `@function_tool` / `@register_tool` / `@mcp_tool` / `@ai_function`）都能扫；扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置（每行一个，存 `data/plugin_scan.json`，可勾选自动识别），只读、不写插件目录
+- **记忆库快照与恢复**：设置 → 记忆库 → 快照与恢复，列出整库副本（迁移前 / 导入前 / 恢复前 / 手动）、大小、时间、schema 版本与总占用；支持立即备份、恢复（先自动生成 `pre_restore_*`）、手动删除；**不做自动清理**，快照只增不减
+
+### 清理
+
+- 删除 `/api/sniff_key`（路由 + `handle_sniff_key` / `sniff_provider_from_key`）、`/api/affection` 两条 GET、`/api/tools/shelves/status` 别名
+- `module_manager.py` 510 → 26 行：连接中心下线后只剩 `get_module_permissions`；`/api/overview` 不再返回无人读的 `modules` / `modules_permissions`，也不再做 TCP 探针
+- `console/backend.py` 去掉重复 import 块与 5 个死导出
+- `models_config.json` 不再重复保存 192 条 `preset_templates`
+- 前端：删除 28 个不可达函数、旧充值弹窗、旧工具权限面板、模块分布死面板、主页流水死渲染、隐藏桩写入、移动端旧导航；`models.js` 1081 → 538 行
+
+### 性能
+
+- `get_models_config` / `get_preset_models` 按 mtime 缓存，不再每 5 秒重读 174KB + 152KB JSON
+- `/api/tokens` 走轻量投影（不查最近流水与账本页成本分组）
+- 历史流水补算进程内限频 10 分钟，不再跟着 5 秒轮询做两次全表扫描
+
+### 文档 / 部署
+
+- `agent_core/memory/README.md` 按真实调用链重写（三维召回/向量/FTS/MemoryTools 均标注未接线）
+- `MEMORY_LAYERS` 删除已下线的插件注册表 / 桥接器 / 执行 AI 章节，修正流式检索说明
+- `MEMORY_MODULE` 修正「聚合器生成 memory_digests」；`PROJECT_ARCHIVE` 修正三维召回与性能监控描述
+- `TOOL_SHELVES` / `CONNECT_ASTRBOT` 标注执行器插件为可选自备件
+- `docker-compose.yml` 删除代码不读的三个环境变量；`deploy_check` Key 提示与现行安全默认一致；`pyproject.toml` 补 `pyyaml`
+
 ## 2026-11-01
 
 > 本轮按第三方验收审计修复了 3 项 P0、11 项 P1 与关键 P2，并处理了两轮复核提出的残留。

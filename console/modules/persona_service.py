@@ -275,14 +275,42 @@ def save_persona(prompt: str):
     return save_persona_profile(split_persona_text(prompt))
 
 
+_SHIELD_CODE = re.compile(r"```[\s\S]*?```")
+_SHIELD_INLINE = re.compile(r"`[^`\r\n]+`")
+_SHIELD_LINK = re.compile(r"\[[^\]]+\]\([^\)]+\)")
+_SHIELD_MARK = "\x00SHIELD{}\x00"
+
+
+def _shield_markup(text: str):
+    """先保护代码块 / 行内代码 / Markdown 链接，避免正则规则误伤。"""
+    kept = []
+
+    def _save(match):
+        kept.append(match.group(0))
+        return _SHIELD_MARK.format(len(kept) - 1)
+
+    text = _SHIELD_CODE.sub(_save, text)
+    text = _SHIELD_INLINE.sub(_save, text)
+    text = _SHIELD_LINK.sub(_save, text)
+    return text, kept
+
+
+def _restore_markup(text: str, kept) -> str:
+    for index, original in enumerate(kept):
+        text = text.replace(_SHIELD_MARK.format(index), original)
+    return text
+
+
 def clean_persona_reply(text: str) -> str:
+    """按「口语正则」清洗输出；代码块与链接原样保留。"""
     rules = get_persona_rules()
     regex_rules = (
         rules.get("speech_regex_rules")
         or rules.get("speech_regex")
         or []
     )
-    cleaned = text or ""
+    guarded, kept = _shield_markup(text or "")
+    cleaned = guarded
     for rule in regex_rules:
         if rule.get("is_active") is False:
             continue
@@ -296,7 +324,7 @@ def clean_persona_reply(text: str) -> str:
             cleaned = re.sub(pattern, replacement, cleaned)
         except Exception:
             pass
-    return cleaned.strip()
+    return _restore_markup(cleaned, kept).strip()
 
 
 def get_preset_personas():

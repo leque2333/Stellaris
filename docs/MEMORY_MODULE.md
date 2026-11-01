@@ -29,7 +29,8 @@ L1 是原始层，L2 是主 AI 读到的“发生过什么”，L3 是原文与�
   → 写 agent_timeline（L2）
   → 需要时写 memory_details（L3）
   → 抽取 user_facts
-  → 后台聚合器生成 memory_digests
+  → 后台聚合器把 L1 压成 L2 摘要事件
+  → 闲时 ReflectionEngine 写 memory_digests（归档，不注入提示词）
 ```
 
 时间轴事件至少包含：
@@ -100,13 +101,14 @@ platform_bindings（显式绑定）
 
 ## 5. 聚合与摘要
 
-`agent_core/memory/aggregator.py` 定期扫描：
+两条后台线，职责不同：
 
-- 有要点的片段 → `memory_digests`
-- 纯模块调用记录 → 审计 / 聚合，不强行进时间轴
-- 摘要保留来源事件数量、时间范围、关键事实
+- `aggregator.py`：L1 → L2，同一通道/对象 + 静默窗口合成一条 `agent_timeline` 摘要；
+  没有「要点」的纯模块摘要会在注入时被 `_drop_empty_summaries` 过滤掉。
+- `reflection_engine.py`：闲时把旧事件压成 `memory_digests`。当前没有读取方
+  （不注入提示词，`recall_digests` 无生产调用），只作归档留存。
 
-聚合器读取 `timeline_window` 等设置；修改记忆参数下一轮扫描生效。
+聚合器读取 `aggregator_idle_seconds` 等设置；修改记忆参数下一轮扫描生效。
 
 ## 6. 记忆库维护
 
@@ -130,6 +132,26 @@ user_profiles
 ```
 
 不导出 embedding、密钥、客户端配置。外部格式只做尽力转换。
+
+### 6.1 快照与恢复
+
+页面：设置 → 记忆库 → 快照与恢复。
+
+快照是**整库副本**（`memory.db`），不是单独的时间轴或 L3：
+
+```text
+backups/pre_migrate_*_memory.db              schema 迁移前（自动）
+data/backups/memory_before_import_*.db       导入前（自动）
+backups/pre_restore_*_memory.db              恢复前（恢复时自动）
+backups/manual_*_memory.db                   立即备份（手动）
+```
+
+- 页面列出名称、类型、大小、时间、schema 版本和总占用
+- 「立即备份」生成 `manual_*`
+- 「恢复」先自动生成 `pre_restore_*`，再用 SQLite 在线备份 API 覆盖当前库；
+  恢复后自动迁移 schema，并清空 `memory_graph.db`（下次从 `user_facts` 重建）
+- 「删除」只删这一份快照文件，不动当前库；**没有自动清理**，快照会一直累积
+- 恢复会覆盖当前记忆，建议低峰期操作
 
 ## 7. 设置项
 
@@ -161,6 +183,7 @@ agent_core/storage/repos/timeline.py    时间轴读写
 agent_core/memory/aggregator.py         摘要聚合
 agent_core/memory/facts.py              事实 / FTS
 agent_core/memory/portability.py        导出 / 导入
+agent_core/memory/snapshots.py          整库快照：列出 / 备份 / 恢复 / 删除
 agent_core/memory/settings.py           预算与统计
 console/modules/system_service.py       控制台时间轴 API
 console/modules/token_alerts.py         Token 预警

@@ -66,8 +66,6 @@ async function clearLedger() {
         const symbol = (window.lastDashboardData?.tokens?.credits?.balances?.[0]?.symbol) || '$';
         const quotaEl = document.getElementById('hero-granted-quota');
         if (quotaEl) quotaEl.innerText = `${symbol}0.00`;
-        const modalBal = document.getElementById('modal-curr-balance');
-        if (modalBal) modalBal.innerText = `${symbol}0.00`;
 
         if (typeof showToast === 'function') showToast(`已清空 ${data.cleared || 0} 条流水，金额已归零`);
         if (typeof fetchTokenStats === 'function') await fetchTokenStats(false);

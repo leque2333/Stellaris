@@ -14,9 +14,6 @@ import sqlite3
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 HUB_DB_PATH = os.path.join(DATA_DIR, "memory.db")
-MODULES_STATE_PATH = os.path.join(DATA_DIR, "modules_state.json")
-CUSTOM_TOOLS_PATH = os.path.join(DATA_DIR, "custom_tools.json")
-TOPOLOGY_CONFIG_PATH = os.path.join(DATA_DIR, "topology_config.json")
 PERSONA_PATH = os.path.join(DATA_DIR, "persona.md")
 LEGACY_PERSONA_PATH = os.path.join(DATA_DIR, "anan_persona.md")
 PERSONA_RULES_PATH = os.path.join(DATA_DIR, "persona_rules.json")
@@ -45,13 +42,6 @@ def resolve_hub_db_path():
     if env:
         return env
     return HUB_DB_PATH
-
-
-def resolve_custom_tools_path():
-    env = os.getenv("HUB_CUSTOM_TOOLS_PATH", "").strip()
-    if env:
-        return env
-    return CUSTOM_TOOLS_PATH
 
 
 def resolve_astrbot_plugins_dir():

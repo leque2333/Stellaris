@@ -167,6 +167,30 @@ AstrBot 插件 ──HTTP──► host_bridge ──► PowerShell / 截图 / �
 - 个人工具权限在「档案 → 工具权限」里
 - 页面只读 `system / transport / source_group`，不写 AstrBot 分支
 
+工具来源（`tool_shelves.admin.list_tools` 的合并顺序）：
+
+```text
+tool_shelves.json        管理员登记过 mode / approval 的工具（配置优先）
+system_tools             中枢原生系统工具
+plugin_scan              通用插件扫描（目录可配置；见下）
+registry                 网关链路里实际出现过的工具（请求 tools 数组）
+```
+
+`plugin_scan` 是**通用**扫描器，不绑定宿主：
+
+```text
+AstrBot      metadata.yaml + @filter.llm_tool
+NoneBot      pyproject.toml + @tool / @llm_tool
+LangBot      manifest.yaml / manifest.json
+Dify         manifest.yaml + provider|tools/*.yaml 的 tools / identity.name
+通用 Python  @tool / @function_tool / @register_tool / @mcp_tool / @ai_function
+```
+
+扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置（每行一个目录），
+留空且勾选「自动识别」时使用默认目录（`ASTRBOT_DATA_DIR/plugins`、项目下
+`astrbot/data/plugins`、`plugins` 等）。配置存 `data/plugin_scan.json`；
+不存在的路径会被忽略，扫描只读、不写插件目录。
+
 ## 6. 账本工具
 
 `hub_ledger_query` 是只读系统工具：

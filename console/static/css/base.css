@@ -198,6 +198,12 @@ body, input, button, select, textarea, table {
             font-family: var(--font-mono);
         }
 
+        .footer-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+        }
+
         .status-dot {
             width: 7px;
             height: 7px;

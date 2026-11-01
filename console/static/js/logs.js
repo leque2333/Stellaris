@@ -3,13 +3,6 @@
 
 const logsState = { loaded: false };
 
-function logsEsc(value) {
-    return typeof escapeHtml === 'function'
-        ? escapeHtml(value)
-        : String(value == null ? '' : value)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 async function loadLogs() {
     const view = document.getElementById('logs-view');
     const meta = document.getElementById('logs-meta');

@@ -42,7 +42,7 @@
 3. ruff 必须干净：ruff check console agent_core scripts tests
 4. robocopy 复刻到 D:\Stellaris_test（见 REFACTOR_HANDOFF 第七节）
 5. 重启测试端 18895，实测改动点（curl / 控制台）
-6. 两端测试数一致（现在 320 + 1 skip），不一致说明又分叉了
+6. 两端测试数一致（当前数字以 [README](../README.md) 为准，改测试后同步更新 README）
 ```
 
 ## 四、不要做的事

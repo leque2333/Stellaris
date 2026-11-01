@@ -149,6 +149,22 @@ hub_ledger_query                 系统工具 · 账本查询 · hub-native
 
 - 工具页只展示**全局工具**；系统工具置顶，其余按 `source_group`（插件）折叠，展开才看插件下的工具
 - 工具页列表带「系统工具」标记
+- 工具页的工具来源按优先级合并：
+
+  ```text
+  tool_shelves.json   已登记的工具（配置优先，source=config）
+  system_tools        中枢原生系统工具（source=system）
+  plugin_scan         通用插件扫描（source=plugin）
+  registry            网关链路里实际出现过的工具（source=observed）
+  ```
+
+  `plugin_scan` 不绑定宿主：AstrBot（`metadata.yaml` + `@filter.llm_tool`）、
+  NoneBot（`pyproject.toml` + `@tool`）、LangBot / Dify 的 manifest、
+  通用 Python 装饰器（`@tool` / `@function_tool` / `@register_tool` /
+  `@mcp_tool` / `@ai_function`）都会扫。
+  扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置，存
+  `data/plugin_scan.json`；留空且勾选自动识别时用默认目录。
+  扫描只读、不写配置，管理员确认后再设置 mode / approval。
 - 点开可单独启用/停用；状态写 `data/system_tools.json`
 - 停用后网关不再注入对应工具，主/备入口互不影响
 - 个人工具权限不再放工具页，统一在「档案 → 工具权限」里按档案配置
@@ -339,6 +355,11 @@ AstrBot ──stdio MCP──► hub-tools 薄服务（容器内）
 ```
 
 实现：`astrbot_plugins/astrbot_plugin_hub_tool_executor/`。
+
+> 注意：该插件目录**不在本仓库**，属于可选外设，需要自行提供/安装；
+> 仓库内只有 `console/mcp_hub_tools.py`（薄壳 MCP）与清洗接口。
+> `scripts/connect_astrbot.py --p4` / `scripts/deploy_p4.py` 在缺少该目录时会跳过复制。
+
 关键机制：`@filter.on_astrbot_loaded()` 里把白名单工具**停用**——
 停用后不在模型工具表里，但 AstrBot 的 `get_func()` 有"未激活回退"，插件仍能调用。
 
