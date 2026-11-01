@@ -118,6 +118,25 @@ class GenericFrameworkScanTest(unittest.TestCase):
         self.assertNotIn("not_a_plugin", names)
 
 
+class PluginLabelTest(unittest.TestCase):
+    """内部包名 / 目录名 / 去前缀别名 → display_name。"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="plugin_label_"))
+        _mk_plugin(
+            self.dir, "astrbot_plugin_bloub_voice",
+            "name: astrbot_plugin_bloub_voice\ndisplay_name: Bloub 桌宠\n",
+            '@filter.llm_tool(name="set_emotion")\ndef set_emotion():\n    pass\n',
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_labels_map_internal_names(self):
+        labels = plugin_scan.plugin_labels([self.dir])
+        self.assertEqual(labels["astrbot_plugin_bloub_voice"], "Bloub 桌宠")
+
+
 class NestedPluginRootTest(unittest.TestCase):
     """厂商目录（root/<vendor>/<plugin>）也要能扫到。"""
 

@@ -149,6 +149,10 @@ hub_ledger_query                 系统工具 · 账本查询 · hub-native
 
 - 工具页只展示**全局工具**；系统工具置顶，其余按 `source_group`（插件）折叠，展开才看插件下的工具
 - 工具页列表带「系统工具」标记
+- 未登记工具**不单独成组**：按请求的 `X-Caller-Plugin` → `X-Plugin-Chain` 最后一段 → `X-Host-Id` → client_id 归到对应插件；
+  组名和工具名旁显示小红点；没有插件信息的工具落到「未知插件」
+- 分组名优先用插件 `metadata.yaml` 的 `display_name`（如 `Bloub 桌宠`），内部包名（`astrbot_plugin_bloub_voice`）只用于匹配
+- 工具页「扫描新插件」会清插件扫描缓存并重载货架配置，新装插件不用重启；结果提示新增工具名
 - 工具页的工具来源按优先级合并：
 
   ```text
@@ -216,7 +220,20 @@ data/tool_shelves.json → protection：
 data/clients.json → 每个客户端：
   tool_permissions.role   admin / guest
   tool_permissions.deny   ["control_host_pc_via_antigravity", ...]
+  tool_permissions.scope  catalog / request
 ```
+
+`scope` 控制工具范围的裁剪方式：
+
+```text
+catalog（默认）  按类目裁：常驻 + 选中类别 + 未登记工具（unknown_tool_policy=always）
+request          本轮 tools 全量保留，不跑分类器、不按类目裁；
+                 仍执行 deny / approval / host 保护和 max_tools 上限
+```
+
+`request` 适合 bloub_voice 这类只带少量 UI 工具的小插件；AstrBot 这种大目录宿主继续用 `catalog`，避免每轮注入全部 schema。
+
+裁剪后 `tool_choice` 的处理：只有强制指定的工具**确实被裁掉**时才剥；引用的工具仍在 payload 里时保留，`auto` / `none` 也不会被误剥。
 
 判定顺序（任何一层命中即拒绝）：
 
@@ -443,7 +460,7 @@ AstrBot 工具表      you-search / you-contents / you-balance 已隐藏
 要点：
 
 - **分类是数据，不是代码**。新接工具只需把名字加进对应 `categories.*.tools`，代码零改动。
-- `unknown_tool_policy: "always"`：配置里没登记的工具有两种结局——默认放行；若想让它被裁，改成 `"deny"`。先放行是为了不让新接的工具悄悄失效。
+- `unknown_tool_policy: "always"`：配置里没登记的工具有两种结局——默认放行；若想让它被裁，改成 `"deny"`。先放行是为了不让新接的工具悄悄失效。判定“无需工具”、语气词、工具结果回灌这几条路径也遵循这个策略，且全是未登记工具时直接跳过分类器。
 - `always_available`：主力 AI 永远能直接调的常驻工具，目前只有 `send_message_to_user`、`future_task`。
 - 配置**按文件 mtime 热加载**，改完不用重启；也可以 `POST /api/tools/shelves/reload` 强制重读。
 - 环境变量：`TOOL_SHELVES_CONFIG_PATH` 指定配置路径，`TOOL_SHELVES_DISABLED=1` 强制关闭闸门。

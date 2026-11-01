@@ -7,7 +7,7 @@
 
 > **状态更新（2026-11-01 晚）**：审计后已获得执行权限，P1 两项（F1/F2）与
 > F3/F4/F5/F7/F8/F11、R3/R4/R16、主要前端死代码与性能问题已修复；
-> 基线 645 测试 → 修复后 **689 测试全绿、ruff 全绿**。逐项见 **§5 修复记录**。
+> 基线 645 测试 → 修复后 **705 测试全绿、ruff 全绿**。逐项见 **§5 修复记录**。
 > 本报告保留审计时的原始证据，部分行号会因修复而漂移。
 
 ---
@@ -310,7 +310,7 @@
 
 > 环境：本机 Python 3.14.5 + 依赖齐全，Docker 可用。
 > 基线：`645 tests OK (skipped=1)`、`ruff All checks passed`。
-> 修复后：`689 tests OK (skipped=1)`、`ruff All checks passed`、15 个 JS 文件 `node --check` 全过。
+> 修复后：`705 tests OK (skipped=1)`、`ruff All checks passed`、15 个 JS 文件 `node --check` 全过。
 
 ### 5.1 功能修复
 
@@ -326,6 +326,7 @@
 | **F10** | 凭证编辑弹窗补回缺失的标题 `#cred-edit-title` | `console/index.html` |
 | **F11** | 档案详情新增「当前好感度」输入框，`PATCH /api/affection/<id>` 接回前端 | `console/index.html`、`console/static/js/archives.js` |
 | **F21** | `memory_tool_enabled` 在执行侧也校验（非流式/流式都不再绕过）；指令提示词改为流式同样注入 | `console/server.py`、`tests/test_memory_tool.py` |
+| **F22** | 工具闸门不再误裁未登记工具：`need_tools=false` / 语气词 / 工具结果回灌统一走 `_tools_for()`；全是未登记工具时跳过分类器；`tool_choice` 仅在强制工具真被裁掉时剥；新增 `tool_permissions.scope=request` 按客户端保留本轮全量工具 | `agent_core/tool_shelves/gate.py`、`console/server.py`、`tests/test_tool_shelves.py` |
 | **工具页扫描** | 保留平台识别链路并做成**通用**插件扫描：AstrBot（`metadata.yaml` + `@filter.llm_tool`）、NoneBot、LangBot / Dify 的 manifest、通用 Python 装饰器（`@tool` / `@function_tool` / `@register_tool` / `@mcp_tool` / `@ai_function`）都支持；扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置（存 `data/plugin_scan.json`，可自动识别）；`list_tools` 合并顺序 配置 → 系统 → 插件扫描 → 链路观测。`connectors` / `adapters/astrbot` 保留 | `agent_core/tool_shelves/plugin_scan.py`、`admin.py`、`console/server.py`、`tests/test_plugin_tool_scan.py` |
 
 ### 5.2 冗余清理

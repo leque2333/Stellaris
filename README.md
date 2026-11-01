@@ -102,7 +102,7 @@ python -m unittest discover -s tests -t .
 python -m ruff check console agent_core scripts tests
 ```
 
-当前 **689 项**测试（1 skip）。CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍，依赖生产库的集成测试在干净环境会自动 skip。
+当前 **705 项**测试（1 skip）。CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍，依赖生产库的集成测试在干净环境会自动 skip。
 
 ## 参与
 

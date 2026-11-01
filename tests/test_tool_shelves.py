@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """工具按需加载（Tool Shelves）：快判、分类、裁剪、兜底、字段删除的回归。
 
 全部不联网：
@@ -30,6 +30,8 @@ if str(ROOT) not in sys.path:
 _TMP_ROOT = Path(tempfile.mkdtemp(prefix="anan_shelves_"))
 os.environ["TOOL_SHELVES_METRICS_DIR"] = str(_TMP_ROOT / "metrics")
 os.environ["TOOL_SHELVES_LOG_DIR"] = str(_TMP_ROOT / "logs")
+# 测试里的 gate.decide 会写注册表，别污染真实 data/tool_registry.json
+os.environ["TOOL_REGISTRY_PATH"] = str(_TMP_ROOT / "tool_registry.json")
 
 from agent_core.tool_shelves import fastpath  # noqa: E402
 from agent_core.tool_shelves.classifier import ClassifierResult, parse_output  # noqa: E402
@@ -153,19 +155,24 @@ class GateDecideTest(unittest.TestCase):
         self.assertIn("mock_tool", decision.unknown_tools)
         self.assertNotIn("server_demo", decision.tools_out)
 
-    def test_need_tools_false_strips_and_marks_drop(self):
+    def test_need_tools_false_keeps_unknown_tools(self):
         def fake_classifier(*a, **k):
             return ClassifierResult(ok=True, need_tools=False, categories=[], confidence=0.95)
 
         gate, _ = _gate(classifier=fake_classifier)
         decision = gate.decide(_msgs("今天有点累"), TOOLS, channel_id="qq", actor_id="master")
         self.assertTrue(decision.applied)
-        self.assertEqual(decision.tools_out, ["send_message_to_user", "future_task"])
+        # 未登记工具（mock_tool）按 unknown_tool_policy=always 保留
+        self.assertEqual(
+            decision.tools_out,
+            ["mock_tool", "send_message_to_user", "future_task"],
+        )
         self.assertFalse(decision.drop_tool_fields)
 
-    def test_no_always_tools_drops_fields(self):
+    def test_no_always_and_unknown_deny_drops_fields(self):
         settings = json.loads(json.dumps(BASE_SETTINGS))
         settings["always_available"] = []
+        settings["unknown_tool_policy"] = "deny"
 
         def fake_classifier(*a, **k):
             return ClassifierResult(ok=True, need_tools=False, categories=[], confidence=0.95)
@@ -210,11 +217,14 @@ class GateDecideTest(unittest.TestCase):
         self.assertEqual(decision.categories, ["server"])
         self.assertIn("server_demo", decision.tools_out)
 
-    def test_trivial_without_history_keeps_always_only(self):
+    def test_trivial_without_history_keeps_always_and_unknown(self):
         gate, _ = _gate()
         decision = gate.decide(_msgs("嗯"), TOOLS, channel_id="qq", actor_id="master")
         self.assertEqual(decision.path, fastpath.PATH_TRIVIAL)
-        self.assertEqual(decision.tools_out, ["send_message_to_user", "future_task"])
+        self.assertEqual(
+            decision.tools_out,
+            ["mock_tool", "send_message_to_user", "future_task"],
+        )
 
     def test_low_confidence_falls_back_to_previous(self):
         results = [
@@ -290,6 +300,125 @@ class GateDecideTest(unittest.TestCase):
         decision = gate.decide(_msgs("放个歌顺便看下服务器"), TOOLS, channel_id="qq", actor_id="master")
         self.assertLessEqual(len(decision.tools_out), 3)
         self.assertEqual(decision.tools_out[0], "send_message_to_user")
+
+
+class UnknownToolScopeTest(unittest.TestCase):
+    """未登记工具：不跑分类器、不被“无需工具”裁掉、client scope=request。"""
+
+    UNKNOWN = [{"type": "function", "function": {"name": "set_emotion", "description": "表情", "parameters": {}}}]
+
+    def test_unknown_only_skips_classifier(self):
+        def boom(*a, **k):
+            raise AssertionError("未登记工具不应调用分类器")
+
+        gate, _ = _gate(classifier=boom)
+        decision = gate.decide(_msgs("设置表情"), self.UNKNOWN, channel_id="qq", actor_id="master")
+        self.assertEqual(decision.path, "unknown_only")
+        self.assertFalse(decision.applied)
+        self.assertEqual(decision.tools_out, ["set_emotion"])
+        extra = gate.apply(decision, {
+            "tools": self.UNKNOWN,
+            "tool_choice": {"type": "function", "function": {"name": "set_emotion"}},
+        })
+        self.assertEqual(extra["tools"], self.UNKNOWN)
+        self.assertIn("tool_choice", extra)
+
+    def test_unknown_only_deny_drops(self):
+        settings = json.loads(json.dumps(BASE_SETTINGS))
+        settings["unknown_tool_policy"] = "deny"
+        gate, _ = _gate(settings)
+        decision = gate.decide(_msgs("设置表情"), self.UNKNOWN, channel_id="qq", actor_id="master")
+        self.assertEqual(decision.path, "unknown_only")
+        self.assertTrue(decision.applied)
+        self.assertEqual(decision.tools_out, [])
+
+    def test_unknown_only_respects_max_tools(self):
+        settings = json.loads(json.dumps(BASE_SETTINGS))
+        settings["gateway"]["max_tools"] = 2
+        many = [
+            {"type": "function", "function": {"name": f"ui_tool_{i}", "parameters": {}}}
+            for i in range(4)
+        ]
+        gate, _ = _gate(settings)
+        decision = gate.decide(_msgs("设置表情"), many, channel_id="qq", actor_id="master")
+        self.assertEqual(decision.path, "unknown_only")
+        self.assertEqual(decision.tools_out, ["ui_tool_0", "ui_tool_1"])
+        self.assertTrue(decision.applied)
+
+    def test_request_scope_keeps_all_request_tools(self):
+        gate, _ = _gate()
+        decision = gate.decide(
+            _msgs("放首歌"), TOOLS, channel_id="qq", actor_id="master",
+            client_perms={"role": "guest", "scope": "request"},
+        )
+        self.assertEqual(decision.path, "request_scope")
+        self.assertFalse(decision.applied)
+        self.assertEqual(set(decision.tools_out), {t["function"]["name"] for t in TOOLS})
+        extra = gate.apply(decision, {
+            "tools": TOOLS,
+            "tool_choice": {"type": "function", "function": {"name": "media_demo"}},
+        })
+        self.assertEqual(extra["tools"], TOOLS)
+        self.assertIn("tool_choice", extra)
+
+    def test_request_scope_still_applies_deny_and_cap(self):
+        gate, _ = _gate()
+        decision = gate.decide(
+            _msgs("放首歌"), TOOLS, channel_id="qq", actor_id="master",
+            client_perms={"role": "guest", "scope": "request", "deny": ["server_demo"]},
+        )
+        self.assertTrue(decision.applied)
+        self.assertNotIn("server_demo", decision.tools_out)
+        self.assertIn("mock_tool", decision.tools_out)
+
+        settings = json.loads(json.dumps(BASE_SETTINGS))
+        settings["gateway"]["max_tools"] = 2
+        gate2, _ = _gate(settings)
+        decision2 = gate2.decide(
+            _msgs("放首歌"), TOOLS, channel_id="qq", actor_id="master",
+            client_perms={"role": "guest", "scope": "request"},
+        )
+        self.assertEqual(len(decision2.tools_out), 2)
+        self.assertTrue(decision2.tools_out[0].startswith("mock_tool"))
+
+    def test_choice_still_valid(self):
+        gate, _ = _gate()
+        self.assertTrue(gate.choice_still_valid("auto", []))
+        self.assertTrue(gate.choice_still_valid(None, []))
+        self.assertTrue(gate.choice_still_valid(
+            {"type": "function", "function": {"name": "mock_tool"}}, [TOOLS[0]]
+        ))
+        self.assertFalse(gate.choice_still_valid(
+            {"type": "function", "function": {"name": "set_emotion"}}, [TOOLS[0]]
+        ))
+
+    def test_server_keeps_choice_only_for_surviving_tool(self):
+        console_dir = str(ROOT / "console")
+        if console_dir not in sys.path:
+            sys.path.insert(0, console_dir)
+        import server
+
+        def fake_classifier(*a, **k):
+            return ClassifierResult(ok=True, need_tools=True, categories=["media"], confidence=0.9)
+
+        gate, _ = _gate(classifier=fake_classifier)
+        decision = gate.decide(_msgs("放首歌"), TOOLS, channel_id="qq", actor_id="master")
+        self.assertIn("media_demo", decision.tools_out)
+        self.assertNotIn("server_demo", decision.tools_out)
+        handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
+        with mock.patch.object(server, "tool_gate", gate):
+            kept = handler._gateway_tool_apply(
+                decision,
+                {"tools": TOOLS, "tool_choice": {"type": "function", "function": {"name": "media_demo"}}},
+                set(), _msgs("放首歌"),
+            )
+            dropped = handler._gateway_tool_apply(
+                decision,
+                {"tools": TOOLS, "tool_choice": {"type": "function", "function": {"name": "server_demo"}}},
+                set(), _msgs("放首歌"),
+            )
+        self.assertIn("tool_choice", kept)
+        self.assertNotIn("tool_choice", dropped)
 
 
 class ArchivePolicyGateTest(unittest.TestCase):

@@ -3,7 +3,7 @@
 ## 2026-11-01（第二轮：功能审计修复）
 
 > 审计报告：[docs/FUNCTION_REVIEW_20261101.md](docs/FUNCTION_REVIEW_20261101.md)。
-> 测试 645 → **689 全绿**，ruff 全绿。
+> 测试 645 → **705 全绿**，ruff 全绿。
 
 ### 功能
 
@@ -18,6 +18,10 @@
 - **工具页接回通用插件扫描**：`tool_shelves/plugin_scan.py` 不再绑定 AstrBot —— AstrBot（`@filter.llm_tool`）、NoneBot、LangBot / Dify 的 manifest、通用 Python 装饰器（`@tool` / `@function_tool` / `@register_tool` / `@mcp_tool` / `@ai_function`）都能扫；扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置（每行一个，存 `data/plugin_scan.json`，可勾选自动识别），只读、不写插件目录
 - **记忆库快照与恢复**：设置 → 记忆库 → 快照与恢复，列出整库副本（迁移前 / 导入前 / 恢复前 / 手动）、大小、时间、schema 版本与总占用；支持立即备份、恢复（先自动生成 `pre_restore_*`）、手动删除；**不做自动清理**，快照只增不减
 - **自动备份与巡检**：设置 → 记忆库 → 自动备份与巡检，可配置定时快照（1–720 小时）、备份目录（可异机 / NAS）、每日 `PRAGMA quick_check`；后台线程每 60 秒检查，失败 30 分钟重试；仍**不做自动清理**
+- **工具闸门修正**：未登记工具不再被「无需工具 / 语气词 / 工具结果回灌」分支误裁；全是未登记工具时直接旁路，不跑分类器；`tool_choice` 只在强制指定的工具被裁掉时才剥；`tool_permissions.scope=request` 可按客户端保留本轮全量工具，AstrBot 等大目录客户端继续默认 `catalog`
+- **工具页扫描按钮**：新增「扫描新插件」，清插件扫描缓存 + 重载货架配置，返回最新工具列表并提示新增工具名
+- **工具页分组**：未登记工具不再单独成组，按 `X-Caller-Plugin` / `X-Plugin-Chain` / `X-Host-Id` 归到对应插件；组名与工具名旁显示小红点，完全拿不到插件信息的才落到「未知插件」
+- **插件显示名**：时间轴工具事件不再把工具名当插件；插件内部包名按 `metadata.yaml` 的 `display_name` 映射（如 `astrbot_plugin_bloub_voice` → `Bloub 桌宠`），工具名单独放 `tool_name`
 
 ### 清理
 

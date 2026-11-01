@@ -746,6 +746,7 @@ _CONSOLE_GET_ROUTES = {
 # 控制台 POST 路由表：路径 → (方法名, 是否需要登录)
 _POST_ROUTES = {
     '/api/tools/shelves/reload': ('_post_shelves_reload', True),
+    '/api/tools/rescan': ('_post_tools_rescan', True),
     '/api/tools/shelves/metrics/reset': ('_post_shelves_metrics_reset', True),
     '/api/tools/plugin_scan': ('_post_plugin_scan', True),
     '/api/tools/clean': ('_post_tool_clean', False),
@@ -2179,6 +2180,29 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             'enabled': tool_gate.cfg.enabled(),
             'config_error': tool_gate.cfg.load_error(),
         })
+
+    def _post_tools_rescan(self, body):
+        """工具页「扫描新插件」：清插件扫描缓存 + 重载货架配置，再返回最新工具列表。"""
+        from agent_core.tool_shelves import plugin_scan
+
+        try:
+            plugin_scan.clear_cache()
+        except Exception:
+            pass
+        reloaded = False
+        if tool_gate is not None:
+            try:
+                tool_gate.cfg.reload(force=True)
+                reloaded = True
+            except Exception:
+                pass
+        data = self._tools_admin_list()
+        data["rescan"] = {"cache_cleared": True, "shelf_reloaded": reloaded}
+        try:
+            audit_log.record("tools_rescan", dedupe=False, tools=int(data.get("count") or 0))
+        except Exception:
+            pass
+        return self._send_json(data)
 
     def _post_shelves_metrics_reset(self, body):
         """清空工具货架的统计（今日节省比、压缩指标）。"""
@@ -3714,7 +3738,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             channel_type=session["channel_type"],
             client_perms=getattr(session["profile"], "tool_permissions", None),
             archive_id=str(session["archive_id"] or ""),
+            plugin_id=self._gateway_tool_plugin(session),
         )
+
+    @staticmethod
+    def _gateway_tool_plugin(session):
+        """工具归属：优先单次调用方，其次调用链最后一段，再退宿主/客户端。"""
+        caller = str(session.get("caller_plugin") or "").strip()
+        chain = [
+            part.strip() for part in str(session.get("plugin_chain") or "").split(",")
+            if part.strip()
+        ]
+        host = str(session.get("host_plugin") or "").strip()
+        return caller or (chain[-1] if chain else "") or host or str(session.get("client_id") or "")
 
     def _gateway_tool_apply(self, decision, extra, denied, messages):
         """把决策落到 extra 上；裁剪过就顺手剥掉 tool_choice 类字段。"""
@@ -3725,8 +3761,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             decision.drop_tool_fields = decision.tools_after == 0
         out = tool_gate.apply(decision, extra)
         if decision.applied and decision.tools_after < decision.tools_before:
-            # 裁剪后某些客户端仍带 tool_choice:"auto"，上游可能 400，统一剥掉
-            out = tool_gate.strip_choice_fields(out)
+            # 只有强制指定的工具确实被裁掉时才剥 choice；
+            # auto/none 或引用的工具仍在 payload 里时保留，避免误伤客户端工具。
+            if not tool_gate.choice_still_valid(out.get("tool_choice"), out.get("tools")):
+                out = tool_gate.strip_choice_fields(out)
         tool_gate.remember(decision.session_key, messages)
         return out
 
@@ -4059,8 +4097,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 parts = [caller, host]
         return " → ".join(parts)
 
-    def _timeline_plugin_name(self, ctx):
-        """插件名优先取调用链；否则取宿主上下文 host_id（napcat / astrbot / ...）。"""
+    def _timeline_plugin_raw(self, ctx):
+        """插件原始标识：优先调用链，其次 host，再按平台上下文兜底。"""
         chain = self._plugin_chain(ctx)
         if chain:
             return chain
@@ -4090,6 +4128,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if platform in ("web", "universal_proxy"):
             return platform
         return str(ctx.get("client_id") or ctx.get("channel_id") or platform or "unknown")
+
+    def _timeline_plugin_name(self, ctx):
+        """展示用插件名：内部包名 → metadata display_name（插件扫描映射）。"""
+        raw = self._timeline_plugin_raw(ctx)
+        try:
+            from agent_core.tool_shelves import plugin_scan
+
+            return plugin_scan.label_for(raw)
+        except Exception:
+            return raw
 
     def _timeline_person_uid(self, ctx):
         """标签用的人 UID：优先请求 UID；没有就按档案身份回查。"""
@@ -4176,6 +4224,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _timeline_payload(self, ctx, detail_id):
         """时间轴附加字段：档案归属、重要度、来源明细。"""
+        raw_plugin = self._timeline_plugin_raw(ctx)
         plugin_name = self._timeline_plugin_name(ctx)
         return {
             "actor_id": ctx["actor_id"],
@@ -4191,7 +4240,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "external_id": ctx.get("external_id", ""),
             "plugin_name": plugin_name,
             "plugin_chain": self._plugin_chain(ctx),
-            "plugin_id": plugin_name,
+            "plugin_id": raw_plugin,
             "platform": ctx.get("platform", ""),
             "sender_uid": ctx.get("raw_user_id", ""),
             "tag_primary": plugin_name,
@@ -5003,7 +5052,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return name or "unknown"
 
     def _ingest_tool_event(self, ctx, fn_name, tool_call=None):
-        """人对工具插件的请求单独成事件：工具插件名 + 发起人档案 + 权限。"""
+        """人对工具插件的请求单独成事件：插件名 + 工具名 + 发起人档案 + 权限。"""
         # 访客/关掉时间轴的通道不写工具事件，和主记忆开关保持一致（审计 B20）
         if ctx.get("is_guest") or not (ctx.get("perms") or {}).get("allow_ingest_timeline", True):
             return
@@ -5011,8 +5060,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         payload = self._timeline_payload(ctx, "")
         secondary = self._timeline_initiator_tag(ctx)
         payload.update({
-            "plugin_id": tool_plugin,
-            "tag_primary": tool_plugin,
             "tag_secondary": secondary,
             "tag_permission": self._timeline_permission(ctx),
             "tool_name": tool_plugin,
@@ -5024,7 +5071,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         narrative = f"{prefix}{actor} 请求调用工具：{tool_plugin}"
         try:
             backend.ingest_timeline_event(
-                source=tool_plugin,
+                source=str(payload.get("plugin_name") or tool_plugin),
                 actor_name=actor,
                 narrative=narrative,
                 payload=payload,

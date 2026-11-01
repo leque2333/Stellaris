@@ -37,7 +37,7 @@ _SOURCE_MAP = {
 
 
 def tool_source(name: str) -> str:
-    return _SOURCE_MAP.get(str(name), "未登记插件")
+    return _SOURCE_MAP.get(str(name), "")
 
 
 def _config_path(cfg: Optional[ShelfConfig] = None) -> Path:
@@ -145,6 +145,8 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
                 if not item.get("system"):
                     item["source_group"] = label
                     item["framework"] = str(info.get("framework") or "")
+                    if item.get("source") == "config":
+                        item["unregistered"] = False
                 continue
             entries[name] = {
                 "name": name,
@@ -155,6 +157,7 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
                 "source_group": label,
                 "framework": str(info.get("framework") or ""),
                 "description": str(info.get("description") or ""),
+                "unregistered": True,
             }
     except Exception:
         pass
@@ -164,7 +167,12 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
         from . import registry
 
         for name, info in registry.all_tools().items():
+            plugin = str(info.get("plugin") or "").strip()
+            label = plugin_scan.label_for(plugin) if plugin else "未知插件"
             if name in entries:
+                item = entries[name]
+                if not item.get("system") and plugin and not item.get("source_group"):
+                    item["source_group"] = label
                 continue
             entries[name] = {
                 "name": name,
@@ -172,7 +180,9 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
                 "category": "",
                 "approval": name in approval,
                 "source": "observed",
+                "source_group": label,
                 "description": str(info.get("desc") or ""),
+                "unregistered": True,
             }
     except Exception:
         pass
@@ -192,7 +202,15 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
     for item in entries.values():
         item.setdefault("system", False)
         item.setdefault("framework", "")
-        item.setdefault("source_group", tool_source(item["name"]))
+        if not item.get("source_group"):
+            item["source_group"] = (
+                tool_source(item["name"])
+                or ("系统工具" if item.get("system") else "未知插件")
+            )
+        item.setdefault(
+            "unregistered",
+            bool(item.get("source") in ("plugin", "observed")),
+        )
     items = sorted(entries.values(), key=lambda x: (x["mode"] != "direct", x["category"], x["name"]))
     cat_meta = [
         {

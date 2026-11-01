@@ -46,7 +46,7 @@ function renderToolsList() {
 
     const groups = new Map();
     items.forEach((tool) => {
-        const key = tool.system ? '系统工具' : (tool.source_group || '未分组');
+        const key = tool.system ? '系统工具' : (tool.source_group || '未知插件');
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(tool);
     });
@@ -57,15 +57,18 @@ function renderToolsList() {
     });
 
     host.innerHTML = order.map((key) => {
-        const rows = toolsState.items.length
-            ? groups.get(key).map((tool) => renderToolRow(tool, items.indexOf(tool))).join('')
-            : '';
+        const groupItems = groups.get(key) || [];
+        const rows = groupItems.map((tool) => renderToolRow(tool, items.indexOf(tool))).join('');
         const open = key === '系统工具' ? ' open' : '';
+        const unregistered = groupItems.some((tool) => tool.unregistered);
+        const dot = unregistered
+            ? '<span class="tool-unregistered-dot" title="该插件有未登记工具"></span>'
+            : '';
         return `
             <details class="tool-group"${open}>
                 <summary class="tool-group-head">
-                    <span>${toolsEsc(key)}</span>
-                    <span class="tool-group-count">${groups.get(key).length}</span>
+                    <span>${toolsEsc(key)}${dot}</span>
+                    <span class="tool-group-count">${groupItems.length}</span>
                 </summary>
                 <div class="tool-group-body">${rows}</div>
             </details>`;
@@ -98,7 +101,7 @@ function renderToolRow(tool, index) {
     // 行内不拼任何用户可控字符串：只传下标，工具名统一走 textContent / escapeHtml
     return `
         <div class="tool-row" data-tool-index="${index}">
-            <span class="tool-name">${toolsEsc(tool.name)}</span>
+            <span class="tool-name">${toolsEsc(tool.name)}${tool.unregistered ? '<span class="tool-unregistered-dot" title="未登记工具"></span>' : ''}</span>
             <span class="tool-badges">${modeText}${systemBadge}${approvalBadge}</span>
         </div>`;
 }
@@ -122,6 +125,44 @@ async function loadToolsPage() {
         }
     } catch (e) {
         if (host) host.innerHTML = `<div class="archive-empty">加载失败：${toolsEsc(e.message || e)}</div>`;
+    }
+}
+
+async function rescanToolsPage() {
+    const button = document.getElementById('tools-rescan-btn');
+    const before = new Set(toolsState.items.map((tool) => tool.name));
+    const oldText = button ? button.textContent : '';
+    if (button) {
+        button.disabled = true;
+        button.textContent = '扫描中…';
+    }
+    try {
+        const resp = await fetch('/api/tools/rescan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) throw new Error(data.error || '扫描失败');
+        toolsState.items = Array.isArray(data.tools) ? data.tools : [];
+        toolsState.categories = Array.isArray(data.categories) ? data.categories : [];
+        toolsState.loaded = true;
+        renderToolsList();
+        const after = new Set(toolsState.items.map((tool) => tool.name));
+        const added = [...after].filter((name) => !before.has(name));
+        const suffix = added.length
+            ? `新增 ${added.length} 个：${added.slice(0, 5).join('、')}`
+            : '没有新增工具';
+        if (typeof showToast === 'function') {
+            showToast(`扫描完成 · ${toolsState.items.length} 个工具 · ${suffix}`);
+        }
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('扫描失败：' + (e.message || e));
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = oldText || '扫描新插件';
+        }
     }
 }
 
@@ -316,6 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 window.loadToolsPage = loadToolsPage;
+window.rescanToolsPage = rescanToolsPage;
 window.openToolEditor = openToolEditor;
 window.closeToolEditor = closeToolEditor;
 window.onToolModeChange = onToolModeChange;

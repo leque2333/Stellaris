@@ -7,7 +7,8 @@
     3. 快判 fast_trivial               → 沿用上轮类别，否则只留常驻
     4. 快判 tool_result                → 沿用上轮类别（粘性 N 轮），否则只留常驻
     5. 其余 → 问执行 AI 选类别          → 只留选中类别 + 常驻
-    6. 判定 need_tools=false           → 只留常驻（tools 字段由网关整段删除）
+    6. 判定 need_tools=false           → 只留常驻 + 未归类工具（按 unknown_tool_policy）
+    7. 客户端 scope=request            → 不按类目裁，只做权限过滤与 max_tools 上限
 
 失败兜底：on_failure=previous_then_all 时，分类失败先试上轮类别，再不行全量放行。
 """
@@ -118,6 +119,7 @@ class ToolGate:
         channel_type: str = "",
         client_perms: Optional[Dict[str, Any]] = None,
         archive_id: str = "",
+        plugin_id: str = "",
     ) -> Decision:
         started = time.time()
         session_key = ""
@@ -139,6 +141,7 @@ class ToolGate:
             return self._decide(
                 decision, messages, tools, channel_id, actor_id,
                 client_id, platform, channel_type, client_perms, archive_id,
+                plugin_id,
             )
         except Exception as exc:  # 绝不允许闸门把对话弄挂
             logger.warning("[ToolShelves] 闸门异常，全量放行: %s", exc)
@@ -309,8 +312,9 @@ class ToolGate:
     def _decide(
         self, decision: Decision, messages, tools, channel_id, actor_id,
         client_id, platform, channel_type, client_perms=None, archive_id="",
+        plugin_id="",
     ) -> Decision:
-        self._prepare_decision(decision, tools, channel_id, actor_id)
+        self._prepare_decision(decision, tools, channel_id, actor_id, plugin_id)
         client_perms = client_perms if isinstance(client_perms, dict) else {}
         denied = self._resolve_denied(decision, tools, client_id, client_perms, archive_id, actor_id)
         if not tools:
@@ -319,9 +323,37 @@ class ToolGate:
             return self._gate_disabled(decision, tools, denied)
         if self._is_exempt(client_id):
             return self._gate_exempt(decision, tools, denied)
+        if self._client_scope(client_perms) == "request":
+            return self._gate_request_scope(decision, tools, denied)
         return self._trim_by_category(decision, messages, tools, denied, platform, channel_type)
 
-    def _prepare_decision(self, decision, tools, channel_id, actor_id) -> None:
+    @staticmethod
+    def _client_scope(client_perms) -> str:
+        """客户端工具范围：catalog=按类目裁（默认），request=本轮工具全量保留。"""
+        perms = client_perms if isinstance(client_perms, dict) else {}
+        value = str(perms.get("scope") or perms.get("tool_scope") or "catalog").strip().lower()
+        return "request" if value == "request" else "catalog"
+
+    def _gate_request_scope(self, decision, tools, denied):
+        """scope=request：不跑分类器、不按类目裁；仍执行 deny/approval 与 max_tools。"""
+        decision.path = "request_scope"
+        decision.reason = "客户端工具范围=request，保留本轮工具，仅执行权限过滤"
+        decision.tools_out = catalog.tool_names(tools)
+        decision.tools_after = decision.tools_before
+        self._apply_deny(decision, tools, denied)
+        payload = list(decision.payload_tools if decision.applied else tools)
+        max_tools = int(self.cfg.gateway().get("max_tools") or 0)
+        if max_tools > 0 and len(payload) > max_tools:
+            payload = payload[:max_tools]
+            decision.payload_tools = payload
+            decision.tools_out = catalog.tool_names(payload)
+            decision.tools_after = len(payload)
+            decision.applied = True
+            decision.drop_tool_fields = not payload
+            decision.reason += f"；超过 max_tools={max_tools}，按原顺序截断"
+        return self._finalize(decision, None)
+
+    def _prepare_decision(self, decision, tools, channel_id, actor_id, plugin_id="") -> None:
         """记录本轮入口状态：会话键、工具名、注册表。"""
         decision.session_key = self.sessions.key(channel_id, actor_id)
         decision.tools_in = catalog.tool_names(tools)
@@ -329,7 +361,7 @@ class ToolGate:
         try:
             from . import registry as _registry
 
-            _registry.record(tools or [])
+            _registry.record(tools or [], plugin=plugin_id)
         except Exception:
             pass
 
@@ -350,6 +382,7 @@ class ToolGate:
         """不裁剪就收工：只记路径与最终条数。"""
         decision.path = path
         decision.tools_after = decision.tools_before if tools_after is None else tools_after
+        decision.tools_out = list(decision.tools_in)
         return self._finalize(decision, None)
 
     def _apply_deny(self, decision, tools, denied) -> None:
@@ -390,6 +423,19 @@ class ToolGate:
         if not cats:
             return self._skip(decision, "empty_catalog")
         always, view = self._catalog_view(decision, tools)
+        # 本次全是未登记工具：没有已知类目可裁，不白跑分类器
+        if not view.by_category:
+            decision.path = "unknown_only"
+            policy = str((self.cfg.get() or {}).get("unknown_tool_policy") or "always")
+            if policy == "always":
+                decision.reason = "全部是未登记工具，按 unknown_tool_policy=always 放行"
+                max_tools = int(self.cfg.gateway().get("max_tools") or 0)
+                if max_tools > 0 and len(tools) > max_tools:
+                    decision.reason += f"；超过 max_tools={max_tools}，按原顺序截断"
+                    return self._finish_payload(decision, list(tools[:max_tools]))
+                return self._skip(decision, "unknown_only")
+            decision.reason = "全部是未登记工具，按 unknown_tool_policy=deny 裁掉"
+            return self._finish_payload(decision, list(always))
         used = self._pick_categories(decision, messages, view, cats, always, platform, channel_type)
         return self._finish_payload(decision, self._cap_payload(tools, always, used, denied))
 
@@ -444,6 +490,22 @@ class ToolGate:
         out.pop("parallel_tool_calls", None)
         return out
 
+    @staticmethod
+    def choice_still_valid(choice: Any, tools: Any) -> bool:
+        """强制指定的工具还在 payload 里时，不要剥 tool_choice。
+
+        auto / none / required 以及缺省都视为仍有效；只有
+        {"type":"function","function":{"name":...}} 指向已被裁掉的工具时才算失效。
+        """
+        if choice is None or isinstance(choice, str):
+            return True
+        if isinstance(choice, dict):
+            name = str(((choice.get("function") or {}).get("name")) or "").strip()
+            if not name:
+                return True
+            return name in set(catalog.tool_names(tools or []))
+        return True
+
     def _previous(self, decision: Decision, settings: Dict[str, Any]) -> List[str]:
         gateway = (settings or {}).get("gateway") or {}
         sticky = max(0, int(gateway.get("sticky_tool_turns") or 0))
@@ -461,7 +523,7 @@ class ToolGate:
             decision.path = fastpath.PATH_TOOL_RESULT
             previous = self._previous(decision, settings)
             if not previous:
-                return list(always)
+                return self._tools_for([], view, always, cats, settings)
             decision.categories = previous
             decision.reason = "工具结果回灌，沿用上轮类别"
             return self._tools_for(previous, view, always, cats, settings)
@@ -470,7 +532,7 @@ class ToolGate:
             decision.path = fastpath.PATH_TRIVIAL
             previous = self._previous(decision, settings)
             if not previous:
-                return list(always)
+                return self._tools_for([], view, always, cats, settings)
             decision.categories = previous
             decision.reason = "语气词，沿用上轮类别"
             return self._tools_for(previous, view, always, cats, settings)
@@ -522,12 +584,12 @@ class ToolGate:
             self._remember_categories(decision)
             return self._tools_for(picked, view, always, cats, settings)
 
-        # 明确判定不需要工具 → 只留常驻（由网关删字段）
+        # 明确判定不需要工具 → 只留常驻 + 未归类（按 unknown_tool_policy）
         if ok and not need:
             decision.categories = []
             decision.reason = str(getattr(result, "reason", "") or "") or "判定无需工具"
             self._remember_categories(decision)
-            return list(always)
+            return self._tools_for([], view, always, cats, settings)
 
         # 其余（低置信 / 空类别 / 解析失败 / 超时 / 抛异常）→ 兜底
         decision.error = classify_error or str(getattr(result, "error", "") or "")

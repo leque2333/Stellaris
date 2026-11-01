@@ -5,7 +5,8 @@
 但配置没登记**的工具，方便在控制台里补归类。
 
 存储：data/tool_registry.json
-    {"version": 1, "tools": {"工具名": {"first_seen": ts, "last_seen": ts, "desc": ""}}}
+    {"version": 1, "tools": {"工具名": {"first_seen": ts, "last_seen": ts,
+                                        "desc": "", "plugin": "bloub_voice"}}}
 
 写入是节流的：同一个工具 10 分钟内只更新一次 last_seen，避免每轮请求都落盘。
 """
@@ -74,10 +75,11 @@ def _flush(force: bool = False) -> None:
         pass
 
 
-def record(tools: Iterable[Any]) -> None:
-    """记录一批工具（只关心名字和描述）。"""
+def record(tools: Iterable[Any], plugin: str = "") -> None:
+    """记录一批工具（名字、描述、来源插件）。"""
     from .catalog import tool_description, tool_name
 
+    plugin = str(plugin or "").strip()[:120]
     now = time.time()
     changed = False
     with _LOCK:
@@ -89,12 +91,22 @@ def record(tools: Iterable[Any]) -> None:
             desc = tool_description(tool)[:200]
             item = data.get(name)
             if item is None:
-                data[name] = {"first_seen": now, "last_seen": now, "desc": desc}
+                data[name] = {
+                    "first_seen": now, "last_seen": now, "desc": desc,
+                    "plugin": plugin,
+                }
                 changed = True
             else:
                 item["last_seen"] = now
                 if desc and not item.get("desc"):
                     item["desc"] = desc
+                old_plugin = str(item.get("plugin") or "")
+                if plugin and (
+                    not old_plugin
+                    or ("astrbot_plugin_" not in old_plugin and "astrbot_plugin_" in plugin)
+                ):
+                    item["plugin"] = plugin
+                    changed = True
     if changed:
         with _LOCK:
             _flush(force=True)

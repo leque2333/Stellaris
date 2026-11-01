@@ -808,6 +808,17 @@
     font-weight: 500;
 }
 
+.tool-unregistered-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: #ef4444;
+    vertical-align: middle;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.12);
+}
+
 .tool-group-body {
     display: flex;
     flex-direction: column;

@@ -41,6 +41,8 @@ _MAX_FILE_BYTES = 400_000
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "data": []}
 _CACHE_SECONDS = 15.0
+_LABEL_CACHE: Dict[str, Any] = {"at": 0.0, "data": {}}
+_LABEL_SECONDS = 60.0
 
 _TOOL_DECORATOR = re.compile(
     r"@\s*(?:(?:[A-Za-z_]\w*)\.)*(llm_tool|function_tool|register_tool|mcp_tool|ai_function|tool)\b"
@@ -262,11 +264,20 @@ def _manifest(plugin_dir: Path) -> Dict[str, Any]:
         description = raw.get("description") or raw.get("desc") or raw.get("short_desc") or ""
         return {
             "name": str(label).strip() or plugin_dir.name,
+            "display_name": str(label).strip() or plugin_dir.name,
+            "raw_name": str(raw.get("name") or plugin_dir.name).strip(),
             "description": str(description).strip()[:200],
             "tools": _yaml_tools(raw),
             "manifest": name,
         }
-    return {"name": plugin_dir.name, "description": "", "tools": [], "manifest": ""}
+    return {
+        "name": plugin_dir.name,
+        "display_name": plugin_dir.name,
+        "raw_name": plugin_dir.name,
+        "description": "",
+        "tools": [],
+        "manifest": "",
+    }
 
 
 def _tool_names(text: str) -> List[str]:
@@ -337,6 +348,46 @@ def _plugin_dirs(root: Path) -> List[Path]:
                 if len(nested) >= _MAX_PLUGINS:
                     return nested
     return nested
+
+
+def _scan_labels(roots: Iterable[Path]) -> Dict[str, str]:
+    """内部包名 / 目录名 → display_name。"""
+    labels: Dict[str, str] = {}
+    for root in roots:
+        for plugin_dir in _plugin_dirs(Path(root)):
+            meta = _manifest(plugin_dir)
+            display = str(meta.get("display_name") or meta.get("name") or plugin_dir.name).strip()
+            for key in (meta.get("raw_name"), plugin_dir.name):
+                text = str(key or "").strip()
+                if text:
+                    labels.setdefault(text, display)
+    return labels
+
+
+def plugin_labels(roots: Optional[Iterable[Path]] = None) -> Dict[str, str]:
+    """插件显示名映射；60 秒缓存，扫描路径变化时会被 clear_cache 清掉。"""
+    if roots is not None:
+        return _scan_labels(roots)
+    now = time.time()
+    if now - float(_LABEL_CACHE["at"]) < _LABEL_SECONDS:
+        return dict(_LABEL_CACHE["data"])
+    data = _scan_labels(resolve_roots())
+    _LABEL_CACHE["at"] = now
+    _LABEL_CACHE["data"] = data
+    return dict(data)
+
+
+def label_for(name: str) -> str:
+    """把 `astrbot_plugin_x` / `x` / `astrbot → astrbot_plugin_x` 解析成显示名。"""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    labels = plugin_labels()
+    parts = [p.strip() for p in re.split(r"\s*(?:→|->|>|,|\|)\s*", text) if p.strip()]
+    for candidate in reversed(parts + [text]):
+        if candidate in labels:
+            return labels[candidate]
+    return text
 
 
 def _framework(plugin_dir: Path, meta: Dict[str, Any], texts: List[str]) -> str:
@@ -457,6 +508,8 @@ def status() -> Dict[str, Any]:
 def clear_cache() -> None:
     _CACHE["at"] = 0.0
     _CACHE["data"] = []
+    _LABEL_CACHE["at"] = 0.0
+    _LABEL_CACHE["data"] = {}
 
 
 __all__ = [
@@ -468,4 +521,6 @@ __all__ = [
     "resolve_roots",
     "config_path",
     "clear_cache",
+    "plugin_labels",
+    "label_for",
 ]
