@@ -3,7 +3,7 @@
 ## 2026-11-01（第二轮：功能审计修复）
 
 > 审计报告：[docs/FUNCTION_REVIEW_20261101.md](docs/FUNCTION_REVIEW_20261101.md)。
-> 测试 645 → **679 全绿**，ruff 全绿。
+> 测试 645 → **689 全绿**，ruff 全绿。
 
 ### 功能
 
@@ -17,6 +17,7 @@
 - **设置页端口**：按当前 `location` 显示，不再硬编码 18890
 - **工具页接回通用插件扫描**：`tool_shelves/plugin_scan.py` 不再绑定 AstrBot —— AstrBot（`@filter.llm_tool`）、NoneBot、LangBot / Dify 的 manifest、通用 Python 装饰器（`@tool` / `@function_tool` / `@register_tool` / `@mcp_tool` / `@ai_function`）都能扫；扫描目录在「设置 → 常规与系统 → 插件工具扫描」里配置（每行一个，存 `data/plugin_scan.json`，可勾选自动识别），只读、不写插件目录
 - **记忆库快照与恢复**：设置 → 记忆库 → 快照与恢复，列出整库副本（迁移前 / 导入前 / 恢复前 / 手动）、大小、时间、schema 版本与总占用；支持立即备份、恢复（先自动生成 `pre_restore_*`）、手动删除；**不做自动清理**，快照只增不减
+- **自动备份与巡检**：设置 → 记忆库 → 自动备份与巡检，可配置定时快照（1–720 小时）、备份目录（可异机 / NAS）、每日 `PRAGMA quick_check`；后台线程每 60 秒检查，失败 30 分钟重试；仍**不做自动清理**
 
 ### 清理
 

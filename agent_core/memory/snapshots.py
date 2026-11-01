@@ -13,9 +13,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,6 +27,7 @@ KIND_LABELS = {
     "import": "导入前",
     "restore": "恢复前",
     "manual": "手动",
+    "scheduled": "定时",
 }
 
 # 只认这些前缀，避免把备份目录里别的 .db 当成快照
@@ -33,8 +36,28 @@ _KINDS = (
     ("memory_before_import_", "import"),
     ("pre_restore_", "restore"),
     ("manual_", "manual"),
+    ("scheduled_", "scheduled"),
 )
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.db$")
+
+BACKUP_CONFIG_ENV = "HUB_MEMORY_BACKUP_CONFIG"
+CHECK_INTERVAL_SECONDS = 86400.0
+RETRY_SECONDS = 1800.0
+_BACKUP_LOCK = threading.Lock()
+
+_BACKUP_DEFAULTS: Dict[str, Any] = {
+    "enabled": False,
+    "interval_hours": 24,
+    "backup_dir": "",
+    "check_enabled": True,
+    "last_backup_at": 0.0,
+    "last_backup_name": "",
+    "last_backup_error": "",
+    "last_backup_error_at": 0.0,
+    "last_check_at": 0.0,
+    "last_check_ok": None,
+    "last_check_message": "",
+}
 
 
 class SnapshotError(ValueError):
@@ -49,13 +72,219 @@ def _db_path(db_path: Optional[Path] = None) -> Path:
     return Path(get_store().path)
 
 
+# ----------------------------------------------------------------------
+# 自动备份 / 巡检配置（data/memory_backup.json）
+# ----------------------------------------------------------------------
+def backup_config_path() -> Path:
+    env = os.getenv(BACKUP_CONFIG_ENV, "").strip()
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[2] / "data" / "memory_backup.json"
+
+
+def load_backup_config() -> Dict[str, Any]:
+    try:
+        raw = json.loads(backup_config_path().read_text(encoding="utf-8-sig"))
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    config = dict(_BACKUP_DEFAULTS)
+    config.update({key: raw[key] for key in _BACKUP_DEFAULTS if key in raw})
+    config["enabled"] = bool(config.get("enabled"))
+    config["check_enabled"] = bool(config.get("check_enabled"))
+    try:
+        config["interval_hours"] = max(1, min(720, int(config.get("interval_hours") or 24)))
+    except (TypeError, ValueError):
+        config["interval_hours"] = 24
+    config["backup_dir"] = str(config.get("backup_dir") or "")
+    return config
+
+
+def _write_backup_config(config: Dict[str, Any]) -> None:
+    path = backup_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+
+
+def save_backup_config(
+    enabled: Optional[bool] = None,
+    interval_hours: Optional[int] = None,
+    backup_dir: Optional[str] = None,
+    check_enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    with _BACKUP_LOCK:
+        config = load_backup_config()
+        if enabled is not None:
+            config["enabled"] = bool(enabled)
+        if check_enabled is not None:
+            config["check_enabled"] = bool(check_enabled)
+        if interval_hours is not None:
+            try:
+                value = int(interval_hours)
+            except (TypeError, ValueError) as exc:
+                raise SnapshotError("间隔必须是 1–720 的整数小时") from exc
+            if value < 1 or value > 720:
+                raise SnapshotError("间隔必须是 1–720 的整数小时")
+            config["interval_hours"] = value
+        if backup_dir is not None:
+            text = str(backup_dir).strip()
+            if text:
+                path = Path(os.path.expandvars(os.path.expanduser(text)))
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise SnapshotError(f"备份目录不可用：{exc}") from exc
+                if not path.is_dir():
+                    raise SnapshotError("备份目录不是文件夹")
+                config["backup_dir"] = str(path.resolve())
+            else:
+                config["backup_dir"] = ""
+        _write_backup_config(config)
+    return config
+
+
+def _update_backup_state(**fields: Any) -> Dict[str, Any]:
+    with _BACKUP_LOCK:
+        config = load_backup_config()
+        config.update(fields)
+        _write_backup_config(config)
+    return config
+
+
+def _configured_backup_dir() -> Optional[Path]:
+    text = str(load_backup_config().get("backup_dir") or "").strip()
+    return Path(text) if text else None
+
+
+def backup_due(config: Optional[Dict[str, Any]] = None, now: Optional[float] = None) -> bool:
+    config = config or load_backup_config()
+    now = time.time() if now is None else now
+    if not config.get("enabled"):
+        return False
+    error_at = float(config.get("last_backup_error_at") or 0)
+    if error_at and now - error_at < RETRY_SECONDS:
+        return False
+    last = float(config.get("last_backup_at") or 0)
+    return now - last >= float(config.get("interval_hours") or 24) * 3600
+
+
+def check_due(config: Optional[Dict[str, Any]] = None, now: Optional[float] = None) -> bool:
+    config = config or load_backup_config()
+    now = time.time() if now is None else now
+    if not config.get("check_enabled"):
+        return False
+    return now - float(config.get("last_check_at") or 0) >= CHECK_INTERVAL_SECONDS
+
+
+def next_backup_at(config: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    config = config or load_backup_config()
+    if not config.get("enabled"):
+        return None
+    last = float(config.get("last_backup_at") or 0)
+    return last + float(config.get("interval_hours") or 24) * 3600
+
+
+def next_check_at(config: Optional[Dict[str, Any]] = None) -> Optional[float]:
+    config = config or load_backup_config()
+    if not config.get("check_enabled"):
+        return None
+    return float(config.get("last_check_at") or 0) + CHECK_INTERVAL_SECONDS
+
+
+def check_integrity(db_path: Optional[Path] = None) -> Dict[str, Any]:
+    """对当前库跑 PRAGMA quick_check（只读，不锁写）。"""
+    db = _db_path(db_path)
+    started = time.time()
+    try:
+        conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=10)
+        try:
+            rows = [str(row[0]) for row in conn.execute("PRAGMA quick_check").fetchall()]
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"{type(exc).__name__}: {exc}",
+            "checked_at": time.time(),
+            "elapsed_ms": int((time.time() - started) * 1000),
+        }
+    ok = not rows or rows == ["ok"]
+    return {
+        "ok": ok,
+        "message": "ok" if ok else "；".join(rows[:5]),
+        "checked_at": time.time(),
+        "elapsed_ms": int((time.time() - started) * 1000),
+    }
+
+
+def run_check(db_path: Optional[Path] = None) -> Dict[str, Any]:
+    result = check_integrity(db_path)
+    _update_backup_state(
+        last_check_at=result["checked_at"],
+        last_check_ok=bool(result["ok"]),
+        last_check_message=str(result.get("message") or ""),
+    )
+    return result
+
+
+def run_scheduled_backup(db_path: Optional[Path] = None) -> Dict[str, Any]:
+    """做一份定时快照；失败也记录，避免每分钟重试。"""
+    try:
+        info = create_snapshot("scheduled", db_path=db_path)
+    except Exception as exc:
+        _update_backup_state(last_backup_error=str(exc), last_backup_error_at=time.time())
+        raise
+    _update_backup_state(
+        last_backup_at=time.time(),
+        last_backup_name=info["name"],
+        last_backup_error="",
+        last_backup_error_at=0.0,
+    )
+    return info
+
+
+def backup_tick(db_path: Optional[Path] = None) -> Dict[str, Any]:
+    """调度器每轮调用：到点就备份 / 巡检。"""
+    config = load_backup_config()
+    result: Dict[str, Any] = {"backup": None, "check": None}
+    if backup_due(config):
+        try:
+            result["backup"] = run_scheduled_backup(db_path)
+        except Exception as exc:
+            result["backup_error"] = str(exc)
+    if check_due(config):
+        result["check"] = run_check(db_path)
+    return result
+
+
+def backup_status(db_path: Optional[Path] = None) -> Dict[str, Any]:
+    config = load_backup_config()
+    snapshots = status(db_path)
+    return {
+        "ok": True,
+        "config": config,
+        "next_backup_at": next_backup_at(config),
+        "next_check_at": next_check_at(config),
+        "snapshot_count": snapshots["count"],
+        "snapshot_total_bytes": snapshots["total_bytes"],
+        "snapshot_total_text": snapshots["total_text"],
+    }
+
+
 def snapshot_dirs(db_path: Optional[Path] = None) -> List[Path]:
-    """迁移/手动/恢复快照目录 + 导入快照目录（去重）。"""
+    """迁移/手动/定时/恢复快照目录 + 导入快照目录 + 自定义备份目录（去重）。"""
     db = _db_path(db_path)
     migration = Path(os.getenv("HUB_SNAPSHOT_DIR", "").strip() or (db.parent.parent / "backups"))
     imports = Path(os.getenv("HUB_IMPORT_BACKUP_DIR", "").strip() or (db.parent / "backups"))
+    paths = [migration, imports]
+    configured = _configured_backup_dir()
+    if configured is not None:
+        paths.append(configured)
     result: List[Path] = []
-    for path in (migration, imports):
+    for path in paths:
         resolved = path.resolve()
         if resolved not in result:
             result.append(resolved)
@@ -161,8 +390,8 @@ def _copy(src_path: Path, dst_path: Path) -> None:
         src.close()
 
 
-def _new_name(prefix: str, db: Path) -> Path:
-    folder = snapshot_dirs(db)[0]
+def _new_name(prefix: str, db: Path, folder: Optional[Path] = None) -> Path:
+    folder = Path(folder) if folder is not None else snapshot_dirs(db)[0]
     folder.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     target = folder / f"{prefix}_{stamp}_{db.stem}.db"
@@ -173,19 +402,31 @@ def _new_name(prefix: str, db: Path) -> Path:
     return target
 
 
-def create_snapshot(kind: str = "manual", db_path: Optional[Path] = None) -> Dict[str, Any]:
-    """给当前库做一份整库快照；kind 只允许 manual / restore。"""
+def create_snapshot(
+    kind: str = "manual",
+    db_path: Optional[Path] = None,
+    target_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """给当前库做一份整库快照；kind 允许 manual / scheduled / restore。"""
     db = _db_path(db_path)
     if not db.is_file():
         raise SnapshotError("当前记忆库不存在")
-    prefix = "pre_restore" if kind == "restore" else "manual"
-    target = _new_name(prefix, db)
+    prefix = {"restore": "pre_restore", "scheduled": "scheduled"}.get(kind, "manual")
+    if kind == "restore":
+        folder = Path(target_dir) if target_dir is not None else snapshot_dirs(db)[0]
+    else:
+        folder = (
+            Path(target_dir) if target_dir is not None
+            else _configured_backup_dir() or snapshot_dirs(db)[0]
+        )
+    target = _new_name(prefix, db, folder)
     try:
         _copy(db, target)
     except Exception as exc:
         target.unlink(missing_ok=True)
         raise SnapshotError(f"备份失败：{type(exc).__name__}: {exc}") from exc
-    return _info(target, "restore" if kind == "restore" else "manual")
+    final_kind = kind if kind in ("manual", "scheduled", "restore") else "manual"
+    return _info(target, final_kind)
 
 
 def _ensure_valid_snapshot(path: Path) -> None:

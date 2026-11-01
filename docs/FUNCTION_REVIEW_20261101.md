@@ -7,7 +7,7 @@
 
 > **状态更新（2026-11-01 晚）**：审计后已获得执行权限，P1 两项（F1/F2）与
 > F3/F4/F5/F7/F8/F11、R3/R4/R16、主要前端死代码与性能问题已修复；
-> 基线 645 测试 → 修复后 **679 测试全绿、ruff 全绿**。逐项见 **§5 修复记录**。
+> 基线 645 测试 → 修复后 **689 测试全绿、ruff 全绿**。逐项见 **§5 修复记录**。
 > 本报告保留审计时的原始证据，部分行号会因修复而漂移。
 
 ---
@@ -310,7 +310,7 @@
 
 > 环境：本机 Python 3.14.5 + 依赖齐全，Docker 可用。
 > 基线：`645 tests OK (skipped=1)`、`ruff All checks passed`。
-> 修复后：`679 tests OK (skipped=1)`、`ruff All checks passed`、15 个 JS 文件 `node --check` 全过。
+> 修复后：`689 tests OK (skipped=1)`、`ruff All checks passed`、15 个 JS 文件 `node --check` 全过。
 
 ### 5.1 功能修复
 

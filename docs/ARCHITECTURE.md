@@ -122,8 +122,9 @@ data/models_config.json     凭证 / 模型 / 分时价格
 data/compute_providers.json 算力路由
 data/tool_shelves.json      工具分类与权限
 data/plugin_scan.json       插件扫描目录（设置页可改）
-backups/                    迁移/手动/恢复快照（整库）
+backups/                    迁移/手动/定时/恢复快照（整库）
 data/backups/               导入前快照（整库）
+data/memory_backup.json     自动备份与巡检配置
 data/system_tools.json      系统工具开关
 data/token_alerts.json      Token 预警设置
 data/auth_config.json       控制台会话

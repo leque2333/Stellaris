@@ -737,6 +737,7 @@ _CONSOLE_GET_ROUTES = {
     '/api/memory/timeline_curve': '_get_timeline_curve',
     '/api/memory/settings': '_get_memory_settings',
     '/api/memory/snapshots': '_get_memory_snapshots',
+    '/api/memory/backup': '_get_memory_backup',
     '/api/memory/export': '_get_memory_export',
     '/api/token/alerts': '_get_token_alerts',
 }
@@ -763,6 +764,9 @@ _POST_ROUTES = {
     '/api/memory/snapshots/create': ('_post_memory_snapshot_create', True),
     '/api/memory/snapshots/restore': ('_post_memory_snapshot_restore', True),
     '/api/memory/snapshots/delete': ('_post_memory_snapshot_delete', True),
+    '/api/memory/backup/config': ('_post_memory_backup_config', True),
+    '/api/memory/backup/run': ('_post_memory_backup_run', True),
+    '/api/memory/backup/check': ('_post_memory_backup_check', True),
     '/api/memory/import': ('_post_memory_import', True),
     '/api/token/alerts/settings': ('_post_token_alert_settings', True),
     '/api/auth/login': ('_post_login', False),
@@ -1215,6 +1219,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         return self._send_json(snapshots.status(db_path=self._memory_store().path))
 
+    def _get_memory_backup(self):
+        """自动备份与巡检配置 + 上次/下次时间。"""
+        from agent_core.memory import snapshots
+
+        return self._send_json(snapshots.backup_status(db_path=self._memory_store().path))
+
     def _post_ledger_update(self, body):
         """修正单条流水的金额，用于厂商计费异常。"""
         import sqlite3
@@ -1370,6 +1380,61 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             pass
         data = snapshots.status(db_path=self._snapshot_db_path())
         data["removed"] = removed
+        return self._send_json(data)
+
+    # ---------------- POST：自动备份与巡检 ----------------
+    def _post_memory_backup_config(self, body):
+        from agent_core.memory import snapshots
+
+        try:
+            snapshots.save_backup_config(
+                enabled=body.get("enabled"),
+                interval_hours=body.get("interval_hours"),
+                backup_dir=body.get("backup_dir"),
+                check_enabled=body.get("check_enabled"),
+            )
+        except snapshots.SnapshotError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        try:
+            audit_log.record("memory_backup_config", dedupe=False,
+                             enabled=bool(body.get("enabled")),
+                             interval_hours=body.get("interval_hours"),
+                             backup_dir=str(body.get("backup_dir") or "")[:300])
+        except Exception:
+            pass
+        return self._send_json(snapshots.backup_status(db_path=self._snapshot_db_path()))
+
+    def _post_memory_backup_run(self, body):
+        from agent_core.memory import snapshots
+
+        try:
+            info = snapshots.run_scheduled_backup(self._snapshot_db_path())
+        except snapshots.SnapshotError as exc:
+            return self._send_json({'ok': False, 'error': str(exc)}, status=400)
+        except Exception as exc:
+            return self._send_json(
+                {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}, status=500
+            )
+        try:
+            audit_log.record("memory_backup_run", dedupe=False,
+                             name=info.get("name", ""), size=info.get("size", 0))
+        except Exception:
+            pass
+        data = snapshots.backup_status(db_path=self._snapshot_db_path())
+        data["created"] = info
+        return self._send_json(data)
+
+    def _post_memory_backup_check(self, body):
+        from agent_core.memory import snapshots
+
+        result = snapshots.run_check(self._snapshot_db_path())
+        try:
+            audit_log.record("memory_backup_check", dedupe=False,
+                             ok=bool(result.get("ok")), message=str(result.get("message") or "")[:300])
+        except Exception:
+            pass
+        data = snapshots.backup_status(db_path=self._snapshot_db_path())
+        data["check"] = result
         return self._send_json(data)
 
     def _get_deploy_check(self):
@@ -5437,6 +5502,27 @@ def _start_memory_maintenance():
         print(f"⚠️ 记忆维护启动失败: {e}", flush=True)
 
 
+def _start_memory_backup():
+    """定时快照 + 每日完整性巡检；配置在「设置 → 记忆库 → 自动备份与巡检」。"""
+    if os.getenv("HUB_MEMORY_BACKUP_DISABLED"):
+        return
+    try:
+        def loop():
+            time.sleep(20)
+            while True:
+                try:
+                    from agent_core.memory import snapshots
+
+                    snapshots.backup_tick()
+                except Exception:
+                    pass
+                time.sleep(60)
+
+        threading.Thread(target=loop, daemon=True, name="memory-backup").start()
+    except Exception as e:
+        print(f"⚠️ 记忆备份调度启动失败: {e}", flush=True)
+
+
 def _warm_resource_cache():
     while True:
         try:
@@ -5499,6 +5585,7 @@ def run_server():
     _warn_missing_clients_config()
     _start_aggregator()
     _start_memory_maintenance()
+    _start_memory_backup()
     _start_discovery()
     threading.Thread(target=_warm_resource_cache, daemon=True, name="resource-warmup").start()
     threading.Thread(target=_startup_deploy_check, daemon=True, name="deploy-check").start()

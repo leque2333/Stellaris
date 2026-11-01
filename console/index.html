@@ -964,6 +964,41 @@
                     </div>
                 </section>
 
+                <section class="mt-card" style="margin-bottom:18px;">
+                    <div class="mt-card-head">
+                        <div>
+                            <div class="mt-card-kicker">AUTOMATION</div>
+                            <h3>自动备份与巡检</h3>
+                        </div>
+                        <span id="mt-backup-state" class="mt-db-usage-pill">--</span>
+                    </div>
+                    <div class="mt-backup-form">
+                        <label class="mt-backup-check">
+                            <input type="checkbox" id="mt-backup-enabled" />
+                            启用定时快照
+                        </label>
+                        <label class="mt-backup-check">
+                            间隔
+                            <input type="number" id="mt-backup-interval" class="form-input" min="1" max="720" step="1" value="24" style="width: 72px;" />
+                            小时
+                        </label>
+                        <label class="mt-backup-check">
+                            <input type="checkbox" id="mt-backup-check-enabled" />
+                            每日完整性巡检（PRAGMA quick_check）
+                        </label>
+                    </div>
+                    <div class="mt-backup-form" style="margin-top: 8px;">
+                        <input id="mt-backup-dir" class="form-input" type="text"
+                               placeholder="备份目录（留空用 backups/；可填另一块盘或 NAS 路径）"
+                               style="flex: 1; min-width: 260px;" />
+                        <button class="btn btn-secondary" type="button" onclick="mtSaveBackupConfig()">保存设置</button>
+                        <button class="btn btn-secondary" type="button" onclick="mtRunCheck()">立即巡检</button>
+                    </div>
+                    <div id="mt-backup-status" class="mt-portability-status">
+                        定时快照默认关闭；启用后按间隔把整库副本写到备份目录，不做自动清理。
+                    </div>
+                </section>
+
                 <div class="mt-preset-row">
                     <div class="mt-preset-label">快速预设</div>
                     <div id="mt-presets" class="mt-presets"></div>

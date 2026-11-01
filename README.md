@@ -90,6 +90,7 @@ curl http://127.0.0.1:18895/v1/chat/completions \
 - [宿主机电脑控制](docs/HOST_CONTROL.md)
 - [档案画像](docs/ARCHIVE_PROFILE.md)
 - [AstrBot 接入](docs/ASTRBOT_SETUP.md)
+- [AstrBot 插件开发](docs/ASTRBOT_PLUGIN_DEV.md)（第三方插件接 `/v1` 的完整契约与示例）
 - [安全总览](docs/SECURITY.md)（信任边界 / 六层防护 / 已知短板）
 - [API 安全](docs/API_SECURITY.md)（本机访问限制 / 请求签名）
 - [后续开发规范](docs/DEV_RULES.md)（改代码前先看这个）
@@ -101,7 +102,7 @@ python -m unittest discover -s tests -t .
 python -m ruff check console agent_core scripts tests
 ```
 
-当前 **679 项**测试（1 skip）。CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍，依赖生产库的集成测试在干净环境会自动 skip。
+当前 **689 项**测试（1 skip）。CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍，依赖生产库的集成测试在干净环境会自动 skip。
 
 ## 参与
 

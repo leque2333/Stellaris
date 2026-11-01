@@ -153,6 +153,26 @@ backups/manual_*_memory.db                   立即备份（手动）
 - 「删除」只删这一份快照文件，不动当前库；**没有自动清理**，快照会一直累积
 - 恢复会覆盖当前记忆，建议低峰期操作
 
+### 6.2 自动备份与巡检
+
+页面：设置 → 记忆库 → 自动备份与巡检。配置存 `data/memory_backup.json`。
+
+```text
+enabled            定时快照开关（默认关闭）
+interval_hours     间隔 1–720 小时
+backup_dir         备份目录；留空用 backups/，可填另一块盘或 NAS
+check_enabled      每日 PRAGMA quick_check（默认开启）
+last_backup_at / last_backup_name / last_backup_error
+last_check_at / last_check_ok / last_check_message
+```
+
+- 启动后台线程每 60 秒检查一次，到点用 SQLite 在线备份写
+  `scheduled_*_memory.db`（写到 `backup_dir` 或 `backups/`）
+- 巡检是只读 `PRAGMA quick_check`，结果写回配置并在页面展示
+- 失败后 30 分钟重试；**不做自动清理**，快照保留由用户手动决定
+- 环境变量：`HUB_MEMORY_BACKUP_CONFIG` 改配置路径，
+  `HUB_MEMORY_BACKUP_DISABLED=1` 关闭调度线程
+
 ## 7. 设置项
 
 `data/memory_settings.json`：

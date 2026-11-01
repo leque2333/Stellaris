@@ -405,6 +405,7 @@ function mtApplyPayload(data) {
     mtRenderPresets();
     mtRenderStats(data.stats || {});
     mtLoadSnapshots();
+    mtLoadBackupConfig();
     mtUpdateDirty();
     mtSchedulePreview(0);
 }
@@ -562,6 +563,123 @@ async function mtDeleteSnapshot(name) {
         mtSetSnapshotStatus(`已删除 ${name}`, 'ok');
     } catch (error) {
         mtSetSnapshotStatus('删除失败：' + (error.message || error), 'error');
+    }
+}
+
+// ---------------- 自动备份与巡检 ----------------
+function mtFmtTime(ts) {
+    const value = Number(ts) || 0;
+    if (!value) return '—';
+    return new Date(value * 1000).toLocaleString('zh-CN', { hour12: false });
+}
+
+function mtFillBackupForm(data) {
+    const cfg = data.config || {};
+    const enabled = document.getElementById('mt-backup-enabled');
+    const interval = document.getElementById('mt-backup-interval');
+    const check = document.getElementById('mt-backup-check-enabled');
+    const dir = document.getElementById('mt-backup-dir');
+    if (enabled) enabled.checked = !!cfg.enabled;
+    if (interval) interval.value = cfg.interval_hours || 24;
+    if (check) check.checked = cfg.check_enabled !== false;
+    if (dir) dir.value = cfg.backup_dir || '';
+}
+
+function mtRenderBackupStatus(data) {
+    const cfg = data.config || {};
+    const state = document.getElementById('mt-backup-state');
+    const status = document.getElementById('mt-backup-status');
+    if (state) state.textContent = cfg.enabled ? `${cfg.interval_hours || 24} 小时/次` : '未启用';
+    if (!status) return;
+    const parts = [];
+    if (cfg.last_backup_name) {
+        parts.push(`上次备份 ${mtFmtTime(cfg.last_backup_at)}（${cfg.last_backup_name}）`);
+    } else {
+        parts.push('上次备份：还没有');
+    }
+    if (cfg.last_backup_error) parts.push(`备份失败：${cfg.last_backup_error}`);
+    if (data.next_backup_at) parts.push(`下次 ${mtFmtTime(data.next_backup_at)}`);
+    if (cfg.last_check_ok === true) {
+        parts.push(`巡检通过 ${mtFmtTime(cfg.last_check_at)}`);
+    } else if (cfg.last_check_ok === false) {
+        parts.push(`巡检失败：${cfg.last_check_message || '未知错误'}（${mtFmtTime(cfg.last_check_at)}）`);
+    } else {
+        parts.push('巡检：未运行');
+    }
+    parts.push(`快照 ${data.snapshot_count || 0} 份 / ${data.snapshot_total_text || '0 B'}`);
+    status.textContent = parts.join(' · ');
+    status.className = 'mt-portability-status' + (cfg.last_check_ok === false ? ' error' : '');
+}
+
+async function mtLoadBackupConfig() {
+    try {
+        const res = await fetch('/api/memory/backup', { cache: 'no-store' });
+        if (res.status === 401) return;
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || '读取失败');
+        mtFillBackupForm(data);
+        mtRenderBackupStatus(data);
+    } catch (error) {
+        const status = document.getElementById('mt-backup-status');
+        if (status) {
+            status.textContent = '自动备份配置读取失败：' + (error.message || error);
+            status.className = 'mt-portability-status error';
+        }
+    }
+}
+
+async function mtSaveBackupConfig() {
+    const payload = {
+        enabled: !!document.getElementById('mt-backup-enabled')?.checked,
+        interval_hours: Number(document.getElementById('mt-backup-interval')?.value || 24),
+        backup_dir: (document.getElementById('mt-backup-dir')?.value || '').trim(),
+        check_enabled: !!document.getElementById('mt-backup-check-enabled')?.checked,
+    };
+    try {
+        const res = await fetch('/api/memory/backup/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || '保存失败');
+        mtFillBackupForm(data);
+        mtRenderBackupStatus(data);
+        if (typeof showToast === 'function') showToast('自动备份设置已保存');
+    } catch (error) {
+        const status = document.getElementById('mt-backup-status');
+        if (status) {
+            status.textContent = '保存失败：' + (error.message || error);
+            status.className = 'mt-portability-status error';
+        }
+    }
+}
+
+async function mtRunCheck() {
+    const status = document.getElementById('mt-backup-status');
+    if (status) {
+        status.textContent = '正在巡检…';
+        status.className = 'mt-portability-status';
+    }
+    try {
+        const res = await fetch('/api/memory/backup/check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || '巡检失败');
+        mtFillBackupForm(data);
+        mtRenderBackupStatus(data);
+        const result = data.check || {};
+        if (typeof showToast === 'function') {
+            showToast(result.ok ? '记忆库巡检通过' : '巡检发现问题：' + (result.message || ''));
+        }
+    } catch (error) {
+        if (status) {
+            status.textContent = '巡检失败：' + (error.message || error);
+            status.className = 'mt-portability-status error';
+        }
     }
 }
 
