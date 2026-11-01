@@ -21,6 +21,7 @@ import numpy as np
 from ..identity import IdentityResolver
 from ..models import RecallResult, TimelineEvent, get_cst_now_str
 from ..storage import Store
+from . import settings as memory_settings
 
 
 @dataclass(frozen=True)
@@ -52,18 +53,10 @@ RECALL_DEFAULT_EXCLUDE = (
 
 def _recall_window():
     """候选池参数：字数预算、时间窗（可选）、条数上限、排除来源。"""
-    try:
-        chars = int(os.getenv("HUB_RECALL_CHARS", "") or RECALL_DEFAULT_CHARS)
-    except ValueError:
-        chars = RECALL_DEFAULT_CHARS
-    try:
-        days = float(os.getenv("HUB_RECALL_DAYS", "") or RECALL_DEFAULT_DAYS)
-    except ValueError:
-        days = RECALL_DEFAULT_DAYS
-    try:
-        limit = int(os.getenv("HUB_RECALL_CANDIDATES", "") or RECALL_DEFAULT_LIMIT)
-    except ValueError:
-        limit = RECALL_DEFAULT_LIMIT
+    values = memory_settings.effective()
+    chars = int(values.get("candidate_chars", RECALL_DEFAULT_CHARS))
+    days = float(values.get("lookback_days", RECALL_DEFAULT_DAYS))
+    limit = int(values.get("candidate_limit", RECALL_DEFAULT_LIMIT))
     raw = os.getenv("HUB_RECALL_EXCLUDE", "")
     excluded = tuple(item.strip() for item in raw.split(",") if item.strip()) if raw else RECALL_DEFAULT_EXCLUDE
     return chars, days, limit, excluded
@@ -102,10 +95,10 @@ RECALL_DEFAULT_HALF_LIFE = 168.0  # 7 天：旧记忆也够得着，不至于被
 
 
 def _recall_half_life() -> float:
-    """近因半衰期（小时）；HUB_RECALL_HALF_LIFE_HOURS 覆盖。"""
+    """近因半衰期（小时）；调参面板 / HUB_RECALL_HALF_LIFE_HOURS 覆盖。"""
     try:
-        value = float(os.getenv("HUB_RECALL_HALF_LIFE_HOURS", "") or RECALL_DEFAULT_HALF_LIFE)
-    except ValueError:
+        value = float(memory_settings.get("half_life_hours", RECALL_DEFAULT_HALF_LIFE))
+    except (TypeError, ValueError):
         value = RECALL_DEFAULT_HALF_LIFE
     return max(1.0, value)
 

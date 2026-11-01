@@ -27,8 +27,89 @@
 
 .timeline-header {
     display: flex !important;
-    justify-content: space-between !important;
+    justify-content: flex-start !important;
     align-items: center !important;
+    gap: 6px !important;
+    flex-wrap: wrap !important;
+}
+
+.timeline-time {
+    margin-left: auto !important;
+}
+
+.timeline-platform {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(14, 116, 144, 0.08);
+    color: #0e7490;
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+
+.timeline-actor {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.timeline-actor.is-archive.role-admin {
+    background: rgba(220, 38, 38, 0.1);
+    color: #b91c1c;
+}
+
+.timeline-actor.is-archive.role-guest {
+    background: rgba(100, 116, 139, 0.1);
+    color: #475569;
+}
+
+.timeline-actor.is-archive.role-system {
+    background: rgba(14, 116, 144, 0.1);
+    color: #0e7490;
+}
+
+.timeline-actor.is-archive.role-unknown,
+.timeline-actor.is-uid {
+    background: rgba(100, 116, 139, 0.08);
+    color: #64748b;
+    font-family: var(--font-mono);
+    font-weight: 500;
+}
+
+.timeline-permission {
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(100, 116, 139, 0.12);
+    color: #475569;
+    white-space: nowrap;
+}
+
+.timeline-permission.admin {
+    background: rgba(220, 38, 38, 0.1);
+    color: #b91c1c;
+}
+
+.timeline-permission.guest {
+    background: rgba(100, 116, 139, 0.1);
+    color: #64748b;
+}
+
+.timeline-permission.system {
+    background: rgba(14, 116, 144, 0.1);
+    color: #0e7490;
 }
 
 .timeline-tag,

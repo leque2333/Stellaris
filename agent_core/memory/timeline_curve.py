@@ -88,13 +88,13 @@ def compress_narrative(text: str, ratio: float) -> str:
 
 
 def budget_chars() -> int:
-    """时间轴注入预算（字）；HUB_TIMELINE_BUDGET 覆盖，默认 8000。"""
-    import os
+    """时间轴注入预算（字）；调参面板 / HUB_TIMELINE_BUDGET 覆盖，默认 3000。"""
+    from . import settings as memory_settings
 
     try:
-        value = int(os.getenv(ENV_BUDGET, "") or 3000)
-    except ValueError:
-        value = 8000
+        value = int(memory_settings.get("timeline_budget_chars", DEFAULT_BUDGET_CHARS))
+    except (TypeError, ValueError):
+        value = DEFAULT_BUDGET_CHARS
     return max(500, min(value, 200_000))
 
 
@@ -184,13 +184,19 @@ def _tier_for(used: int, boundaries: Sequence[float]) -> int:
 def summarize(entries: List[CurveEntry]) -> dict:
     """给接口/控制台看的汇总。"""
     tiers = [0] * (max((item.tier for item in entries), default=-1) + 1)
+    kept_chars = [0] * len(tiers)
+    original_chars = [0] * len(tiers)
     for item in entries:
         tiers[item.tier] += 1
+        kept_chars[item.tier] += item.kept_chars
+        original_chars[item.tier] += item.original_chars
     return {
         "events": len(entries),
         "original_chars": sum(item.original_chars for item in entries),
         "kept_chars": sum(item.kept_chars for item in entries),
         "per_tier": tiers,
+        "per_tier_kept_chars": kept_chars,
+        "per_tier_original_chars": original_chars,
     }
 
 

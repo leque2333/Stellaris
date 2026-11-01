@@ -468,7 +468,67 @@ window.updateTopActiveModelDisplay = updateTopActiveModelDisplay;
             }
             const res = document.getElementById('recharge-result');
             if (res) res.innerText = '';
+            loadRechargeThreshold(rechargeCurrency);
         }
+
+        async function loadRechargeThreshold(currency) {
+            const label = document.getElementById('recharge-threshold-label');
+            const input = document.getElementById('recharge-threshold-input');
+            const result = document.getElementById('recharge-threshold-result');
+            if (label) label.innerText = `余额提醒阈值（${currency || 'USD'}）`;
+            if (result) result.innerText = '';
+            let data = window.__tokenAlertData;
+            if (!data) {
+                try {
+                    const resp = await fetch('/api/token/alerts', { cache: 'no-store' });
+                    data = await resp.json();
+                    if (data && data.ok) window.__tokenAlertData = data;
+                } catch (e) {
+                    data = null;
+                }
+            }
+            if (!input) return;
+            const rows = (data && data.current && data.current.balances) || [];
+            const row = rows.find(item => String(item.currency || '').toUpperCase() === String(currency || '').toUpperCase());
+            const fallback = data && data.settings ? data.settings.balance_threshold : 5;
+            input.value = row ? row.threshold : fallback;
+        }
+
+        async function saveRechargeThreshold() {
+            const input = document.getElementById('recharge-threshold-input');
+            const result = document.getElementById('recharge-threshold-result');
+            const value = parseFloat(input?.value || '0');
+            if (!input || isNaN(value) || value < 0) {
+                if (result) result.innerText = '请输入有效的阈值';
+                return;
+            }
+            const currency = String(rechargeCurrency || 'USD').toUpperCase();
+            const data = window.__tokenAlertData || {};
+            const thresholds = Object.assign({}, (data.settings && data.settings.balance_thresholds) || {});
+            thresholds[currency] = value;
+            try {
+                const resp = await fetch('/api/token/alerts/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ balance_thresholds: thresholds }),
+                });
+                const payload = await resp.json();
+                if (!resp.ok || !payload.ok) throw new Error(payload.error || `HTTP ${resp.status}`);
+                window.__tokenAlertData = payload;
+                if (result) {
+                    result.style.color = '#059669';
+                    result.innerText = `已保存：${currency} 低于 ${value} 时提醒`;
+                }
+            } catch (e) {
+                if (result) {
+                    result.style.color = '#dc2626';
+                    result.innerText = '保存失败：' + (e.message || e);
+                }
+            }
+        }
+
+        window.loadRechargeThreshold = loadRechargeThreshold;
+        window.saveRechargeThreshold = saveRechargeThreshold;
 
         function closeRechargeModal(event) {
             // 仅点击遮罩层本身时关闭（内容区 stopPropagation 已处理）

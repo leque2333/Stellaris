@@ -51,6 +51,17 @@ async function startHubApp() {
             }, 400);
             return;
         }
+        // 旧书签兼容：记忆调参已经并入设置页
+        if (window.location.hash === '#memory-tuning') {
+            setTimeout(() => {
+                if (typeof openSettingsTab === 'function') openSettingsTab();
+                if (typeof switchSettingsSubtab === 'function') {
+                    const btn = document.querySelector("#tab-settings .subtab-btn[onclick*='subtab-memory-tuning']");
+                    switchSettingsSubtab('subtab-memory-tuning', btn);
+                }
+            }, 400);
+            return;
+        }
 
         const route = hashRoutes[window.location.hash];
         if (route && typeof navigateTab === 'function') {

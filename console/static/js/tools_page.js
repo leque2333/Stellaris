@@ -40,28 +40,54 @@ function renderToolsList() {
     const filtered = items.filter((t) => t.mode === 'filtered').length;
     const unknown = items.filter((t) => t.mode === 'unknown').length;
     const approval = items.filter((t) => t.approval).length;
+    const system = items.filter((t) => t.system).length;
     if (summary) {
         summary.textContent = `${items.length} 个工具 · 直接 ${direct} · 筛选 ${filtered}`
+            + (system ? ` · 系统 ${system}` : '')
             + (unknown ? ` · 未归类 ${unknown}` : '') + (approval ? ` · 需提权 ${approval}` : '');
     }
 
-    host.innerHTML = items.map((tool) => {
-        const modeText = tool.mode === 'direct'
-            ? '<span class="tool-badge direct">直接使用</span>'
-            : (tool.mode === 'filtered'
-                ? `<span class="tool-badge filtered">筛选 · ${toolsEsc(toolsCategoryLabel(tool.category))}</span>`
-                : '<span class="tool-badge unknown">未归类</span>');
-        const approvalBadge = tool.approval ? '<span class="tool-badge approval">需提权</span>' : '';
-        const sourceText = tool.source_group
-            ? `<span class="tool-source">${toolsEsc(tool.source_group)}</span>`
-            : '';
+    const groups = new Map();
+    items.forEach((tool) => {
+        const key = tool.system ? '系统工具' : (tool.source_group || '未分组');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(tool);
+    });
+    const order = [...groups.keys()].sort((a, b) => {
+        if (a === '系统工具') return -1;
+        if (b === '系统工具') return 1;
+        return a.localeCompare(b, 'zh-CN');
+    });
+
+    host.innerHTML = order.map((key) => {
+        const rows = groups.get(key).map(renderToolRow).join('');
+        const open = key === '系统工具' ? ' open' : '';
         return `
-            <div class="tool-row" onclick="openToolEditor('${toolsEsc(tool.name)}')">
-                <span class="tool-name">${toolsEsc(tool.name)}</span>
-                ${sourceText}
-                <span class="tool-badges">${modeText}${approvalBadge}</span>
-            </div>`;
+            <details class="tool-group"${open}>
+                <summary class="tool-group-head">
+                    <span>${toolsEsc(key)}</span>
+                    <span class="tool-group-count">${groups.get(key).length}</span>
+                </summary>
+                <div class="tool-group-body">${rows}</div>
+            </details>`;
     }).join('');
+}
+
+function renderToolRow(tool) {
+    const modeText = tool.mode === 'direct'
+        ? '<span class="tool-badge direct">直接使用</span>'
+        : (tool.mode === 'filtered'
+            ? `<span class="tool-badge filtered">筛选 · ${toolsEsc(toolsCategoryLabel(tool.category))}</span>`
+            : '<span class="tool-badge unknown">未归类</span>');
+    const approvalBadge = tool.approval ? '<span class="tool-badge approval">需提权</span>' : '';
+    const systemBadge = tool.system
+        ? `<span class="tool-badge system">系统工具${tool.enabled === false ? ' · 已停用' : ''}</span>`
+        : '';
+    return `
+        <div class="tool-row" onclick="openToolEditor('${toolsEsc(tool.name)}')">
+            <span class="tool-name">${toolsEsc(tool.name)}</span>
+            <span class="tool-badges">${modeText}${systemBadge}${approvalBadge}</span>
+        </div>`;
 }
 
 async function loadToolsPage() {
@@ -78,8 +104,6 @@ async function loadToolsPage() {
         toolsState.categories = Array.isArray(data.categories) ? data.categories : [];
         toolsState.loaded = true;
         renderToolsList();
-        await loadPolicies();
-        renderPolicyPanel();
         if (window.location.hash === '#tools-edit' && toolsState.items.length) {
             openToolEditor(toolsState.items[0].name);
         }
@@ -98,9 +122,24 @@ function openToolEditor(name) {
     const approval = document.getElementById('tool-approval');
     const categoryRow = document.getElementById('tool-category-row');
     const categorySelect = document.getElementById('tool-category');
+    const modeRow = document.getElementById('tool-mode-row');
+    const systemRow = document.getElementById('tool-system-row');
+    const permissionRow = document.getElementById('tool-permission-row');
+    const enabledBox = document.getElementById('tool-enabled');
+    const systemNote = document.getElementById('tool-system-note');
     if (!modal) return;
 
     if (title) title.textContent = tool.name;
+    const isSystem = !!tool.system;
+    if (modeRow) modeRow.style.display = isSystem ? 'none' : '';
+    if (permissionRow) permissionRow.style.display = isSystem ? 'none' : '';
+    if (systemRow) systemRow.style.display = isSystem ? '' : 'none';
+    if (enabledBox) enabledBox.checked = tool.enabled !== false;
+    if (systemNote) {
+        systemNote.textContent = isSystem
+            ? `${tool.system_label || tool.name} · ${tool.transport || 'system'}`
+            : '';
+    }
     document.querySelectorAll('input[name="tool-mode"]').forEach((input) => {
         input.checked = input.value === (tool.mode === 'direct' ? 'direct' : 'filtered');
     });
@@ -113,7 +152,7 @@ function openToolEditor(name) {
         if (tool.category) categorySelect.value = tool.category;
     }
 
-    const needsCategory = tool.mode !== 'direct';
+    const needsCategory = !isSystem && tool.mode !== 'direct';
     if (categoryRow) categoryRow.style.display = needsCategory ? 'flex' : 'none';
 
     modal.classList.add('show');
@@ -136,12 +175,16 @@ async function saveToolEditor() {
     const mode = document.querySelector('input[name="tool-mode"]:checked')?.value || 'direct';
     const approval = !!document.getElementById('tool-approval')?.checked;
     const category = document.getElementById('tool-category')?.value || '';
+    const enabled = !!document.getElementById('tool-enabled')?.checked;
 
     try {
+        const body = tool.system
+            ? { name: tool.name, enabled }
+            : { name: tool.name, mode, approval, category };
         const resp = await fetch('/api/tools', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: tool.name, mode, approval, category }),
+            body: JSON.stringify(body),
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || !data.ok) {

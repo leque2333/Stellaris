@@ -127,6 +127,37 @@ class Metrics:
             self._flush_locked()
 
     # ---------------- 读 ----------------
+    def record_dynamic(self, intent: str, requested: int, loaded: int, latency_ms: int, error: str = "") -> None:
+        """动态工具申请：单独计数，不混进工具裁剪的 in/out。"""
+        today = _today()
+        with self._lock:
+            day = self._data.setdefault("days", {}).setdefault(
+                today, {"calls": 0, "by_path": {}, "tools_in": 0, "tools_out": 0, "errors": 0}
+            )
+            dyn = day.setdefault("dynamic", {"requests": 0, "loaded": 0, "errors": 0})
+            dyn["requests"] = int(dyn.get("requests") or 0) + 1
+            dyn["loaded"] = int(dyn.get("loaded") or 0) + max(0, loaded)
+            if error:
+                dyn["errors"] = int(dyn.get("errors") or 0) + 1
+            if latency_ms > 0:
+                lat = day.setdefault("dynamic_latency_ms", [])
+                lat.append(int(latency_ms))
+                if len(lat) > 500:
+                    del lat[:-500]
+            totals = self._data.setdefault("totals", {})
+            totals["dynamic_requests"] = int(totals.get("dynamic_requests") or 0) + 1
+            totals["dynamic_loaded"] = int(totals.get("dynamic_loaded") or 0) + max(0, loaded)
+            self._recent.append({
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "path": "dynamic",
+                "intent": str(intent or "")[:80],
+                "requested": int(requested or 0),
+                "loaded": int(loaded or 0),
+                "lat": int(latency_ms or 0),
+                "err": str(error or "")[:80],
+            })
+            self._flush_locked()
+
     def record_compression(self, records) -> None:
         """P3 结果压缩：累计原始/清洗后体积与模型调用次数。"""
         if not records:
@@ -188,6 +219,8 @@ class Metrics:
             comp = dict(today.get("compression") or {})
             c_raw = int(comp.get("raw_chars") or 0)
             c_clean = int(comp.get("clean_chars") or 0)
+            dyn = dict(today.get("dynamic") or {})
+            dyn_lat = sorted(today.get("dynamic_latency_ms") or [])
             return {
                 "date": _today(),
                 "today": {
@@ -209,6 +242,12 @@ class Metrics:
                     "model_calls": int(comp.get("model_calls") or 0),
                     "truncated": int(comp.get("truncated") or 0),
                     "errors": int(comp.get("errors") or 0),
+                },
+                "dynamic": {
+                    "requests": int(dyn.get("requests") or 0),
+                    "loaded": int(dyn.get("loaded") or 0),
+                    "errors": int(dyn.get("errors") or 0),
+                    "latency_p95_ms": dyn_lat[int(len(dyn_lat) * 0.95) - 1] if dyn_lat else 0,
                 },
                 "totals": totals,
                 "recent": list(self._recent),

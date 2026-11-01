@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -7,27 +7,29 @@
 
     <!-- 模块化样式体系 (按域拆分，并行秒级渲染) -->
     <link rel="stylesheet" href="/static/css/base.css?v=1793264327">
-    <link rel="stylesheet" href="/static/css/components.css?v=1793264327">
+    <link rel="stylesheet" href="/static/css/components.css?v=1793469000">
     <link rel="stylesheet" href="/static/css/overview.css?v=1793264327">
-    <link rel="stylesheet" href="/static/css/timeline.css?v=1793264327">
-    <link rel="stylesheet" href="/static/css/ledger.css?v=1793264327">
+    <link rel="stylesheet" href="/static/css/timeline.css?v=1793470000">
+    <link rel="stylesheet" href="/static/css/ledger.css?v=1793469000">
     <link rel="stylesheet" href="/static/css/persona.css?v=1793264327">
     <link rel="stylesheet" href="/static/css/archives.css?v=1793264327">
 <link rel="stylesheet" href="/static/css/identity_map.css?v=1">
+    <link rel="stylesheet" href="/static/css/memory_tuning.css?v=1793471000">
     <link rel="stylesheet" href="/static/css/mobile.css?v=1793264327">
 
     <!-- 模块化脚本体系 (独立职责，defer 顺序装载) -->
     <script defer src="/static/js/core.js?v=1793305200"></script>
-    <script defer src="/static/js/overview.js?v=1793309000"></script>
-    <script defer src="/static/js/timeline.js?v=1793288200"></script>
-    <script defer src="/static/js/ledger.js?v=1793288200"></script>
-    <script defer src="/static/js/models.js?v=1793308000"></script>
+    <script defer src="/static/js/overview.js?v=1793466000"></script>
+    <script defer src="/static/js/timeline.js?v=1793470000"></script>
+    <script defer src="/static/js/ledger.js?v=1793469000"></script>
+    <script defer src="/static/js/models.js?v=1793469000"></script>
     <script defer src="/static/js/persona.js?v=1793307000"></script>
     <script defer src="/static/js/access_policy.js?v=1793300000"></script>
     <script defer src="/static/js/security_api.js?v=1"></script>
-    <script defer src="/static/js/archives.js?v=1793288200"></script>
+    <script defer src="/static/js/archives.js?v=1793456000"></script>
     <script defer src="/static/js/identity_map.js?v=1"></script>
-    <script defer src="/static/js/tools_page.js?v=1"></script>
+    <script defer src="/static/js/memory_tuning.js?v=1793471000"></script>
+    <script defer src="/static/js/tools_page.js?v=1793456000"></script>
     <script defer src="/static/js/messages.js?v=1"></script>
     <script defer src="/static/js/logs.js?v=1"></script>
     <script defer src="/static/js/main.js?v=1793290600"></script>
@@ -59,7 +61,7 @@
             </div>
             <div class="nav-item" onclick="navigateTab('tab-timeline', this)">
                 <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                <span data-i18n="nav_memory">记忆库时间轴</span>
+                <span data-i18n="nav_memory">时间轴</span>
             </div>
             <div class="nav-item" onclick="navigateTab('tab-persona', this)">
                 <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -290,7 +292,11 @@
                             <button class="btn btn-secondary" onclick="loadData(); loadDetailedLedger();" style="font-size: 12px; padding: 6px 14px;">刷新账单</button>
                         </div>
                     </div>
-                    
+
+                    <div id="token-alert-panel" class="token-alert-panel">
+                        <div class="token-alert-loading">正在检查 Token 预警…</div>
+                    </div>
+
                     <!-- 合计口径：只统计 Token 与调用次数，不混合币种金额 -->
                     <div class="ledger-stats-strip">
                         <div class="ledger-stat-box">
@@ -342,7 +348,7 @@
                 </div>
             </section>
 
-            <!-- Tab 2: 记忆库时间轴 -->
+            <!-- Tab 2: 时间轴 -->
             <section id="tab-timeline" class="view-section">
                 <div class="flat-panel" style="margin-bottom: 24px;">
                     <div class="panel-headline">
@@ -392,6 +398,7 @@
                     </div>
                 </div>
             </section>
+
 
             <!-- Tab 3: 人格设定与自定义规则 -->
             <section id="tab-persona" class="view-section">
@@ -569,6 +576,11 @@
                                 <button class="btn btn-secondary" onclick="saveArchiveSettings()">保存设定</button>
                             </div>
 
+                            <div class="archive-section-title">工具权限</div>
+                            <div id="archive-tool-policy">
+                                <div style="font-size:12px;color:var(--text-muted);">加载中…</div>
+                            </div>
+
                             <div class="archive-section-title">长效事实（AI 总结）</div>
                             <div id="archive-facts"></div>
                         </div>
@@ -584,22 +596,18 @@
                 <div class="panel-headline">
                     <div>
                         <div class="panel-title">工具</div>
+                        <div style="font-size: 12.5px; color: var(--text-muted); margin-top: 4px;">
+                            这里只调全局工具；个人权限到「档案 → 工具权限」里改。
+                        </div>
                     </div>
                     <div style="display: flex; gap: 8px;">
                         <button class="btn btn-secondary" onclick="loadToolsPage()">刷新</button>
                     </div>
                 </div>
-                <div class="tools-toolbar">
-                    <label class="tools-target-label">权限视角</label>
-                    <select id="tools-policy-target" class="tools-target-select" onchange="onToolsTargetChange(this.value)">
-                        <option value="__global__">全局配置（所有档案共用）</option>
-                    </select>
-                </div>
                 <div id="tools-summary" class="tools-summary"></div>
                 <div id="tools-list" class="tools-list">
                     <div class="archive-empty">打开本页会自动加载。</div>
                 </div>
-                <div id="tools-policy-panel" class="tools-policy-panel" style="display: none;"></div>
             </section>
 
             <!-- Tab: 身份映射 -->
@@ -639,6 +647,10 @@
                     <button class="subtab-btn" onclick="switchSettingsSubtab('subtab-general', this)">
                         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
                         <span data-i18n="subtab_general">常规与系统</span>
+                    </button>
+                    <button class="subtab-btn" onclick="switchSettingsSubtab('subtab-memory-tuning', this)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" fill="none" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2.2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2.2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="8" cy="18" r="2.2"/></svg>
+                        <span>记忆库</span>
                     </button>
 
                     </div>
@@ -869,6 +881,97 @@
                     </div>
                 </div>
 
+                <!-- 二级子页面 4: 记忆调参 -->
+                <div id="subtab-memory-tuning" class="subtab-content mt-panel">
+                <div class="mt-hero">
+                    <div class="mt-hero-copy">
+                        <div class="mt-kicker"><span class="mt-kicker-dot"></span> MEMORY LIBRARY</div>
+                        <h2 class="mt-title">记忆库设置</h2>
+                        <p class="mt-subtitle">导出 / 导入记忆库、查看占用空间；下方继续调整每轮注入预算、主动回忆深度和摘要窗口。</p>
+                    </div>
+                    <div class="mt-hero-actions">
+                        <span id="mt-dirty-badge" class="mt-dirty-badge is-synced">已同步</span>
+                        <button class="btn btn-secondary" onclick="resetMemoryTuning()">恢复推荐</button>
+                        <button class="btn" id="mt-save-btn" onclick="saveMemoryTuning()" disabled>保存并生效</button>
+                    </div>
+                </div>
+
+                <section class="mt-card" style="margin-bottom:18px;">
+                    <div class="mt-card-head">
+                        <div>
+                            <div class="mt-card-kicker">PORTABILITY</div>
+                            <h3>记忆库维护</h3>
+                        </div>
+                        <div id="mt-db-usage" class="mt-db-usage-pill">--</div>
+                    </div>
+                    <div class="mt-portability">
+                        <div class="mt-portability-actions">
+                            <button class="btn btn-secondary" type="button" onclick="mtExportMemory()">导出记忆库</button>
+                            <button class="btn btn-secondary" type="button" onclick="mtPickImportFile()">一键导入</button>
+                        </div>
+                        <input id="mt-import-file" type="file" accept=".json,.jsonl,.txt,.md" style="display:none;" onchange="mtImportMemory(this)">
+                        <div class="mt-import-options">
+                            <select id="mt-import-format" class="form-select">
+                                <option value="auto">自动识别格式</option>
+                                <option value="native">Stellaris 原生</option>
+                                <option value="jsonl">JSONL 对话</option>
+                                <option value="chatgpt">ChatGPT 导出</option>
+                                <option value="text">纯文本 / Markdown</option>
+                            </select>
+                            <select id="mt-import-mode" class="form-select">
+                                <option value="merge">合并导入</option>
+                                <option value="replace">清空后导入</option>
+                            </select>
+                        </div>
+                        <div id="mt-portability-status" class="mt-portability-status">导入前会自动备份当前记忆库。</div>
+                    </div>
+                </section>
+
+                <div class="mt-preset-row">
+                    <div class="mt-preset-label">快速预设</div>
+                    <div id="mt-presets" class="mt-presets"></div>
+                    <div class="mt-preset-hint">预设只改数值，不动两个开关</div>
+                </div>
+
+                <div class="mt-layout">
+                    <div id="mt-groups" class="mt-groups">
+                        <div class="mt-card mt-loading">正在读取记忆参数…</div>
+                    </div>
+
+                    <aside class="mt-side">
+                        <section class="mt-card mt-preview-card">
+                            <div class="mt-card-head">
+                                <div>
+                                    <div class="mt-card-kicker">LIVE PREVIEW</div>
+                                    <h3>预算预览</h3>
+                                </div>
+                                <span class="mt-live-pill" id="mt-preview-state">等待</span>
+                            </div>
+                            <div id="mt-preview-body" class="mt-preview-body">
+                                <div class="mt-preview-loading">调整预算后自动重算</div>
+                            </div>
+                        </section>
+
+                        <section class="mt-card">
+                            <div class="mt-card-head">
+                                <div>
+                                    <div class="mt-card-kicker">MEMORY STORE</div>
+                                    <h3>记忆库现状</h3>
+                                </div>
+                            </div>
+                            <div id="mt-stats-body" class="mt-stats-body">
+                                <div class="mt-preview-loading">读取中…</div>
+                            </div>
+                        </section>
+
+                        <div class="mt-note">
+                            <b>生效方式</b>
+                            <span>时间轴、召回与开关即时生效；聚合器在下一轮扫描时读取新窗口。</span>
+                        </div>
+                    </aside>
+                </div>
+
+                </div>
 
             </section>
 
@@ -956,7 +1059,7 @@
                     </select>
                 </div>
             </div>
-            <div class="form-grid" style="margin-top: 6px; grid-template-columns: repeat(4, 1fr);">
+            <div class="form-grid" style="margin-top: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px;">
                 <div class="form-group">
                     <label class="form-label">价格单位</label>
                     <select class="form-select" id="cred-edit-currency">
@@ -965,17 +1068,29 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label">输入单价 / 1M（手动填写）</label>
-                    <input class="form-input" id="cred-edit-input-price" type="number" step="0.001">
+                    <label class="form-label">输入单价 / 1M tokens</label>
+                    <input class="form-input" id="cred-edit-input-price" type="number" step="0.001" placeholder="例如 0.75">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">缓存单价 / 1M（手动填写）</label>
-                    <input class="form-input" id="cred-edit-cache-price" type="number" step="0.001">
+                    <label class="form-label">缓存单价 / 1M tokens</label>
+                    <input class="form-input" id="cred-edit-cache-price" type="number" step="0.001" placeholder="例如 0.075">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">输出单价 / 1M（手动填写）</label>
-                    <input class="form-input" id="cred-edit-output-price" type="number" step="0.001">
+                    <label class="form-label">输出单价 / 1M tokens</label>
+                    <input class="form-input" id="cred-edit-output-price" type="number" step="0.001" placeholder="例如 3.75">
                 </div>
+            </div>
+
+            <div style="margin-top: 10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                    <div>
+                        <div class="form-label" style="margin:0;">分时价格（峰谷）</div>
+                        <div class="modal-desc" style="margin:2px 0 0;">按本地时间匹配；没命中时段就用上面的基础单价</div>
+                    </div>
+                    <button class="btn btn-secondary" type="button" onclick="addPriceScheduleRow()">+ 添加时段</button>
+                </div>
+                <div class="cred-schedule-hint">每行：周区间 + 时间段 + 三个单价；不填周区间默认每天</div>
+                <div id="cred-price-schedule" style="display:flex;flex-direction:column;gap:8px;margin-top:6px;"></div>
             </div>
         </div>
     </div>
@@ -1027,7 +1142,7 @@
             </div>
             <div class="tool-modal-name" id="tool-modal-name">--</div>
 
-            <div class="tool-field">
+            <div class="tool-field" id="tool-mode-row">
                 <div class="tool-field-label">调用方式</div>
                 <label class="tool-choice">
                     <input type="radio" name="tool-mode" value="direct" onchange="onToolModeChange()">
@@ -1043,7 +1158,16 @@
                 </div>
             </div>
 
-            <div class="tool-field">
+            <div class="tool-field" id="tool-system-row" style="display:none;">
+                <div class="tool-field-label">系统工具</div>
+                <label class="tool-choice">
+                    <input type="checkbox" id="tool-enabled">
+                    <span><b>启用</b>　关闭后主模型和备用入口都不会注入</span>
+                </label>
+                <div id="tool-system-note" class="tool-system-note"></div>
+            </div>
+
+            <div class="tool-field" id="tool-permission-row">
                 <div class="tool-field-label">权限</div>
                 <label class="tool-choice">
                     <input type="checkbox" id="tool-approval">
@@ -1064,6 +1188,48 @@
         
 
 
+    <!-- 账单单价修正 Modal -->
+    <div id="ledger-price-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,23,42,0.45); backdrop-filter:blur(4px); align-items:center; justify-content:center;" onclick="if(event.target===this)closeLedgerPriceModal()">
+        <div style="background:#fff; border-radius:18px; padding:28px 26px; width:440px; max-width:94vw; box-shadow:0 20px 60px rgba(0,0,0,0.18); position:relative;" onclick="event.stopPropagation()">
+            <div style="font-size:17px; font-weight:700; color:#0f172a; margin-bottom:5px;">修改计费单价</div>
+            <div style="font-size:12px; color:#64748b; margin-bottom:18px;" id="ledger-price-model">--</div>
+            <input id="ledger-price-id" type="hidden">
+            <div style="display:flex; justify-content:space-between; padding:10px 12px; background:#f8fafc; border-radius:10px; margin-bottom:12px; font-size:12px; color:#64748b;">
+                <span>本笔 Tokens</span>
+                <b id="ledger-price-tokens" style="font-family:monospace; color:#0f172a;">0</b>
+            </div>
+
+            <div style="display:grid; grid-template-columns: 1fr 100px 82px; gap:8px; align-items:center; margin-bottom:7px;">
+                <span style="font-size:12px; color:#64748b;">输入 <b id="ledger-price-input-tokens" style="font-family:monospace; color:#0f172a;">0</b> tokens</span>
+                <input id="ledger-price-input" type="number" min="0" step="0.0001" oninput="updateLedgerPriceAmount()" placeholder="单价 / 1M" style="width:100%; box-sizing:border-box; padding:7px 8px; border-radius:8px; border:1.5px solid #e2e8f0; font-size:12px; font-family:monospace; outline:none;">
+                <span id="ledger-price-input-subtotal" style="font-size:11px; color:#94a3b8; text-align:right; font-family:monospace;">0.0000</span>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 100px 82px; gap:8px; align-items:center; margin-bottom:7px;">
+                <span style="font-size:12px; color:#64748b;">缓存 <b id="ledger-price-cache-tokens" style="font-family:monospace; color:#0f172a;">0</b> tokens</span>
+                <input id="ledger-price-cache" type="number" min="0" step="0.0001" oninput="updateLedgerPriceAmount()" placeholder="单价 / 1M" style="width:100%; box-sizing:border-box; padding:7px 8px; border-radius:8px; border:1.5px solid #e2e8f0; font-size:12px; font-family:monospace; outline:none;">
+                <span id="ledger-price-cache-subtotal" style="font-size:11px; color:#94a3b8; text-align:right; font-family:monospace;">0.0000</span>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 100px 82px; gap:8px; align-items:center; margin-bottom:12px;">
+                <span style="font-size:12px; color:#64748b;">输出 <b id="ledger-price-output-tokens" style="font-family:monospace; color:#0f172a;">0</b> tokens</span>
+                <input id="ledger-price-output" type="number" min="0" step="0.0001" oninput="updateLedgerPriceAmount()" placeholder="单价 / 1M" style="width:100%; box-sizing:border-box; padding:7px 8px; border-radius:8px; border:1.5px solid #e2e8f0; font-size:12px; font-family:monospace; outline:none;">
+                <span id="ledger-price-output-subtotal" style="font-size:11px; color:#94a3b8; text-align:right; font-family:monospace;">0.0000</span>
+            </div>
+
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-radius:10px; background:#eef2ff; font-size:12px; color:#4338ca;">
+                <span>合计金额</span>
+                <b id="ledger-price-amount" style="font-family:monospace; font-size:15px;">0.0000</b>
+            </div>
+            <div style="font-size:11px; color:#94a3b8; margin-top:8px;">金额 = 输入单价×输入 + 缓存单价×缓存 + 输出单价×输出（每 1M）</div>
+            <label style="font-size:12px; color:#64748b; display:block; margin:14px 0 6px;">修正原因（可选）</label>
+            <input id="ledger-price-reason" type="text" placeholder="厂商计费修正" style="width:100%; box-sizing:border-box; padding:8px 10px; border-radius:9px; border:1.5px solid #e2e8f0; font-size:12px; outline:none;">
+            <div style="display:flex; gap:8px; margin-top:16px;">
+                <button class="btn btn-secondary" type="button" style="flex:1;" onclick="closeLedgerPriceModal()">取消</button>
+                <button class="btn" type="button" style="flex:1;" onclick="saveLedgerPrice()">保存修正</button>
+            </div>
+            <button onclick="closeLedgerPriceModal()" style="position:absolute; top:14px; right:16px; background:none; border:none; cursor:pointer; font-size:20px; color:#94a3b8;">&#x2715;</button>
+        </div>
+    </div>
+
     <!-- Recharge Modal -->
     <div id="recharge-modal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(15,23,42,0.45); backdrop-filter:blur(4px); align-items:center; justify-content:center;" onclick="closeRechargeModal(event)">
         <div style="background:#fff; border-radius:18px; padding:32px 28px; width:340px; max-width:92vw; box-shadow:0 20px 60px rgba(0,0,0,0.18); position:relative;" onclick="event.stopPropagation()">
@@ -1073,6 +1239,15 @@
                 <label style="font-size:12.5px; color:#64748b; display:block; margin-bottom:6px;" id="recharge-amount-label">充值金额（美元）</label>
                 <input id="recharge-amount-input" type="number" min="0.01" step="0.01" placeholder="10.00"
                     style="width:100%; box-sizing:border-box; padding:10px 14px; border-radius:10px; border:1.5px solid #e2e8f0; font-size:15px; font-family:monospace; outline:none;">
+            </div>
+            <div style="margin-bottom:16px; padding:10px 12px; border-radius:10px; background:#f8fafc;">
+                <label style="font-size:12px; color:#64748b; display:block; margin-bottom:6px;" id="recharge-threshold-label">余额提醒阈值</label>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <input id="recharge-threshold-input" type="number" min="0" step="0.1" placeholder="5.00"
+                        style="flex:1; box-sizing:border-box; padding:8px 10px; border-radius:8px; border:1.5px solid #e2e8f0; font-size:13px; font-family:monospace; outline:none;">
+                    <button onclick="saveRechargeThreshold()" class="btn btn-secondary" type="button" style="font-size:11.5px; padding:7px 10px;">保存阈值</button>
+                </div>
+                <div id="recharge-threshold-result" style="margin-top:6px; font-size:11px; color:#94a3b8;"></div>
             </div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
                 <button onclick="setRechargePreset(10)" class="recharge-preset-btn">+10</button>
@@ -1091,9 +1266,3 @@
     </div>
 </body>
 </html>
-
-
-
-
-
-

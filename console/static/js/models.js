@@ -118,6 +118,9 @@
             const target = document.getElementById(subtabId);
             if (target) target.classList.add('active');
             if (btn) btn.classList.add('active');
+            if (subtabId === 'subtab-memory-tuning' && typeof loadMemoryTuning === 'function') {
+                loadMemoryTuning();
+            }
         }
 
         function switchPersonaSubtab(subtabId, btn) {
@@ -242,9 +245,10 @@
                 const outP = cred.output_price;
                 const rowCurrency = cred.currency || (typeof detectCredentialCurrency === 'function' ? detectCredentialCurrency(cred) : 'USD');
                 const priceSymbol = String(rowCurrency).toUpperCase() === 'CNY' ? '¥' : '$';
+                const scheduleCount = Array.isArray(cred.price_schedule) ? cred.price_schedule.length : 0;
                 const priceText = (inP === undefined || inP === null || inP === '' || outP === undefined || outP === null || outP === '')
                     ? '未定价'
-                    : `入 ${priceSymbol}${inP} / 出 ${priceSymbol}${outP}`;
+                    : `入 ${priceSymbol}${inP} / 出 ${priceSymbol}${outP}` + (scheduleCount ? ` · 分时 ${scheduleCount} 段` : '');
                 return `
                     <div class="credential-row ${active ? '' : 'disabled'}" onclick="openCredentialEditor('${poolType}', ${idx})">
                         <div class="credential-row-main">
@@ -302,6 +306,84 @@
                    <button class="btn btn-secondary" style="color:#dc2626;" onclick="deleteCredentialFromEditor()">删除</button>`;
         }
 
+        function priceWeekdayOptions(selected) {
+            const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+            return names.map((name, index) => {
+                const value = index + 1;
+                return `<option value="${value}"${value === Number(selected) ? ' selected' : ''}>${name}</option>`;
+            }).join('');
+        }
+
+        function priceScheduleRow(item = {}) {
+            const value = (key, fallback = '') => escapeHtml(item[key] ?? fallback);
+            const weekdays = String(item.weekdays || '1-7');
+            const [weekStart, weekEnd] = weekdays.includes('-')
+                ? weekdays.split('-')
+                : [weekdays, weekdays];
+            return `
+                <div class="cred-price-schedule-row">
+                    <div class="cred-schedule-line">
+                        <label class="cred-schedule-field cred-schedule-week">
+                            <span>周</span>
+                            <select class="form-select cred-schedule-week-start" title="起始星期">${priceWeekdayOptions(weekStart)}</select>
+                            <span class="cred-schedule-sep">→</span>
+                            <select class="form-select cred-schedule-week-end" title="结束星期">${priceWeekdayOptions(weekEnd)}</select>
+                        </label>
+                        <label class="cred-schedule-field cred-schedule-time">
+                            <span>时间</span>
+                            <input class="form-input cred-schedule-start" type="time" value="${value('start')}" title="开始时间">
+                            <span class="cred-schedule-sep">→</span>
+                            <input class="form-input cred-schedule-end" type="time" value="${value('end')}" title="结束时间">
+                        </label>
+                        <button class="btn btn-subtle cred-schedule-remove" type="button" onclick="removePriceScheduleRow(this)" title="删除时段">✕</button>
+                    </div>
+                    <div class="cred-schedule-prices">
+                        <label>输入 / 1M <input class="form-input cred-schedule-input" type="number" step="0.001" placeholder="输入价" value="${value('input_price')}"></label>
+                        <label>缓存 / 1M <input class="form-input cred-schedule-cache" type="number" step="0.001" placeholder="缓存价" value="${value('cache_price')}"></label>
+                        <label>输出 / 1M <input class="form-input cred-schedule-output" type="number" step="0.001" placeholder="输出价" value="${value('output_price')}"></label>
+                    </div>
+                </div>`;
+        }
+
+        function renderPriceSchedule(schedule) {
+            const host = document.getElementById('cred-price-schedule');
+            if (!host) return;
+            const list = Array.isArray(schedule) ? schedule : [];
+            host.innerHTML = list.map((item) => priceScheduleRow(item)).join('');
+        }
+
+        function addPriceScheduleRow() {
+            const host = document.getElementById('cred-price-schedule');
+            if (!host) return;
+            const base = {
+                start: '08:00',
+                end: '22:00',
+                input_price: document.getElementById('cred-edit-input-price')?.value || '',
+                cache_price: document.getElementById('cred-edit-cache-price')?.value || '',
+                output_price: document.getElementById('cred-edit-output-price')?.value || '',
+            };
+            host.insertAdjacentHTML('beforeend', priceScheduleRow(base));
+        }
+
+        function removePriceScheduleRow(button) {
+            button?.closest('.cred-price-schedule-row')?.remove();
+        }
+
+        function readPriceSchedule() {
+            return Array.from(document.querySelectorAll('#cred-price-schedule .cred-price-schedule-row')).map((row) => {
+                const weekStart = row.querySelector('.cred-schedule-week-start')?.value || '1';
+                const weekEnd = row.querySelector('.cred-schedule-week-end')?.value || '7';
+                return {
+                    weekdays: `${weekStart}-${weekEnd}`,
+                    start: row.querySelector('.cred-schedule-start')?.value || '',
+                    end: row.querySelector('.cred-schedule-end')?.value || '',
+                    input_price: parseFloat(row.querySelector('.cred-schedule-input')?.value || '0') || 0,
+                    cache_price: parseFloat(row.querySelector('.cred-schedule-cache')?.value || '0') || 0,
+                    output_price: parseFloat(row.querySelector('.cred-schedule-output')?.value || '0') || 0,
+                };
+            }).filter((item) => item.start && item.end);
+        }
+
         function openCredentialEditor(poolType, idx) {
             if (!globalModelsConfig) return;
             const list = poolType === 'master' ? globalModelsConfig.master_credentials : globalModelsConfig.function_credentials;
@@ -322,6 +404,7 @@
             set('cred-edit-cache-price', cred.cache_price ?? '');
             set('cred-edit-output-price', cred.output_price ?? '');
             set('cred-edit-currency', cred.currency || detectCredentialCurrency(cred));
+            renderPriceSchedule(cred.price_schedule || []);
             const authWrap = document.getElementById('cred-edit-authtype-wrap');
             if (authWrap) authWrap.style.display = poolType === 'function' ? '' : 'none';
             const auth = document.getElementById('cred-edit-authtype');
@@ -410,6 +493,7 @@
             cred.cache_price = num('cred-edit-cache-price');
             cred.output_price = num('cred-edit-output-price');
             cred.currency = val('cred-edit-currency') || 'USD';
+            cred.price_schedule = readPriceSchedule();
             return cred;
         }
 

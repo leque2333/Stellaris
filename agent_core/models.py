@@ -39,8 +39,9 @@ class TimelineEvent:
     person_id: str = ""                    # 统一人物 ID（绑定档案时=archive_id）
     # ---- 插件/时间线聚合标签 (v2 schema, 可选, 老数据为 None) ----
     plugin_id: Optional[str] = None        # 产生该事件的插件标识 (如 qq / bilibili / host_control)
-    tag_primary: Optional[str] = None      # 一级标签: 插件展示名 (QQ / B站 / 宿主机)
-    tag_secondary: Optional[str] = None    # 二级标签: 由插件性质决定 (群聊名 / UP主 / 任务名)
+    tag_primary: Optional[str] = None      # 一级标签: 插件/工具展示名
+    tag_secondary: Optional[str] = None    # 二级标签: 发起人档案 ID（不是 UID）
+    tag_permission: Optional[str] = None   # 权限标签: admin / guest / system / unknown
     segment_id: Optional[str] = None       # 所属会话段 (复杂事件聚合)
     started_at: Optional[float] = None     # 会话段起始时间 (复杂事件)
     ended_at: Optional[float] = None       # 会话段结束时间 (复杂事件)

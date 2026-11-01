@@ -57,6 +57,39 @@ class AggregatorTest(unittest.TestCase):
         self.agg.tick(now=t0 + 130)
         self.assertEqual(self.store.timeline_count(), 1)
 
+    def test_group_summary_uses_plugin_and_platform_uid(self):
+        t0 = time.time() - 1000
+        self._invocation(
+            "tr_group", "channel", "qq", t0, channel_id="qq", actor_id="master",
+            metadata={"group_id": "784826874", "group_name": "乌合之众喵",
+                      "plugin_name": "napcat", "platform": "qq",
+                      "archive_id": "arc_master", "tag_permission": "admin",
+                      "sender_uid": "2986371638", "channel_type": "group"},
+        )
+        self.agg.tick(now=t0 + 5)
+        self.agg.tick(now=t0 + 120)
+        event = self.store.list_events(limit=1)[0]
+        self.assertEqual(event.tag_primary, "napcat")
+        self.assertEqual(event.tag_secondary, "arc_master")
+        self.assertEqual(event.tag_permission, "admin")
+        self.assertEqual(event.plugin_id, "napcat")
+
+    def test_private_summary_uses_platform_uid(self):
+        t0 = time.time() - 1000
+        self._invocation(
+            "tr_private", "channel", "qq", t0, channel_id="qq", actor_id="master",
+            metadata={"session_id": "2986371638", "peer_name": "乐阙",
+                      "plugin_name": "napcat", "platform": "qq",
+                      "archive_id": "arc_master", "tag_permission": "admin",
+                      "sender_uid": "2986371638", "channel_type": "private"},
+        )
+        self.agg.tick(now=t0 + 5)
+        self.agg.tick(now=t0 + 120)
+        event = self.store.list_events(limit=1)[0]
+        self.assertEqual(event.tag_primary, "napcat")
+        self.assertEqual(event.tag_secondary, "arc_master")
+        self.assertEqual(event.tag_permission, "admin")
+
     def test_two_sessions_become_two_events(self):
         t0 = time.time() - 2000
         self._invocation("tr_a", "channel", "qq", t0, channel_id="qq", actor_id="master")
@@ -94,6 +127,7 @@ class AggregatorTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].tag_primary, "B站")
         self.assertEqual(events[0].tag_secondary, "某UP")
+        self.assertEqual(events[0].tag_permission, "unknown")
         self.assertIn("视频A", events[0].narrative)
 
 

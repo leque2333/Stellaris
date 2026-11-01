@@ -41,6 +41,7 @@ def ingest_timeline_event(
                 plugin_id=payload.get("plugin_id") or plugin_id,
                 tag_primary=payload.get("tag_primary") or tag_primary,
                 tag_secondary=payload.get("tag_secondary") or tag_secondary,
+                tag_permission=payload.get("tag_permission") or "unknown",
                 detail_id=payload.get("detail_id") or "",
                 person_id=payload.get("person_id") or "",
                 embedding=embed_text_bytes(narrative),
@@ -71,15 +72,16 @@ def _timeline_event(**kwargs):
         plugin_id=kwargs.get("plugin_id"),
         tag_primary=kwargs.get("tag_primary"),
         tag_secondary=kwargs.get("tag_secondary"),
+        tag_permission=kwargs.get("tag_permission"),
         segment_id=kwargs.get("segment_id"),
         started_at=kwargs.get("started_at"),
         ended_at=kwargs.get("ended_at"),
     )
 
-def _price_for_model(model_id):
+def _price_for_model(model_id, at=None):
     try:
         from .model_service import get_model_pricing_map, get_models_config
-        pricing = get_model_pricing_map()
+        pricing = get_model_pricing_map(at)
         if model_id in pricing:
             return pricing[model_id]
         active = str(get_models_config().get("active_model") or "")
@@ -96,11 +98,11 @@ def backfill_token_costs():
         from .common import get_db_connection
         conn = get_db_connection()
         rows = conn.execute(
-            "SELECT id, model, prompt_tokens, completion_tokens, cached_tokens "
+            "SELECT id, model, prompt_tokens, completion_tokens, cached_tokens, timestamp "
             "FROM token_usage WHERE COALESCE(cost_usd, 0) = 0"
         ).fetchall()
         for row in rows:
-            price = _price_for_model(str(row["model"] or ""))
+            price = _price_for_model(str(row["model"] or ""), row["timestamp"])
             if not price:
                 continue
             cost = (
@@ -177,11 +179,14 @@ def record_token_usage_event(
     credential_type=None,
     currency=None,
     tools="",
+    timestamp=None,
 ):
     """统一账本：所有通道都写入 token_usage（token_usage_ledger 为兼容视图）"""
     try:
         if not cost_usd:
-            price = _price_for_model(str(model_id or ""))
+            price = _price_for_model(
+                str(model_id or ""), timestamp if timestamp is not None else time.time()
+            )
             if price:
                 cost_usd = (
                     float(input_tokens or 0) * float(price.get("input", 0))
@@ -204,13 +209,61 @@ def record_token_usage_event(
     except Exception as e:
         print(f"[TokenLedger] Record failed: {e}")
 
+def _timeline_platform(source, payload, secondary):
+    platform = str(payload.get("platform") or "").strip().lower()
+    if platform:
+        return platform
+    text = f"{source} {payload.get('channel', '')} {secondary}".lower()
+    if "napcat" in text or "qq" in text or "astrbot" in text:
+        return "qq"
+    if "bilibili" in text:
+        return "bilibili"
+    if "telegram" in text:
+        return "telegram"
+    if "discord" in text:
+        return "discord"
+    if "web" in text or "universal_proxy" in text:
+        return "web"
+    return ""
+
+
+def _timeline_uid(payload, secondary, actor_id):
+    uid = str(payload.get("sender_uid") or payload.get("uid") or payload.get("raw_user_id") or "").strip()
+    if uid:
+        return uid
+    text = str(secondary or "").strip()
+    if ":" in text:
+        return text.rsplit(":", 1)[-1]
+    actor = str(actor_id or "").strip()
+    return actor if actor.isdigit() else ""
+
+
 def get_timeline_events(limit=60):
+    from agent_core.memory.episodic_stream import _drop_empty_summaries
+
     events = []
-    for evt in get_store().list_events(limit=limit, order="desc"):
+    raw_events = get_store().list_events(limit=max(limit * 5, 200), order="desc")
+    archives = {}
+    for evt in _drop_empty_summaries(raw_events):
+        if len(events) >= limit:
+            break
         payload = evt.metadata or {}
         raw_source = evt.source_module or "system"
         raw_actor = evt.actor_name or "用户"
         raw_narrative = sanitize_clean_text(evt.narrative or "")
+        secondary = str(evt.tag_secondary or "").strip()
+        archive = None
+        if secondary.startswith("arc_"):
+            if secondary not in archives:
+                try:
+                    archives[secondary] = get_store().get_archive(secondary)
+                except Exception:
+                    archives[secondary] = None
+            archive = archives[secondary]
+        archive_name = str((archive or {}).get("display_name") or "").strip()
+        uid = _timeline_uid(payload, secondary, evt.actor_id)
+        platform = _timeline_platform(raw_source, payload, secondary)
+        display_name = archive_name or uid or raw_actor
         events.append({
             "id": evt.event_id,
             "timestamp": evt.timestamp,
@@ -222,10 +275,16 @@ def get_timeline_events(limit=60):
             "narrative": raw_narrative,
             "content": raw_narrative,
             "payload": payload,
-            # 两级标签（供控制台分组）
+            # 标签拆成：插件名 / 平台 / 人员
             "plugin_id": evt.plugin_id,
             "tag_primary": evt.tag_primary,
             "tag_secondary": evt.tag_secondary,
+            "tag_permission": evt.tag_permission,
+            "platform": platform,
+            "uid": uid,
+            "archive_id": secondary if secondary.startswith("arc_") else "",
+            "archive_name": archive_name,
+            "display_name": display_name,
             "segment_id": evt.segment_id,
             "started_at": evt.started_at,
             "ended_at": evt.ended_at,
@@ -302,7 +361,7 @@ def _build_ai_service_rules() -> list:
     """本机可能出现的 AI 进程特征。命中即归类，不命中就不算。"""
     return [
         {"name": "Console Hub 控制台中枢", "match": lambda cmd, name: ("console" in cmd and "server.py" in cmd), "port": 18895},
-        {"name": "Antigravity Bridge 极速推理桥", "match": lambda cmd, name: "antigravity_bridge" in cmd, "port": 8765},
+        {"name": "Host Bridge 宿主机控制桥", "match": lambda cmd, name: "host_bridge" in cmd or "antigravity_bridge" in cmd, "port": 8765},
         {"name": "AI Language Server 推理引擎", "match": lambda cmd, name: "language_server" in name or "language_server" in cmd, "port": None},
         {"name": "Local Ollama 本地推理池", "match": lambda cmd, name: "ollama" in name or "ollama" in cmd, "port": 11434},
         {"name": "AstrBot 机器人智能体核心", "match": lambda cmd, name: "astrbot" in cmd or "astrbot" in name, "port": None},

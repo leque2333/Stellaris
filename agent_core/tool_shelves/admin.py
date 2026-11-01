@@ -106,7 +106,31 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
                 "description": "",
             }
 
-    # 2) 网关见过的工具（配置没登记的）
+    # 2) 系统工具：不依赖某个宿主插件，工具页只按元数据展示
+    try:
+        from . import system_tools
+
+        for name, meta in system_tools.entries().items():
+            item = entries.setdefault(name, {
+                "name": name,
+                "mode": "direct",
+                "category": "",
+                "approval": name in approval,
+                "source": "system",
+                "description": "",
+            })
+            item.update({
+                "system": True,
+                "system_label": meta.get("label") or name,
+                "system_kind": meta.get("kind") or "system",
+                "transport": meta.get("transport") or "",
+                "enabled": system_tools.enabled(name),
+                "source_group": "系统工具",
+            })
+    except Exception:
+        pass
+
+    # 3) 网关见过的工具（配置没登记的）
     try:
         from . import registry
 
@@ -124,7 +148,7 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 3) 提权列表里有、但配置和 registry 都没有的
+    # 4) 提权列表里有、但配置和 registry 都没有的
     for name in approval:
         if name not in entries:
             entries[name] = {
@@ -137,6 +161,7 @@ def list_tools(cfg: Optional[ShelfConfig] = None) -> Dict[str, Any]:
             }
 
     for item in entries.values():
+        item.setdefault("system", False)
         item.setdefault("source_group", tool_source(item["name"]))
     items = sorted(entries.values(), key=lambda x: (x["mode"] != "direct", x["category"], x["name"]))
     cat_meta = [
@@ -165,12 +190,19 @@ def update_tool(
     mode: Optional[str] = None,
     approval: Optional[bool] = None,
     category: Optional[str] = None,
+    enabled: Optional[bool] = None,
     cfg: Optional[ShelfConfig] = None,
 ) -> Dict[str, Any]:
     """更新一个工具的设置，写回配置并热加载。"""
     name = str(name or "").strip()
     if not name:
         raise ValueError("name 必填")
+    from . import system_tools
+
+    if system_tools.is_system(name):
+        if enabled is not None:
+            system_tools.set_enabled(name, enabled)
+        return {"ok": True, "system": True, "name": name, "enabled": system_tools.enabled(name)}
     path = _config_path(cfg)
     data = _read(path)
     if not data:

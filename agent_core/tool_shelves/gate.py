@@ -222,6 +222,22 @@ class ToolGate:
         """对外：某个客户端的硬拒绝工具名集合（供网关先摘掉再走分类）。"""
         return self._denied_tools(Decision(), tools, client_id, client_perms)
 
+    def allowed_tools(
+        self,
+        tools,
+        *,
+        client_id: str = "",
+        client_perms=None,
+        archive_id: str = "",
+        actor_id: str = "",
+    ) -> list:
+        """按客户端 + 档案权限过滤后的工具集合，供动态申请使用。"""
+        decision = Decision()
+        denied = self._resolve_denied(
+            decision, tools, client_id, client_perms, archive_id, actor_id
+        )
+        return [tool for tool in tools or [] if catalog.tool_name(tool) not in denied]
+
     @staticmethod
     def _tools_in(tools, names) -> set:
         available = set(catalog.tool_names(tools))

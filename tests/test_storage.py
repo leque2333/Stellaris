@@ -75,7 +75,7 @@ class ExistingDatabaseTest(StorageTestBase):
 
         with sqlite3.connect(self.db) as conn:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(agent_timeline)")}
-            for name in ("plugin_id", "tag_primary", "tag_secondary", "segment_id", "started_at", "ended_at"):
+            for name in ("plugin_id", "tag_primary", "tag_secondary", "tag_permission", "segment_id", "started_at", "ended_at"):
                 self.assertIn(name, cols)
             view = conn.execute("SELECT type FROM sqlite_master WHERE name='token_usage_ledger'").fetchone()
             self.assertEqual(view[0], "view")

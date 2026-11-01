@@ -1259,16 +1259,16 @@ input_price / cache_price / output_price / currency
 | `agent_core/audit_log.py` | 安全审计日志（登录/配置变更/签名拒绝）→ logs/audit.log |
 
 > **2026-10-31 部署陷阱：目录改名会让 docker 挂载失效。**
-> `astrbot` 容器把 `D:\机器人_完整版\astrbot\data` 挂到 `/AstrBot/data`；
-> 目录改名成 `D:\Stellaris_test` 之后，宿主机路径消失，容器里的 `/AstrBot/data`
-> 变成悬空挂载（`ls` 报 No such file），AstrBot 读不到配置、连不上中枢。
+> `astrbot` 容器原先挂 `D:\机器人_完整版\astrbot\data`；目录改名成 `D:\Stellaris_test`
+> 之后宿主机路径消失，容器里的 `/AstrBot/data` 变成悬空挂载，AstrBot 读不到配置。
 > 表现出来不报错，只是"机器人不回话"。
 >
-> 修法（不重建容器）：建目录联接再重启容器——
-> `cmd /c mklink /J "D:\机器人_完整版\astrbot\data" "D:\Stellaris_test\astrbot\data"`
-> 然后 `docker restart astrbot`。验证：`docker exec astrbot ls /AstrBot/data` 能看到 `cmd_config.json`。
->
-> 以后再改名/搬家，先 `docker inspect <容器> --format '{{json .Mounts}}'` 确认挂载源还在。
+> 已改为绝对路径挂载（测试端 `docker-compose.yml`）：
+> `D:/Stellaris_test/astrbot/data:/AstrBot/data`。
+> 重绑命令：`docker compose -f D:\Stellaris_test\docker-compose.yml up -d --force-recreate astrbot`。
+> 不要再创建 `D:\机器人_完整版` 目录联接；搬家只改 compose 里的这一行。
+> 验证：`docker inspect astrbot --format '{{json .Mounts}}'` 和
+> `curl /api/deploy_check` 的「docker 挂载」都应为 ok。
 | `docs/SECURITY.md` | 安全总览：信任边界、六层防护、已知短板 |
 | `docs/API_SECURITY.md` | 两个安全开关的用法与客户端签名示例 |
 | `docs/DEV_RULES.md` | 后续开发规范：四条硬指标、改动流程、踩坑清单 |

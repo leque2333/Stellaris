@@ -37,6 +37,7 @@ class TimelineOps:
             plugin_id=row["plugin_id"] if "plugin_id" in keys else None,
             tag_primary=row["tag_primary"] if "tag_primary" in keys else None,
             tag_secondary=row["tag_secondary"] if "tag_secondary" in keys else None,
+            tag_permission=row["tag_permission"] if "tag_permission" in keys else None,
             segment_id=row["segment_id"] if "segment_id" in keys else None,
             started_at=row["started_at"] if "started_at" in keys else None,
             ended_at=row["ended_at"] if "ended_at" in keys else None,
@@ -103,15 +104,15 @@ class TimelineOps:
                 INSERT INTO agent_timeline
                 (event_id, timestamp, time_str, source_module, actor_id, actor_name, narrative,
                  emotional_impact, importance, prev_event_id, causal_relation, metadata, embedding,
-                 plugin_id, tag_primary, tag_secondary, segment_id, started_at, ended_at, visibility, detail_id,
+                 plugin_id, tag_primary, tag_secondary, tag_permission, segment_id, started_at, ended_at, visibility, detail_id,
                  person_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id, now_ts, get_cst_now_str(now_ts), event.source_module, event.actor_id,
                     event.actor_name, event.narrative, event.emotional_impact, event.importance,
                     prev_id, event.causal_relation, _json(meta, "{}"), event.embedding,
-                    event.plugin_id, event.tag_primary, event.tag_secondary, event.segment_id,
+                    event.plugin_id, event.tag_primary, event.tag_secondary, event.tag_permission, event.segment_id,
                     event.started_at if event.started_at is not None else now_ts,
                     event.ended_at if event.ended_at is not None else now_ts,
                     event.visibility or "private",
@@ -325,7 +326,7 @@ class TimelineOps:
         cols = (
             "event_id", "timestamp", "time_str", "source_module", "actor_id", "actor_name",
             "narrative", "emotional_impact", "importance", "prev_event_id", "causal_relation",
-            "metadata", "embedding", "plugin_id", "tag_primary", "tag_secondary", "segment_id",
+            "metadata", "embedding", "plugin_id", "tag_primary", "tag_secondary", "tag_permission", "segment_id",
             "started_at", "ended_at", "visibility",
         )
         sql = (

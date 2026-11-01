@@ -153,6 +153,7 @@
     }
 
     function renderRecords(records) {
+        window.__ledgerRecords = Array.isArray(records) ? records : [];
         const tableBody = document.getElementById('ledger-detailed-body');
         if (!tableBody) return;
 
@@ -195,13 +196,180 @@
                     <td class="font-mono">${inTok}</td>
                     <td class="font-mono ledger-muted-cell">${cacheTok}</td>
                     <td class="font-mono">${outTok}</td>
-                    <td class="ledger-cost-cell">${escapeHtml(record.cost_formatted || '$0.0000')}</td>
+                    <td class="ledger-cost-cell">${escapeHtml(record.cost_formatted || '$0.0000')}
+                        <button class="ledger-edit-cost" type="button" onclick="openLedgerPriceModal('${escapeHtml(String(record.id || ''))}')">改单价</button>
+                    </td>
                     <td class="ledger-time-cell">${escapeHtml(timeStr)}</td>
                 </tr>`;
         }).join('');
     }
 
+    let tokenAlertData = null;
+
+    function renderTokenAlerts(data) {
+        tokenAlertData = data || {};
+        const host = document.getElementById('token-alert-panel');
+        if (!host) return;
+        const settings = data.settings || {};
+        const current = data.current || {};
+        const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+        window.__tokenAlertData = data;
+        const banner = alerts.length
+            ? `<div class="token-alert-banner ${alerts.some(a => a.level === 'critical') ? 'critical' : 'warning'}">
+                   ${alerts.map(a => `<div>${escapeHtml(a.message)}</div>`).join('')}
+                   ${data.notified_today ? '<span class="token-alert-notified">今日已提醒</span>' : ''}
+               </div>`
+            : '<div class="token-alert-ok">余额和今日 Token 均在阈值内</div>';
+        const limit = current.daily_limit ? formatNumber(current.daily_limit) : '样本不足';
+        const balances = Array.isArray(current.balances) && current.balances.length
+            ? current.balances
+            : [{ currency: current.currency || 'USD', total: current.balance || 0, threshold: settings.balance_threshold || 0 }];
+        const balanceRows = balances.map((item) => (
+            `<div><span>${escapeHtml(item.currency || 'USD')} 余额</span><b>${escapeHtml(String(item.total ?? 0))} · 阈值 ${escapeHtml(String(item.threshold ?? 0))}</b></div>`
+        )).join('');
+        host.innerHTML = `
+            ${banner}
+            <div class="token-alert-metrics">
+                ${balanceRows}
+                <div><span>今日 Tokens</span><b>${formatNumber(current.today_tokens)}</b></div>
+                <div><span>动态上限</span><b>${limit}</b></div>
+                <div><span>参考天数</span><b>${current.samples || 0} 天</b></div>
+            </div>
+            <div class="token-alert-settings">
+                <label>参考天数 <input id="token-alert-days" class="form-input" type="number" min="1" max="30" value="${escapeHtml(settings.lookback_days ?? 7)}"></label>
+                <label>上限倍率 <input id="token-alert-multiplier" class="form-input" type="number" step="0.1" min="1" max="5" value="${escapeHtml(settings.limit_multiplier ?? 1.5)}"></label>
+                <button class="btn btn-secondary" type="button" onclick="saveTokenAlertSettings()">保存预警</button>
+                <span class="token-alert-hint">余额阈值在「添加额度」弹窗里改</span>
+            </div>`;
+    }
+
+    async function loadTokenAlerts() {
+        try {
+            const resp = await fetch('/api/token/alerts', { cache: 'no-store' });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            renderTokenAlerts(data);
+        } catch (e) {
+            const host = document.getElementById('token-alert-panel');
+            if (host) host.innerHTML = `<div class="token-alert-error">Token 预警读取失败：${escapeHtml(e.message || e)}</div>`;
+        }
+    }
+
+    async function saveTokenAlertSettings() {
+        const value = (id) => parseFloat(document.getElementById(id)?.value || '0');
+        const body = {
+            enabled: true,
+            lookback_days: value('token-alert-days'),
+            limit_multiplier: value('token-alert-multiplier'),
+        };
+        try {
+            const resp = await fetch('/api/token/alerts/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            renderTokenAlerts(data);
+        } catch (e) {
+            const host = document.getElementById('token-alert-panel');
+            if (host) host.innerHTML = `<div class="token-alert-error">保存失败：${escapeHtml(e.message || e)}</div>`;
+        }
+    }
+
+    window.saveTokenAlertSettings = saveTokenAlertSettings;
+
+    function ledgerRecordById(id) {
+        return (window.__ledgerRecords || []).find(item => String(item.id) === String(id));
+    }
+
+    function ledgerNumber(value) {
+        return parseFloat(String(value ?? '0').replace(/,/g, '')) || 0;
+    }
+
+    function openLedgerPriceModal(id) {
+        const record = ledgerRecordById(id);
+        const modal = document.getElementById('ledger-price-modal');
+        if (!record || !modal) return;
+        const input = Number(record.input_tokens || 0);
+        const cache = Number(record.cache_tokens || 0);
+        const output = Number(record.output_tokens || 0);
+        const total = input + cache + output;
+        const cost = Number(record.cost_usd || 0);
+        const fallback = total > 0 ? cost * 1_000_000 / total : 0;
+        const prices = record.unit_prices || {};
+        document.getElementById('ledger-price-id').value = String(record.id || '');
+        document.getElementById('ledger-price-model').innerText = record.model || '通用模型';
+        document.getElementById('ledger-price-tokens').innerText = formatNumber(total);
+        document.getElementById('ledger-price-input-tokens').innerText = formatNumber(input);
+        document.getElementById('ledger-price-cache-tokens').innerText = formatNumber(cache);
+        document.getElementById('ledger-price-output-tokens').innerText = formatNumber(output);
+        document.getElementById('ledger-price-input').value = Number(prices.input ?? fallback).toFixed(4);
+        document.getElementById('ledger-price-cache').value = Number(prices.cache ?? fallback).toFixed(4);
+        document.getElementById('ledger-price-output').value = Number(prices.output ?? fallback).toFixed(4);
+        document.getElementById('ledger-price-reason').value = '';
+        updateLedgerPriceAmount();
+        modal.style.display = 'flex';
+    }
+
+    function updateLedgerPriceAmount() {
+        const inputTokens = ledgerNumber(document.getElementById('ledger-price-input-tokens')?.innerText);
+        const cacheTokens = ledgerNumber(document.getElementById('ledger-price-cache-tokens')?.innerText);
+        const outputTokens = ledgerNumber(document.getElementById('ledger-price-output-tokens')?.innerText);
+        const inputPrice = Number(document.getElementById('ledger-price-input')?.value || 0);
+        const cachePrice = Number(document.getElementById('ledger-price-cache')?.value || 0);
+        const outputPrice = Number(document.getElementById('ledger-price-output')?.value || 0);
+        const inputSubtotal = inputTokens * inputPrice / 1_000_000;
+        const cacheSubtotal = cacheTokens * cachePrice / 1_000_000;
+        const outputSubtotal = outputTokens * outputPrice / 1_000_000;
+        const amount = inputSubtotal + cacheSubtotal + outputSubtotal;
+        const set = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) el.innerText = value.toFixed(4);
+        };
+        set('ledger-price-input-subtotal', inputSubtotal);
+        set('ledger-price-cache-subtotal', cacheSubtotal);
+        set('ledger-price-output-subtotal', outputSubtotal);
+        set('ledger-price-amount', amount);
+        return amount;
+    }
+
+    function closeLedgerPriceModal() {
+        const modal = document.getElementById('ledger-price-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    async function saveLedgerPrice() {
+        const id = document.getElementById('ledger-price-id')?.value;
+        const amount = updateLedgerPriceAmount();
+        if (!id || isNaN(amount) || amount < 0) {
+            window.alert('单价或金额无效');
+            return;
+        }
+        const reason = document.getElementById('ledger-price-reason')?.value || '';
+        try {
+            const resp = await fetch('/api/ledger/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, cost_usd: amount, reason }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+            closeLedgerPriceModal();
+            await loadDetailedLedger();
+            if (typeof loadData === 'function') loadData();
+        } catch (e) {
+            window.alert('改价失败：' + (e.message || e));
+        }
+    }
+
+    window.openLedgerPriceModal = openLedgerPriceModal;
+    window.updateLedgerPriceAmount = updateLedgerPriceAmount;
+    window.closeLedgerPriceModal = closeLedgerPriceModal;
+    window.saveLedgerPrice = saveLedgerPrice;
+
     async function loadDetailedLedger() {
+        loadTokenAlerts();
         const tableBody = document.getElementById('ledger-detailed-body');
         if (tableBody) {
             tableBody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:28px 16px;">正在读取流水...</td></tr>';

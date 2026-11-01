@@ -1,4 +1,4 @@
-﻿# 身份传输层契约
+# 身份传输层契约
 
 > 更新：2026-10-29  
 > 适用：所有通过 OpenAI 兼容 `/v1` 接入中枢的模块/宿主。  
@@ -60,6 +60,25 @@ body.user  →  X-User-Id  →  X-Actor-Id  →  正文 "昵称(uid):" 提取  �
 ```
 
 只认底层 UID；群号只进 `channel_id`，不参与身份匹配。
+
+### 2.4 插件调用链（可选）
+
+插件 A 调用插件 B 时，B 在请求里带上调用链，时间轴会把它写成 `A → B · 平台:UID`：
+
+```http
+X-Plugin-Chain: napcat,bilibili
+```
+
+也可以分开传：
+
+```http
+X-Caller-Plugin: napcat
+X-Host-Id: bilibili
+```
+
+- `X-Plugin-Chain` 优先，逗号 / `>` / `→` 分隔都行
+- 不传就退回单插件标签（`X-Host-Id` → 平台上下文的 `host_id` → 来源名）
+- 副标签始终是 `平台:发送者 UID`，不随调用链变化
 
 ---
 

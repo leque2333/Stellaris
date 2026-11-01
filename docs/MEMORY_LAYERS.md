@@ -1,4 +1,4 @@
-﻿# 记忆系统三层模型（设计稿）
+# 记忆系统三层模型（设计稿）
 
 > 更新：2026-10-28
 > 状态：v4 底座 + v7 聚合器已落库；网关记录 L1/L3；L1→L2 聚合器已实现（模板摘要）。
@@ -312,6 +312,69 @@ aiocqhttp:FriendMessage:2986371638 → (private, 2986371638)
 带 GroupMessage 头 → timeline_segments: (qq, group, 784826874)
 带 FriendMessage 头 → timeline_segments: (qq, private, 2986371638)
 ```
+
+### 4.3.1 调参面板（2026-10-31）
+
+控制台「设置 → 记忆调参」子页：左侧调预算 / 候选池 / 聚合窗口，右侧实时预览
+「按当前预算注入多少字、覆盖多少条、三档压缩各占多少」。
+
+参数优先级固定为：**环境变量 > `data/memory_settings.json` > 内置默认值**。
+被环境变量接管的字段会在面板里标黄并禁用，避免网页点击悄悄覆盖部署配置。
+
+| 参数 | 默认 | 环境变量 | 作用 |
+|---|---|---|---|
+| 时间轴注入预算 | 3000 字 | `HUB_TIMELINE_BUDGET` | 每轮整段注入上限 |
+| 时间轴常驻上限 | 4000 字 | `HUB_TIMELINE_KEEP` | 超出搬进缓冲区 |
+| 单次回忆预算 | 2000 字 | `HUB_RECALL_MAX_CHARS` | 一次主动检索的字数闸门 |
+| 候选池字数 | 300000 字 | `HUB_RECALL_CHARS` | 召回前铺候选池的预算 |
+| 候选条数上限 | 3000 条 | `HUB_RECALL_CANDIDATES` | 数据库层安全阀 |
+| 回看天数 | 0 | `HUB_RECALL_DAYS` | 0 = 不按时间窗 |
+| 近因半衰期 | 168 小时 | `HUB_RECALL_HALF_LIFE_HOURS` | 时间衰减速度 |
+| 静默切段窗口 | 600 秒 | `HUB_AGGREGATOR_IDLE_SECONDS` | L1→L2 切段 |
+| 单段最长时长 | 7200 秒 | `HUB_AGGREGATOR_MAX_DURATION_SECONDS` | 强制结算 |
+| 聚合扫描间隔 | 30 秒 | `HUB_AGGREGATOR_INTERVAL_SECONDS` | 后台 tick |
+| 记忆检索指令 | 开 | `HUB_MEMORY_TOOL` | `[[记忆检索: ...]]` |
+| 自动预取记忆 | 关 | `HUB_MEMORY_PREFETCH` | 每轮先猜关键词查库 |
+
+保存后立即生效，不需要重启；聚合器在下一轮 tick 读取新窗口。
+面板另提供「省 Token / 均衡 / 记得久」三档预设，只改数值，不动两个开关。
+
+### 4.3.2 时间轴职责边界：人的请求与工具调用
+
+时间轴记的是**插件交互事件**，不是 AstrBot 内部的工具执行日志。
+
+```text
+人在 QQ 里说「给我生一张图」
+  → 中枢收到请求，确定发起人档案
+  → 模型发起 tool_call: generate_image
+  → 中枢记一条：generate_image · qq · 乐阙
+  → AstrBot 执行工具（成功/失败都归 AstrBot 日志）
+  → 模型再次回复时，中枢再记一条：napcat · qq · 乐阙
+```
+
+展示规则：插件 / 平台 / 人员拆成独立标签。
+
+| 展示标签 | 来源 | 示例 |
+|---|---|---|
+| 插件标签 | `tag_primary` | `napcat`、`generate_image` |
+| 平台标签 | 事件 platform（有才显示） | `qq`、`bilibili`、`web` |
+| 人员标签 | 档案显示名；无档案才显示 UID | `乐阙`、`2622164205` |
+
+- 人员标签有档案时用 `archives.display_name`，并按 role 着色：管理员红色、访客灰色、系统青色。
+- 没有档案时才回落到 UID，并在标签里带平台上下文。
+- 数据库仍存三列：`tag_primary` 插件、`tag_secondary` 档案 ID/UID、`tag_permission` 角色。
+- UID 仍参与身份映射和权限校验；只有没有档案时才作为人员标签展示。
+- 群聊正文可带 `【群名】` 前缀；人员标签不用群号代替人。
+
+**中枢不负责**：
+
+- 工具实际执行成功还是失败、重试、异常堆栈 → AstrBot 内部日志
+- 图片/文件最终怎么发回 QQ → AstrBot 传输层
+
+**一个边界**：如果 AstrBot 执行完工具后**没有再请求一次中枢**，而是直接把结果发回用户，那么「最终回复」这条时间轴记录不会出现；中枢只留下工具请求那条。按正常 AI 流程再次经过中枢时，前后两条都会有。
+
+`X-Plugin-Chain` / `X-Caller-Plugin` + `X-Host-Id` 只作为可选的调用链增强；
+不传就按单插件记，不要求插件改造。
 
 ### 4.4 上下文占用
 

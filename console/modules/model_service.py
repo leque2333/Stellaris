@@ -264,7 +264,81 @@ def reset_credits_and_balances(config_path=None):
     return cfg
 
 
-def get_model_pricing_map():
+def _minutes(value) -> int:
+    """HH:MM → 当天分钟数；非法返回 -1。"""
+    try:
+        hour, minute = str(value or "").strip().split(":", 1)
+        return max(0, min(1439, int(hour) * 60 + int(minute)))
+    except Exception:
+        return -1
+
+
+def _in_price_window(start: str, end: str, at: float, weekdays=None) -> bool:
+    begin, finish = _minutes(start), _minutes(end)
+    if begin < 0 or finish < 0:
+        return False
+    now = time.localtime(at)
+    if not _weekday_in(weekdays, now.tm_wday + 1):
+        return False
+    current = now.tm_hour * 60 + now.tm_min
+    if begin <= finish:
+        return begin <= current < finish
+    return current >= begin or current < finish
+
+
+def _weekday_in(value, weekday: int) -> bool:
+    """weekdays 支持 [1..5] / '1-5' / 'mon-fri' / '1,3,5'；空表示每天。"""
+    if value in (None, "", []):
+        return True
+    if isinstance(value, (list, tuple, set)):
+        values = {int(x) for x in value if str(x).strip().isdigit()}
+        return weekday in values
+    text = str(value).strip().lower()
+    names = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+    values = set()
+    for part in text.split(","):
+        part = part.strip()
+        if "-" in part:
+            left, right = part.split("-", 1)
+            start = names.get(left, int(left) if left.isdigit() else 0)
+            end = names.get(right, int(right) if right.isdigit() else 0)
+            if start and end:
+                if start <= end:
+                    values.update(range(start, end + 1))
+                else:
+                    values.update(range(start, 8))
+                    values.update(range(1, end + 1))
+        elif part:
+            values.add(names.get(part, int(part) if part.isdigit() else 0))
+    return weekday in {int(x) for x in values if x}
+
+
+def resolve_credential_price(cred: dict, at: float | None = None) -> dict:
+    """凭证价格：命中分时段就返回该段，否则回退基础单价。"""
+    flat = {
+        "input": cred.get("input_price", 0.0),
+        "output": cred.get("output_price", 0.0),
+        "cache": cred.get("cache_price", 0.0),
+    }
+    schedule = cred.get("price_schedule")
+    if not isinstance(schedule, list) or not schedule:
+        return flat
+    moment = time.time() if at is None else float(at)
+    for item in schedule:
+        if not isinstance(item, dict):
+            continue
+        if _in_price_window(
+            item.get("start"), item.get("end"), moment, item.get("weekdays")
+        ):
+            return {
+                "input": item.get("input_price", flat["input"]),
+                "output": item.get("output_price", flat["output"]),
+                "cache": item.get("cache_price", flat["cache"]),
+            }
+    return flat
+
+
+def get_model_pricing_map(at: float | None = None):
     cfg = get_models_config()
     pricing = {}
     for m in cfg.get("preset_templates", []):
@@ -284,11 +358,7 @@ def get_model_pricing_map():
         for cred in cfg.get(pool, []) or []:
             model_id = str(cred.get("model") or "").strip()
             if model_id:
-                pricing[model_id] = {
-                    "input": cred.get("input_price", 0.0),
-                    "output": cred.get("output_price", 0.0),
-                    "cache": cred.get("cache_price", 0.0),
-                }
+                pricing[model_id] = resolve_credential_price(cred, at)
     return pricing
 
 _RECHARGE_SOURCES = ('人工充值', '账户充值', '系统注资')
@@ -825,6 +895,48 @@ def _build_recent_item(row) -> dict:
     return item
 
 
+def _recent_unit_prices(row, cfg: dict) -> dict:
+    """还原这笔流水用于计算的三个单价；按实际金额等比校准。"""
+    kind = str(row["credential_type"] or "").lower()
+    pools = []
+    if kind == "master":
+        pools = [cfg.get("master_credentials") or []]
+    elif kind == "function":
+        pools = [cfg.get("function_credentials") or []]
+    else:
+        pools = [cfg.get("master_credentials") or [], cfg.get("function_credentials") or []]
+    cred = None
+    for pool in pools:
+        for item in pool:
+            if str(item.get("model") or "") == str(row["model_id"] or ""):
+                cred = item
+                break
+        if cred:
+            break
+    if cred:
+        price = resolve_credential_price(cred, float(row["timestamp"] or time.time()))
+        unit = {
+            "input": float(price.get("input", 0.0) or 0.0),
+            "cache": float(price.get("cache", 0.0) or 0.0),
+            "output": float(price.get("output", 0.0) or 0.0),
+        }
+    else:
+        unit = {"input": 0.0, "cache": 0.0, "output": 0.0}
+    tokens_in = float(row["input_tokens"] or 0)
+    tokens_cache = float(row["cache_tokens"] or 0)
+    tokens_out = float(row["output_tokens"] or 0)
+    total_tokens = tokens_in + tokens_cache + tokens_out
+    actual = float(row["cost_usd"] or 0)
+    estimated = (tokens_in * unit["input"] + tokens_cache * unit["cache"] + tokens_out * unit["output"]) / 1_000_000
+    if estimated > 0 and actual > 0:
+        factor = actual / estimated
+        unit = {key: value * factor for key, value in unit.items()}
+    elif actual > 0 and total_tokens > 0:
+        blended = actual * 1_000_000 / total_tokens
+        unit = {"input": blended, "cache": blended, "output": blended}
+    return {key: round(value, 6) for key, value in unit.items()}
+
+
 def _fetch_recent_entries(cursor, limit: int = 30) -> list:
     """最近若干条明细，账本页和概览页共用同一份。"""
     cursor.execute("""
@@ -835,7 +947,14 @@ def _fetch_recent_entries(cursor, limit: int = 30) -> list:
         ORDER BY timestamp DESC
         LIMIT ?
     """, (limit,))
-    return [_build_recent_item(row) for row in cursor.fetchall()]
+    cfg = get_models_config()
+    items = []
+    for row in cursor.fetchall():
+        item = _build_recent_item(row)
+        if not item.get("is_recharge"):
+            item["unit_prices"] = _recent_unit_prices(row, cfg)
+        items.append(item)
+    return items
 
 
 def _sum_costs_by_currency(buckets: list, field_name: str) -> dict:

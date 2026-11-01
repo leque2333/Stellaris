@@ -186,7 +186,7 @@ python scripts\check_deploy.py
 
 ```text
 ✓ 中枢端口       127.0.0.1:18895 在监听
-✓ docker 挂载   /AstrBot/data ← D:\机器人_完整版\astrbot\data
+✓ docker 挂载   /AstrBot/data ← D:/Stellaris_test/astrbot/data
 ✓ 安全配置       bind=0.0.0.0 local_only=False 签名=关
 ✓ 客户端 Key    require_key=true，3 个客户端 / 3 个 Key
 ✓ 审计日志       ... 2 个文件 · 4.7 KB · 保留 90 天

@@ -148,6 +148,27 @@ class FactStoreTest(unittest.TestCase):
         lines = self.facts.prompt_lines("1000000001", "暗号")
         self.assertEqual(lines, ["[当前事实] 测试暗号：琥珀-5521"])
 
+    def test_store_extracted_keeps_predicate(self):
+        stored = self.facts.store_extracted(
+            "master", "记住一个测试暗号：青柠-8842", use_ai=False,
+        )
+        self.assertTrue(stored)
+        rows = self.facts.list_facts(status="all", query="青柠-8842")
+        self.assertEqual(rows[0]["predicate"], "测试暗号")
+        self.assertEqual(rows[0]["value"], "青柠-8842")
+
+    def test_graph_extracts_relation_from_sentence(self):
+        self.facts.add("u1", "偏好", "喜欢二次元与技术探索，常在群内聊新番")
+        edge = self.facts.graph("u1")["edges"][0]
+        self.assertEqual(edge["predicate"], "喜欢")
+        self.assertEqual(edge["object_value"], "二次元与技术探索")
+
+    def test_graph_extracts_owner_relation(self):
+        self.facts.add("u1", "偏好", "是安桉的唯一管理员与主人，在群聊与私聊中平视相处")
+        edge = self.facts.graph("u1")["edges"][0]
+        self.assertEqual(edge["predicate"], "主人")
+        self.assertEqual(edge["object_value"], "安桉")
+
 
 if __name__ == "__main__":
     unittest.main()

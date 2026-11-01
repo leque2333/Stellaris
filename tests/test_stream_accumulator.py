@@ -5,6 +5,7 @@
 流式返回 tool_calls 时直接 TypeError（账本与时间轴都写不进去）。
 """
 
+import io
 import json
 import sys
 import unittest
@@ -14,7 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "console"))
 sys.path.insert(0, str(ROOT))
 
-from server import _join_tool_names, _StreamAccumulator  # noqa: E402
+import server  # noqa: E402
+from server import _join_tool_names, _ledger_tool_calls, _StreamAccumulator  # noqa: E402
 
 
 def _chunk(payload: dict) -> bytes:
@@ -43,6 +45,18 @@ class StreamAccumulatorTest(unittest.TestCase):
         self.assertTrue(acc.tool_calls)
         self.assertEqual(acc.tool_call_names, ["mock_tool", "other_tool"])
 
+    def test_tool_call_arguments_are_collected(self):
+        acc = _StreamAccumulator()
+        acc.feed(_chunk({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"name": "call_raw_tool", "arguments": '{"tool":'}},
+        ]}, "finish_reason": None}]}))
+        acc.feed(_chunk({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '"bilibili_hub"}'}},
+        ]}, "finish_reason": "tool_calls"}]}))
+        calls = _ledger_tool_calls(acc)
+        self.assertEqual(calls[0]["function"]["name"], "call_raw_tool")
+        self.assertIn("bilibili_hub", calls[0]["function"]["arguments"])
+
     def test_done_marker(self):
         acc = _StreamAccumulator()
         acc.feed(b"data: [DONE]\n\n")
@@ -55,6 +69,26 @@ class StreamAccumulatorTest(unittest.TestCase):
         self.assertEqual(acc.content, [])
         acc.feed(payload[12:])
         self.assertEqual(acc.content, ["拼"])
+
+    def test_stream_completion_replays_tool_calls(self):
+        handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
+        handler.wfile = io.BytesIO()
+        handler._complete_persona = lambda ctx: {
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "function": {"name": "generate_image", "arguments": "{}"},
+                }],
+            },
+            "finish_reason": "tool_calls",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+        }
+        acc = _StreamAccumulator()
+        self.assertTrue(handler._stream_completion({"req_model": "mock"}, acc))
+        self.assertEqual(acc.tool_call_names, ["generate_image"])
+        self.assertEqual(acc.finish_reason, "tool_calls")
+        self.assertIn(b"generate_image", handler.wfile.getvalue())
 
     def test_join_tool_names_dedupes_and_tolerates_bool(self):
         calls = [

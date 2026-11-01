@@ -169,6 +169,96 @@ function renderArchiveDetail(archive) {
     renderArchiveAffection(archive.affection, archive.affection_min, archive.affection_max);
     renderArchiveSettings(archive.settings || []);
     renderArchiveFacts(archive.facts || []);
+    loadArchiveToolPolicy(archive.archive_id);
+}
+
+async function loadArchiveToolPolicy(archiveId) {
+    const host = document.getElementById('archive-tool-policy');
+    if (!host) return;
+    try {
+        const [policyResp, toolsResp] = await Promise.all([
+            fetch('/api/tools/policies'),
+            fetch('/api/tools'),
+        ]);
+        const policyData = await policyResp.json();
+        const toolsData = await toolsResp.json();
+        archivesState.toolPolicies = policyData.policies || {};
+        archivesState.toolItems = Array.isArray(toolsData.tools) ? toolsData.tools : [];
+        renderArchiveToolPolicy(archiveId);
+    } catch (e) {
+        host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">工具权限加载失败</div>';
+    }
+}
+
+function renderArchiveToolPolicy(archiveId) {
+    const host = document.getElementById('archive-tool-policy');
+    if (!host) return;
+    const policy = (archivesState.toolPolicies || {})[archiveId] || { mode: 'all', tools: [] };
+    const mode = policy.mode || 'all';
+    const picked = new Set(policy.tools || []);
+    const tools = archivesState.toolItems || [];
+    host.innerHTML = `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+            <select class="form-select" id="archive-tool-policy-mode" style="max-width:180px;" onchange="onArchiveToolPolicyModeChange()">
+                <option value="all"${mode === 'all' ? ' selected' : ''}>全部工具</option>
+                <option value="allow"${mode === 'allow' ? ' selected' : ''}>仅允许勾选</option>
+                <option value="deny"${mode === 'deny' ? ' selected' : ''}>禁止勾选</option>
+            </select>
+            <button class="btn btn-secondary" onclick="saveArchiveToolPolicy('${archiveEsc(archiveId)}')">保存</button>
+            <button class="btn btn-subtle" onclick="clearArchiveToolPolicy('${archiveEsc(archiveId)}')">清除</button>
+        </div>
+        <div id="archive-tool-policy-tools" style="display:${mode === 'all' ? 'none' : 'flex'};flex-wrap:wrap;gap:6px 14px;">
+            ${tools.map((tool) => `
+                <label style="font-size:12px;display:flex;align-items:center;gap:5px;">
+                    <input type="checkbox" value="${archiveEsc(tool.name)}" ${picked.has(tool.name) ? 'checked' : ''}>
+                    <span>${archiveEsc(tool.name)}</span>
+                </label>`).join('')}
+        </div>`;
+}
+
+function onArchiveToolPolicyModeChange() {
+    const mode = document.getElementById('archive-tool-policy-mode')?.value || 'all';
+    const tools = document.getElementById('archive-tool-policy-tools');
+    if (tools) tools.style.display = mode === 'all' ? 'none' : 'flex';
+}
+
+async function saveArchiveToolPolicy(archiveId) {
+    const mode = document.getElementById('archive-tool-policy-mode')?.value || 'all';
+    const tools = Array.from(document.querySelectorAll('#archive-tool-policy-tools input:checked')).map((el) => el.value);
+    if (mode !== 'all' && !tools.length) {
+        if (typeof showToast === 'function') showToast('白名单/黑名单至少要勾一个工具');
+        return;
+    }
+    try {
+        const resp = await fetch('/api/tools/policy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archive_id: archiveId, mode, tools }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+            if (typeof showToast === 'function') showToast(data.error || '保存失败');
+            return;
+        }
+        if (typeof showToast === 'function') showToast('工具权限已保存');
+        await loadArchiveToolPolicy(archiveId);
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('保存失败');
+    }
+}
+
+async function clearArchiveToolPolicy(archiveId) {
+    try {
+        await fetch('/api/tools/policy/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ archive_id: archiveId }),
+        });
+        if (typeof showToast === 'function') showToast('已清除');
+        await loadArchiveToolPolicy(archiveId);
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('清除失败');
+    }
 }
 
 async function loadArchives() {

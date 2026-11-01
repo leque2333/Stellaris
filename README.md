@@ -2,7 +2,7 @@
 
 > 一个只负责**人格、档案、记忆、模型路由与 Token 账本**的智能体中枢。
 >
-> 平台接入和工具执行交给外部；中枢通过 OpenAI 兼容的 `/v1` 接口提供统一的大脑。
+> 平台接入和外部工具执行交给外部；中枢通过 OpenAI 兼容的 `/v1` 接口提供统一的大脑，并保留少量管理员系统工具。
 
 ![仪表盘](docs/images/dashboard.png)
 
@@ -59,8 +59,16 @@ curl http://127.0.0.1:18895/v1/chat/completions \
 设计文档：
 
 - [架构总览](docs/ARCHITECTURE.md)
+- [记忆模块架构](docs/MEMORY_MODULE.md)
+- [功能挂载架构](docs/FUNCTION_MOUNTING.md)
 - [记忆分层](docs/MEMORY_LAYERS.md)
 - [工具货架](docs/TOOL_SHELVES.md)
+- [插件接入契约](docs/PLUGIN_ADAPTERS.md)
+- [记忆库导出与导入](docs/MEMORY_PORTABILITY.md)
+- [Token 预警](docs/TOKEN_ALERTS.md)
+- [账本查询系统工具](docs/LEDGER_TOOL.md)
+- [模型价格与峰谷时段](docs/MODEL_PRICING.md)
+- [宿主机电脑控制](docs/HOST_CONTROL.md)
 - [档案画像](docs/ARCHIVE_PROFILE.md)
 - [AstrBot 接入](docs/ASTRBOT_SETUP.md)
 - [安全总览](docs/SECURITY.md)（信任边界 / 六层防护 / 已知短板）

@@ -18,6 +18,36 @@ from typing import Any, Dict, List, Optional
 from ..storage import get_store
 from .graph_store import GraphStore
 
+_CATEGORY_LABELS = {
+    "preference": "偏好",
+    "identity": "身份",
+    "relationship": "关系",
+    "plan": "计划",
+}
+
+# 事实是整句，关系视图要从句子里抽出「谓词 + 客体」，不能整句照搬
+_RELATION_RULES = (
+    (re.compile(r"^是(?P<obj>.+?)的(?:唯一)?(?:主人|管理员)"), "主人"),
+    (re.compile(r"^喜欢(?P<obj>[^，。]+)"), "喜欢"),
+    (re.compile(r"^讨厌(?P<obj>[^，。]+)"), "讨厌"),
+    (re.compile(r"^平时?使用(?P<obj>[^，。]+)"), "使用"),
+    (re.compile(r"^住在(?P<obj>[^，。]+)"), "住在"),
+    (re.compile(r"^养了(?P<obj>[^，。]+)"), "养了"),
+    (re.compile(r"^答应(?:给)?(?P<obj>[^，。]+?)(?:作为|，|$)"), "承诺给"),
+)
+
+
+def _relation_of(predicate: str, value: str):
+    """从一条事实里抽关系；抽不到就退回 category + 原文。"""
+    text = str(value or "").strip()
+    for pattern, label in _RELATION_RULES:
+        match = pattern.search(text)
+        if match:
+            return label, _clean(match.group("obj"))
+    if predicate and predicate not in ("偏好", "preference", "事实"):
+        return predicate, text
+    return predicate or "事实", text
+
 
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n，。；;：:")
@@ -415,6 +445,39 @@ class FactStore:
                 "ON memory_relations(subject_id, status)"
             )
 
+    def _user_fact_view(self, row: Any, status: Optional[str] = None) -> Dict[str, Any]:
+        """把 user_facts 行映射成旧 memory_facts 形状，兼容控制台字段。"""
+        data = dict(row)
+        created = float(data.get("created_at") or 0)
+        updated = float(data.get("updated_at") or created)
+        state = str(status or data.get("status") or "active")
+        return {
+            "fact_id": data.get("fact_id", ""),
+            "subject_id": data.get("user_id", ""),
+            "predicate": _CATEGORY_LABELS.get(
+                str(data.get("category") or ""), data.get("category") or "事实"
+            ),
+            "value": data.get("content") or "",
+            "valid_at": created,
+            "invalid_at": None if state == "active" else updated,
+            "created_at": created,
+            "expired_at": None if state == "active" else updated,
+            "confidence": 1.0,
+            "status": state,
+            "source_event_id": "",
+            "metadata": {
+                "source": data.get("source") or "",
+                "supersedes_id": data.get("supersedes_id") or "",
+            },
+        }
+
+    def _fetch_user_fact(self, fact_id: str) -> Optional[Dict[str, Any]]:
+        with self.store._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_facts WHERE fact_id = ?", (str(fact_id),)
+            ).fetchone()
+        return self._user_fact_view(row) if row else None
+
     def add(
         self,
         subject_id: str,
@@ -432,81 +495,79 @@ class FactStore:
         if not subject_id or not predicate or not value:
             return {}
         now = time.time()
-        valid_at = float(valid_at or now)
+        valid = float(valid_at or now)
+        pending = float(confidence) < 0.65
         with self.store._tx() as conn:
             old = conn.execute(
-                "SELECT * FROM memory_facts WHERE subject_id = ? AND predicate = ? "
-                "AND status = 'active' ORDER BY valid_at DESC LIMIT 1",
+                "SELECT * FROM user_facts WHERE user_id = ? AND category = ? "
+                "AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
                 (subject_id, predicate),
             ).fetchone()
-            if old and _clean(old["value"]) == value:
+            if old and _clean(old["content"]) == value:
                 conn.execute(
-                    "UPDATE memory_facts SET created_at = ?, confidence = ?, "
-                    "source_event_id = COALESCE(NULLIF(?, ''), source_event_id) "
-                    "WHERE fact_id = ?",
-                    (now, float(confidence), source_event_id, old["fact_id"]),
+                    "UPDATE user_facts SET updated_at = ? WHERE fact_id = ?",
+                    (now, old["fact_id"]),
                 )
-                return dict(old)
-            pending = float(confidence) < 0.65 or (bool(require_confirmation) and old is not None)
-            old_fact_id = old["fact_id"] if old else ""
+                return self._user_fact_view(old)
+            if old and require_confirmation:
+                pending = True
+            old_id = old["fact_id"] if old else ""
             if old and not pending:
                 conn.execute(
-                    "UPDATE memory_facts SET invalid_at = ?, expired_at = ?, status = 'superseded' "
-                    "WHERE fact_id = ?",
-                    (valid_at, now, old["fact_id"]),
+                    "UPDATE user_facts SET status = 'superseded', updated_at = ? WHERE fact_id = ?",
+                    (now, old["fact_id"]),
                 )
             fact_id = f"fact_{uuid.uuid4().hex[:12]}"
-            status = "pending" if pending else "active"
             conn.execute(
-                """
-                INSERT INTO memory_facts
-                (fact_id, subject_id, predicate, value, valid_at, invalid_at,
-                 created_at, expired_at, confidence, status, source_event_id, metadata)
-                VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?)
-                """,
+                "INSERT INTO user_facts "
+                "(fact_id, user_id, category, content, status, supersedes_id, created_at, updated_at, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    fact_id, subject_id, predicate, value, valid_at, now,
-                    float(confidence), status, source_event_id,
-                    json.dumps({"source": "extract"}, ensure_ascii=False),
+                    fact_id, subject_id, predicate, value,
+                    "pending" if pending else "active",
+                    old_id or None, valid, now, "ai_extract",
                 ),
             )
-        if old_fact_id and not pending:
-            self._deactivate_relations(old_fact_id)
-        fact = self.get(fact_id) or {}
-        if fact:
-            self._index_fact(fact)
-        return fact
-
-    def _index_fact(self, fact: Dict[str, Any]) -> None:
-        self.graph_store.index_fact(fact)
-
-    def _deactivate_relations(self, fact_id: str) -> None:
-        self.graph_store.deactivate_fact(fact_id)
+            row = conn.execute("SELECT * FROM user_facts WHERE fact_id = ?", (fact_id,)).fetchone()
+        return self._user_fact_view(row)
 
     def graph(self, subject_id: str) -> Dict[str, Any]:
-        return self.graph_store.graph(subject_id)
+        """实体关系直接由当前生效事实生成，避免图库与事实表双写漂移。"""
+        rows = self.list_facts(subject_id=subject_id, status="active")
+        edges = []
+        for item in rows:
+            predicate, object_value = _relation_of(item["predicate"], item["value"])
+            edges.append({
+                "relation_id": "rel_" + item["fact_id"],
+                "subject_id": item["subject_id"],
+                "predicate": predicate,
+                "object_value": object_value,
+                "fact_id": item["fact_id"],
+                "status": "active",
+                "valid_at": item["valid_at"],
+                "invalid_at": None,
+                "source_event_id": "",
+                "created_at": item["created_at"],
+            })
+        nodes = []
+        if subject_id and rows:
+            nodes.append({
+                "entity_id": "person_" + str(subject_id),
+                "entity_type": "person",
+                "name": str(subject_id),
+                "person_id": str(subject_id),
+                "created_at": rows[-1]["created_at"],
+                "updated_at": rows[0]["valid_at"],
+            })
+        return {"nodes": nodes, "edges": edges}
 
     def get(self, fact_id: str) -> Optional[Dict[str, Any]]:
-        with self.store._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM memory_facts WHERE fact_id = ?", (str(fact_id),)
-            ).fetchone()
-        return dict(row) if row else None
+        return self._fetch_user_fact(fact_id)
 
     def search(self, subject_id: str, query: str = "", limit: int = 12) -> List[Dict[str, Any]]:
-        subject_id = str(subject_id or "").strip()
-        if not subject_id:
-            return []
-        with self.store._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM memory_facts WHERE subject_id = ? AND status = 'active' "
-                "ORDER BY valid_at DESC LIMIT ?",
-                (subject_id, int(limit)),
-            ).fetchall()
-        items = [dict(row) for row in rows]
+        items = self.list_facts(subject_id=subject_id, status="active", limit=limit)
         query = _clean(query)
         if query:
-            # 先精确子串，再按谓词命中排序；没有命中的事实仍可作为背景事实保留
             for item in items:
                 text = f"{item['predicate']} {item['value']}"
                 item["_score"] = 2 if query in text else 1
@@ -514,15 +575,15 @@ class FactStore:
         return items
 
     def facts_at(self, subject_id: str, at_time: float) -> List[Dict[str, Any]]:
-        """时间点查询：某个时刻有效的事实。"""
+        """时间点查询：看当时有效的事实；user_facts 用 updated_at 作为失效时间。"""
         with self.store._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM memory_facts WHERE subject_id = ? AND status != 'deleted' "
-                "AND valid_at <= ? AND (invalid_at IS NULL OR invalid_at > ?) "
-                "ORDER BY valid_at DESC",
+                "SELECT * FROM user_facts WHERE user_id = ? AND created_at <= ? "
+                "AND status != 'deleted' AND (status = 'active' OR updated_at > ?) "
+                "ORDER BY created_at DESC",
                 (str(subject_id or ""), float(at_time), float(at_time)),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._user_fact_view(row, status="active") for row in rows]
 
     def list_facts(
         self,
@@ -536,83 +597,64 @@ class FactStore:
         params: List[Any] = []
         subject_id = str(subject_id or "").strip()
         if subject_id:
-            clauses.append("subject_id = ?")
+            clauses.append("user_id = ?")
             params.append(subject_id)
         if status and status != "all":
             clauses.append("status = ?")
             params.append(status)
         if query:
-            clauses.append("(predicate LIKE ? OR value LIKE ?)")
+            clauses.append("(category LIKE ? OR content LIKE ?)")
             like = f"%{query}%"
             params.extend([like, like])
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(int(limit))
         with self.store._connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM memory_facts {where} ORDER BY valid_at DESC LIMIT ?",
+                f"SELECT * FROM user_facts {where} ORDER BY created_at DESC LIMIT ?",
                 tuple(params),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._user_fact_view(row) for row in rows]
 
     def update_value(self, fact_id: str, value: str) -> Optional[Dict[str, Any]]:
-        fact = self.get(fact_id)
-        if not fact:
+        now = time.time()
+        try:
+            with self.store._tx() as conn:
+                cur = conn.execute(
+                    "UPDATE user_facts SET content = ?, status = 'active', updated_at = ? "
+                    "WHERE fact_id = ?",
+                    (_clean(value), now, str(fact_id)),
+                )
+                if not cur.rowcount:
+                    return None
+        except Exception:
             return None
-        return self.add(
-            fact["subject_id"],
-            fact["predicate"],
-            value,
-            source_event_id=fact.get("source_event_id") or "",
-            confidence=float(fact.get("confidence") or 1.0),
-        )
+        return self._fetch_user_fact(fact_id)
 
     def delete(self, fact_id: str) -> bool:
         with self.store._tx() as conn:
-            row = conn.execute(
-                "SELECT fact_id FROM memory_facts WHERE fact_id = ?", (str(fact_id),)
-            ).fetchone()
-            if not row:
-                return False
-            now = time.time()
-            conn.execute(
-                "UPDATE memory_facts SET status = 'deleted', invalid_at = ?, expired_at = ? "
-                "WHERE fact_id = ?",
-                (now, now, str(fact_id)),
+            cur = conn.execute(
+                "UPDATE user_facts SET status = 'deleted', updated_at = ? WHERE fact_id = ?",
+                (time.time(), str(fact_id)),
             )
-        self._deactivate_relations(fact_id)
-        return True
+        return bool(cur.rowcount)
 
     def rollback(self, fact_id: str) -> Optional[Dict[str, Any]]:
-        """把一条历史/待确认事实恢复为当前；当前同谓词事实自动失效。"""
-        fact = self.get(fact_id)
+        """把历史/待确认事实设回当前；同类别当前事实自动失效。"""
+        fact = self._fetch_user_fact(fact_id)
         if not fact:
             return None
         now = time.time()
-        current_id = ""
         with self.store._tx() as conn:
-            current = conn.execute(
-                "SELECT fact_id FROM memory_facts WHERE subject_id = ? AND predicate = ? "
-                "AND status = 'active' AND fact_id != ? LIMIT 1",
-                (fact["subject_id"], fact["predicate"], str(fact_id)),
-            ).fetchone()
-            if current:
-                current_id = current["fact_id"]
-                conn.execute(
-                    "UPDATE memory_facts SET status = 'superseded', invalid_at = ?, expired_at = ? "
-                    "WHERE fact_id = ?",
-                    (now, now, current["fact_id"]),
-                )
             conn.execute(
-                "UPDATE memory_facts SET status = 'active', valid_at = ?, invalid_at = NULL, "
-                "expired_at = NULL, created_at = ? WHERE fact_id = ?",
-                (now, now, str(fact_id)),
+                "UPDATE user_facts SET status = 'superseded', updated_at = ? "
+                "WHERE user_id = ? AND category = ? AND status = 'active' AND fact_id != ?",
+                (now, fact["subject_id"], fact["predicate"], str(fact_id)),
             )
-        if current_id:
-            self._deactivate_relations(current_id)
-        restored = self.get(fact_id)
-        if restored:
-            self._index_fact(restored)
-        return restored
+            conn.execute(
+                "UPDATE user_facts SET status = 'active', updated_at = ? WHERE fact_id = ?",
+                (now, str(fact_id)),
+            )
+        return self._fetch_user_fact(fact_id)
 
     def confirm(self, fact_id: str) -> Optional[Dict[str, Any]]:
         return self.rollback(fact_id)
@@ -691,7 +733,7 @@ class FactStore:
             fact_id = pm.add_fact(
                 subject_id,
                 value,
-                category=str(item.get("category") or "preference"),
+                category=str(item.get("category") or item.get("predicate") or "preference"),
                 source=source,
             )
             if fact_id:

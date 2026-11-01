@@ -2,7 +2,7 @@
 
 > 一个只负责**人格、档案、记忆、模型路由与 Token 账本**的智能体中枢。
 >
-> 平台接入、工具执行、消息收发全部交给外部；中枢通过 OpenAI 兼容的 `/v1` 接口提供统一的大脑。
+> 平台接入、外部工具执行、消息收发交给外部；中枢通过 OpenAI 兼容的 `/v1` 接口提供统一的大脑，并保留少量管理员系统工具。
 
 ```text
 一处记忆，万物投射
@@ -86,6 +86,40 @@ archive_settings    用户自定义设定（AI 不可改）
 
 三条召回线索：相似度、近因衰减、重要度，外加单模块配额，避免某类事件霸屏。
 
+时间轴展示拆成三个独立标签：
+
+```text
+[插件] [平台] [人员]
+```
+
+人员有档案时显示档案名，管理员/访客用颜色区分；没有档案才显示 UID。
+
+### 记忆模块
+
+```text
+L1 单次调用上下文
+L2 agent_timeline   连续经历 + 插件/档案/权限
+L3 memory_details   长原文
+   user_facts       长期事实
+   memory_digests   摘要
+   timeline_buffer  旧事件缓冲区
+```
+
+设置 → 记忆库可以查看占用、导出原生 JSON、一键导入 JSONL / ChatGPT / 纯文本。导入前自动备份。
+
+### 功能挂载
+
+外部工具仍由宿主执行；中枢只做分类、权限和结果压缩。
+
+中枢原生系统工具是例外，由中枢本地执行：
+
+```text
+hub_host_control    宿主机备用控制
+hub_ledger_query    只读账本查询
+```
+
+两者都只对管理员开放，并写审计。
+
 ### Token 账本
 
 按「通道 + 工具」归因：
@@ -132,7 +166,9 @@ Header   : X-Channel: <通道名>   X-User-Id: <实体 ID>
 
 ## 设计取舍
 
-**中枢不做平台协议，也不执行工具。** 这一条决定了整个架构：中枢没有 QQ SDK、没有浏览器、没有 shell，它只输出文本和工具调用意图，由外部执行。
+**中枢不做平台协议，也不执行外部工具。** 中枢没有 QQ SDK、没有浏览器；外部工具仍由宿主执行。
+
+只有少数系统工具（宿主机备用控制、账本只读查询）由中枢本地执行，必须管理员身份 + 系统工具开关 + 审计。
 
 好处是加一个新平台不用改中枢；代价是中枢永远是"半个人"，必须挂在一个外部端上才能说话。
 
@@ -143,8 +179,12 @@ Header   : X-Channel: <通道名>   X-User-Id: <实体 ID>
 ## 文档
 
 - [架构总览](docs/ARCHITECTURE.md)
+- [记忆模块架构](docs/MEMORY_MODULE.md)
+- [功能挂载架构](docs/FUNCTION_MOUNTING.md)
 - [记忆分层](docs/MEMORY_LAYERS.md)
 - [工具货架](docs/TOOL_SHELVES.md)
+- [插件接入契约](docs/PLUGIN_ADAPTERS.md)
+- [账本查询工具](docs/LEDGER_TOOL.md)
 - [档案画像](docs/ARCHIVE_PROFILE.md)
 - [身份映射](docs/IDENTITY_SCAN.md)
 - [存储结构](docs/STORAGE.md)

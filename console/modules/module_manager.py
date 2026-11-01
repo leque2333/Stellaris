@@ -75,14 +75,14 @@ _NAPCAT_HOST = {
 
 _BRIDGE_HOST = {
     "id": "host_pc",
-    "name": "宿主机 Antigravity 控制桥梁",
-    "description": "与本地 Antigravity 宿主机通信的系统级自动化执行桥梁。",
+    "name": "宿主机控制桥",
+    "description": "通过本地 HTTP 控制 Windows 宿主机（PowerShell / 状态 / 截图 / 锁屏）。",
     "author": "Deepmind AGY",
     "version": "2.0.0",
     "category": "系统核心",
     "type": "host",
     "endpoint": "http://127.0.0.1:8765",
-    "protocol": "Antigravity Bridge IPC",
+    "protocol": "Host Bridge HTTP",
     "tools": ["execute_terminal_task", "query_host_state"],
     "commands": ["/bridge ping", "/bridge status"],
     "needs_llm_injection": False,
@@ -194,7 +194,7 @@ def scan_real_system_topology():
     hosts = [dict(_ASTRBOT_HOST, submods=_scan_astrbot_plugins(plugins_dir))]
     for directory, payload in (
         (os.path.join(runtime_root, "napcat"), _NAPCAT_HOST),
-        (os.path.join(runtime_root, "antigravity_bridge"), _BRIDGE_HOST),
+        (os.path.join(runtime_root, "host_bridge"), _BRIDGE_HOST),
     ):
         if os.path.exists(directory):
             hosts.append(dict(payload))

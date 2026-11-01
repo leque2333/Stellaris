@@ -20,6 +20,7 @@ TIMELINE_COLUMNS = {
     "plugin_id": "TEXT",
     "tag_primary": "TEXT",
     "tag_secondary": "TEXT",
+    "tag_permission": "TEXT DEFAULT ''",
     "segment_id": "TEXT",
     "started_at": "REAL",
     "ended_at": "REAL",
@@ -317,7 +318,7 @@ def classify_source(source_module: str, metadata: Dict[str, Any]) -> Tuple[str, 
         secondary = meta.get("up_name") or meta.get("video_title") or "巡检"
         return "bilibili", "B站", str(secondary)
 
-    if src in ("pc_bridge", "host_control", "antigravity_bridge"):
+    if src in ("pc_bridge", "host_control", "host_bridge", "antigravity_bridge"):
         return "host_control", "宿主机", str(meta.get("task") or meta.get("action") or "系统操作")
 
     if src.startswith("cli"):
@@ -832,6 +833,13 @@ def _v27_timeline_buffer(conn: sqlite3.Connection) -> None:
     )
 
 
+def _v28_timeline_permission(conn: sqlite3.Connection) -> None:
+    """时间轴权限标签：与发起人档案标签分离。"""
+    existing = _columns(conn, "agent_timeline")
+    if "tag_permission" not in existing:
+        conn.execute("ALTER TABLE agent_timeline ADD COLUMN tag_permission TEXT DEFAULT ''")
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _v1_baseline),
     (2, "timeline_tags_plugins_ledger", _v2_timeline_and_plugins),
@@ -860,6 +868,7 @@ MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (25, "affection_range_and_settings", _v25_affection_range_and_settings),
     (26, "token_usage_tools", _v26_token_usage_tools),
     (27, "timeline_buffer", _v27_timeline_buffer),
+    (28, "timeline_permission", _v28_timeline_permission),
 ]
 
 

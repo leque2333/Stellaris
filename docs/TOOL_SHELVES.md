@@ -92,6 +92,70 @@ system 侧只有：类别清单（`key 中文名：一句话简介`）+ 输出�
 
 打开后 `categories.*.hint` 会进入 prompt，模型开始按情境联想。**建议等真的接上音乐/灯控工具再开**——现在影音类只有 `generate_image` / `check_image_quota`，联想出来的工具也没法放歌。
 
+### 2.5 动态工具申请（2026-10-31）
+
+主 AI 发现当前工具表里没有合适工具时，可以调中枢注入的元工具：
+
+```text
+hub_request_tools(intent, max_tools)
+```
+
+中枢只做三件事：
+
+1. 从**本次请求的全量工具**里，按客户端 / 档案权限过滤
+2. 按意图关键词挑最多 5 个（默认 3 个）
+3. 把这些 schema 加进下一轮工具表，再问模型一次
+
+它**不执行工具**；真正的 tool_call 仍由 AstrBot 执行。
+
+- 每轮默认最多申请 **2 次**，`HUB_DYNAMIC_TOOL_ROUNDS` 可调到 4；每次最多 5 个工具
+- 流式请求也支持：动态工具场景先完整生成（含申请/加载/真实 tool_call），再回放成 SSE；这一轮没有增量输出
+- 已可见的工具不会重复加载
+- 宿主机/高权限工具仍受 `client_denied` + 档案策略约束
+- **申请有独立审计**：`audit_log` 记录 `dynamic_tool_request`（人、客户端、意图、申请数、实际加载工具）
+- **申请有独立指标**：`metrics.snapshot()["dynamic"]` 记录申请次数、加载数、错误、P95 延迟；申请本身仍不写时间轴，真正调用工具才写
+- 关闭：`HUB_DYNAMIC_TOOLS=0`
+
+### 2.6 宿主机控制（2026-10-31）
+
+两套入口，都只对管理员开放：
+
+| 入口 | 工具 | 执行位置 |
+|---|---|---|
+| AstrBot 主入口 | `control_host_pc_via_antigravity` | AstrBot 插件 → `host_bridge`（宿主机） |
+| 中枢备用 | `hub_host_control` | 中枢进程直接跑 PowerShell / 截图 / 锁屏 |
+
+- 主入口支持 `auto / status / powershell / screenshot / lock`
+- 备用入口动作相同；主入口不可用时由主 AI 自动改用 `hub_host_control`
+- 两边都走管理员校验；宿主机工具还会按**档案身份**过滤：发送者 UID 必须映射到 `archives.role=admin`，映射到 guest 或没有 UID 都不给
+- 每次备用调用写 `audit_log` 的 `host_control` 事件（人、客户端、action、命令、结果）
+- 关闭备用：`HUB_HOST_CONTROL=0`
+- 备用控制轮数：`HUB_HOST_CONTROL_ROUNDS`（默认 2，最高 4）
+
+风险边界：当前是**管理员全量 PowerShell**，不是白名单。Bridge 仍用 Token + admin_id
+双重校验；中枢备用用「管理员客户端 + 身份映射到 admin 档案」双重校验。不要把管理员 Key 给访客。
+
+### 2.7 工具页「系统工具」
+
+两个宿主机控制不再散落在代码里，统一注册到 `system_tools` 元数据，工具页按通用字段展示：
+
+```text
+control_host_pc_via_antigravity  系统工具 · 主入口 · astrbot-plugin
+hub_host_control                 系统工具 · 中枢备用 · hub-native
+hub_ledger_query                 系统工具 · 账本查询 · hub-native
+```
+
+通用挂载说明见 [FUNCTION_MOUNTING.md](FUNCTION_MOUNTING.md)。
+
+- 工具页只展示**全局工具**；系统工具置顶，其余按 `source_group`（插件）折叠，展开才看插件下的工具
+- 工具页列表带「系统工具」标记
+- 点开可单独启用/停用；状态写 `data/system_tools.json`
+- 停用后网关不再注入对应工具，主/备入口互不影响
+- 个人工具权限不再放工具页，统一在「档案 → 工具权限」里按档案配置
+- 页面只认 `system` / `transport` 元数据，不写 AstrBot 分支；以后接别的宿主只加元数据
+- 宿主机桥 `host_bridge` 是通用 HTTP 层，AstrBot 插件只是其中一个前端
+- 账本查询工具只读，动作 `summary / recent / daily`；详见 [LEDGER_TOOL.md](LEDGER_TOOL.md)
+
 ---
 
 ## 3. 裁剪与字段处理
@@ -456,7 +520,7 @@ $cfg | ConvertTo-Json -Depth 10 | Set-Content 'data/tool_shelves.json' -Encoding
 2. `you-discover`（找 agent/MCP）几乎用不到，但仍在 search 类里；确认后可以从类别里摘掉。
 3. 宿主机工具已做三层拒绝（见第 5 节）；仍建议给非管理员客户端单独签发 Key，不要和 AstrBot 共用。
 4. **清洗是"压缩不改写"**：`truncated` 时主力 AI 只能靠"带更窄条件重新调用"拿细节。若某类查询需要全量明细，把该工具 `mode` 改成 `code`，或把它加进 `skip_tools`。
-5. **P4 已上线**：You.com 系列走中枢薄壳 MCP，其余走 AstrBot 执行器插件；`bilibili_hub` / `control_host_pc_via_antigravity` 在当前 AstrBot 里已不存在，装上后会自动进入隐藏白名单。
+5. **P4 已上线**：You.com 系列走中枢薄壳 MCP，其余走 AstrBot 执行器插件；`control_host_pc_via_antigravity` 现在由独立宿主机控制插件提供，不再靠隐藏白名单。
 6. 清洗会让工具结果回灌多一次约 1~2 秒延迟；`you-balance` / `check_image_quota` / `get_weather` 已走 0 延迟快通道。
 
 ---

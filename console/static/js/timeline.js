@@ -214,14 +214,25 @@
             }
 
             const rawActor = ev.actor_name || ev.source || '';
-            const actorDisp = escapeHtml(rawActor || (moduleText === '中枢' ? '系统' : '交互'));
+            const primary = String(ev.tag_primary || moduleText).trim();
+            const secondary = String(ev.tag_secondary || rawActor || (moduleText === '中枢' ? '系统' : '交互')).trim();
+            const permission = String(ev.tag_permission || '').trim().toLowerCase() || 'unknown';
+            const platform = String(ev.platform || '').trim().toLowerCase();
+            const displayName = String(ev.display_name || ev.archive_name || ev.uid || secondary || rawActor).trim();
+            const isArchive = Boolean(ev.archive_id) || secondary.startsWith('arc_');
+            const actorClass = isArchive ? `timeline-actor is-archive role-${permission}` : 'timeline-actor is-uid';
+            const actorTitle = isArchive
+                ? [ev.archive_id, permission].filter(Boolean).join(' · ')
+                : [platform, ev.uid || secondary].filter(Boolean).join(':');
             const timeDisp = escapeHtml(ev.time_str || '');
             const narrDisp = escapeHtml(ev.narrative || ev.content || '');
 
             return `
                 <div class="timeline-card">
                     <div class="timeline-header">
-                        <span class="timeline-tag ${tagClass}">${escapeHtml(moduleText)} · ${actorDisp}</span>
+                        <span class="timeline-tag ${tagClass}">${escapeHtml(primary)}</span>
+                        ${platform && platform !== primary.toLowerCase() ? `<span class="timeline-platform">${escapeHtml(platform)}</span>` : ''}
+                        <span class="${actorClass}" title="${escapeHtml(actorTitle)}">${escapeHtml(displayName)}</span>
                         <span class="timeline-time">${timeDisp}</span>
                     </div>
                     <div class="timeline-body">${narrDisp}</div>

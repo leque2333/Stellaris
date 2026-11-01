@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 import time
 from typing import Any, Dict, Optional
@@ -86,16 +85,18 @@ class SegmentAggregator:
         if not isinstance(meta, dict):
             meta = {}
         group_id = str(meta.get("group_id") or "").strip()
+        group_name = str(meta.get("group_name") or "").strip()
+        peer_name = str(meta.get("peer_name") or "").strip()
         session_id = str(meta.get("session_id") or "").strip()
         channel_type = str(meta.get("channel_type") or "").strip().lower()
         if group_id:
-            return channel, "group", group_id, f"{channel} 群聊 {group_id}"
+            return channel, "group", group_id, group_name or f"{channel} 群聊 {group_id}"
         if session_id:
             kind = "私聊" if channel_type == "private" else "对话"
-            return channel, channel_type or "conversation", session_id, f"{channel} {kind}"
+            return channel, channel_type or "conversation", session_id, peer_name or f"{channel} {kind}"
         context_kind = "channel" if inv.get("channel_id") else "module"
         context_id = str(inv.get("actor_id") or channel)
-        return channel, context_kind, context_id, context_id
+        return channel, context_kind, context_id, peer_name or context_id
 
     def _segment_for(
         self,
@@ -225,8 +226,22 @@ class SegmentAggregator:
                 participants.append(name)
 
         plugin_id = seg["plugin_id"]
-        _, tag_primary, _ = classify_source(plugin_id, {})
-        tag_secondary = str(seg.get("context_name") or seg.get("context_id") or "")
+        meta = {}
+        if invs:
+            raw_meta = invs[0].get("metadata")
+            if isinstance(raw_meta, str):
+                try:
+                    meta = json.loads(raw_meta)
+                except (json.JSONDecodeError, TypeError):
+                    meta = {}
+            elif isinstance(raw_meta, dict):
+                meta = raw_meta
+        plugin_name = str(meta.get("plugin_name") or "").strip()
+        _, fallback_primary, _ = classify_source(plugin_id, {})
+        tag_primary = plugin_name or fallback_primary
+        archive_id = str(meta.get("archive_id") or "").strip()
+        tag_secondary = archive_id or str(seg.get("context_name") or seg.get("context_id") or "")
+        tag_permission = str(meta.get("tag_permission") or "unknown").strip() or "unknown"
 
         return TimelineEvent(
             event_id="",
@@ -243,33 +258,33 @@ class SegmentAggregator:
                 "activity_ids": [a["activity_id"] for a in acts][:100],
                 "participants": participants,
             },
-            plugin_id=plugin_id,
+            plugin_id=plugin_name or plugin_id,
             tag_primary=tag_primary,
             tag_secondary=tag_secondary,
+            tag_permission=tag_permission,
             segment_id=seg["segment_id"],
             started_at=start,
             ended_at=end,
         )
 
 
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, "") or default)
-    except ValueError:
-        return default
+def run_forever(store: Store, interval: Optional[float] = None, **kwargs) -> None:
+    """后台聚合：每轮都重读调参，静默窗口和扫描间隔改了立即生效。"""
+    from . import settings as memory_settings
 
-
-def run_forever(store: Store, interval: float = 30.0, **kwargs) -> None:
-    """后台聚合：默认每 30 秒 tick 一次，空闲窗口可用环境变量调。"""
-    kwargs.setdefault("idle_seconds", _env_float("HUB_AGGREGATOR_IDLE_SECONDS", 600.0))
-    interval = _env_float("HUB_AGGREGATOR_INTERVAL_SECONDS", interval)
     aggregator = SegmentAggregator(store, **kwargs)
     while True:
+        current = memory_settings.effective()
+        if "idle_seconds" not in kwargs:
+            aggregator.idle_seconds = float(current["aggregator_idle_seconds"])
+        if "max_duration_seconds" not in kwargs:
+            aggregator.max_duration_seconds = float(current["aggregator_max_duration_seconds"])
+        wait = interval if interval is not None else current["aggregator_interval_seconds"]
         try:
             aggregator.tick()
         except Exception as exc:  # 不让聚合器拖垮主服务
             logger.warning("[Aggregator] tick 失败: %s", exc)
-        time.sleep(interval)
+        time.sleep(max(1.0, float(wait)))
 
 
 if __name__ == "__main__":

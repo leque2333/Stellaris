@@ -131,6 +131,8 @@ class SummaryTest(unittest.TestCase):
         info = curve.summarize(entries)
         self.assertEqual(info["events"], 10)
         self.assertEqual(sum(info["per_tier"]), 10)
+        self.assertEqual(sum(info["per_tier_kept_chars"]), info["kept_chars"])
+        self.assertEqual(sum(info["per_tier_original_chars"]), info["original_chars"])
         self.assertLessEqual(info["kept_chars"], info["original_chars"])
 
     def test_render_lines(self):

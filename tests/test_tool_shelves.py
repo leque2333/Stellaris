@@ -726,7 +726,9 @@ class GatewayE2E(unittest.TestCase):
                 "tools": TOOLS,
             })
         names = [t["function"]["name"] for t in self.upstream.payloads[0].get("tools") or []]
-        self.assertEqual(names, ["send_message_to_user"])
+        self.assertEqual(names[0], "send_message_to_user")
+        # 动态申请入口是中枢控制工具；能加载什么仍受档案策略约束
+        self.assertIn("hub_request_tools", names)
 
 
 
@@ -765,7 +767,7 @@ class GatewayE2E(unittest.TestCase):
         names = [t["function"]["name"] for t in self.upstream.payloads[0].get("tools") or []]
         self.assertNotIn("control_host_pc_via_antigravity", names)
 
-    def test_admin_client_keeps_host_tool(self):
+    def test_admin_client_without_identity_loses_host_tool(self):
         self.upstream.reset()
         self.upstream.classifier_reply = '{"need_tools":true,"categories":["server"],"confidence":0.9,"reason":"系统"}'
         host_tool = {
@@ -779,7 +781,7 @@ class GatewayE2E(unittest.TestCase):
             "tools": [host_tool],
         }, key="hub_sk_admin", channel="qq_admin")
         names = [t["function"]["name"] for t in self.upstream.payloads[0].get("tools") or []]
-        self.assertIn("control_host_pc_via_antigravity", names)
+        self.assertNotIn("control_host_pc_via_antigravity", names)
 
     def test_tool_result_compressed_before_main_model(self):
         self.upstream.reset()

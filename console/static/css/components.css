@@ -757,7 +757,62 @@
 .tools-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+}
+
+.tool-group {
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.55);
+    overflow: hidden;
+}
+
+.tool-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 11px 14px;
+    cursor: pointer;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary, #0f172a);
+    user-select: none;
+}
+
+.tool-group-head::-webkit-details-marker {
+    display: none;
+}
+
+.tool-group-head::before {
+    content: '▸';
+    color: var(--text-muted, #64748b);
+    font-size: 11px;
+}
+
+.tool-group[open] .tool-group-head::before {
+    content: '▾';
+}
+
+.tool-group-head > span:first-of-type {
+    flex: 1;
+}
+
+.tool-group-count {
+    min-width: 22px;
+    text-align: center;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-muted, #64748b);
+    font-weight: 500;
+}
+
+.tool-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 0 6px 6px;
 }
 
 .tool-row {
@@ -821,6 +876,17 @@
 .tool-badge.approval {
     background: rgba(225, 29, 72, 0.1);
     color: #e11d48;
+}
+
+.tool-badge.system {
+    background: rgba(14, 116, 144, 0.1);
+    color: #0e7490;
+}
+
+.tool-system-note {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-muted, #64748b);
 }
 
 /* 工具设置弹窗 */
@@ -988,4 +1054,92 @@
     margin-top: 14px;
     padding-top: 12px;
     border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.cred-schedule-hint {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.cred-price-schedule-row {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: #f8fafc;
+    border: 1px solid #eef2f7;
+}
+
+.cred-schedule-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.cred-schedule-field {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #64748b;
+}
+
+.cred-schedule-field .form-select,
+.cred-schedule-field .form-input {
+    width: auto;
+    min-width: 78px;
+    padding: 5px 7px;
+    font-size: 12px;
+}
+
+.cred-schedule-field.cred-schedule-week .form-select {
+    min-width: 68px;
+}
+
+.cred-schedule-field.cred-schedule-time .form-input {
+    min-width: 104px;
+}
+
+.cred-schedule-sep {
+    color: #94a3b8;
+}
+
+.cred-schedule-remove {
+    margin-left: auto;
+    padding: 4px 8px;
+}
+
+.cred-schedule-prices {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.cred-schedule-prices label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #64748b;
+    white-space: nowrap;
+}
+
+.cred-schedule-prices .form-input {
+    width: 100%;
+    min-width: 0;
+    padding: 5px 7px;
+    font-size: 12px;
+}
+
+@media (max-width: 720px) {
+    .cred-schedule-field {
+        flex-wrap: wrap;
+    }
+
+    .cred-schedule-prices {
+        grid-template-columns: 1fr;
+    }
 }

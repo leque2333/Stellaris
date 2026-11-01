@@ -1,0 +1,17 @@
+﻿{
+  "plugin_id": "demo_plugin",
+  "enabled": false,
+  "priority": 5,
+  "match": {
+    "path_prefix": "/demo",
+    "user_agent": "demo/",
+    "header": {"X-Host-Id": "demo"}
+  },
+  "fields": {
+    "platform": "'demo'",
+    "uid": "headers.X-User-Id | body.sender.id",
+    "name": "headers.X-User-Name | body.sender.name",
+    "session": "body.chat_id | session_id",
+    "host_id": "headers.X-Host-Id | 'demo_plugin'"
+  }
+}

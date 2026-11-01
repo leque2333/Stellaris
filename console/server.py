@@ -35,9 +35,10 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import backend
 
-# 端口：命令行参数优先（只认纯数字），其次环境变量，最后默认 18890。
+# 端口：命令行参数优先（只认纯数字），其次环境变量，最后默认 18895。
+# 18890 现在是 nginx 入口，默认值必须和 README / 启动脚本一致。
 # 不这么写的话，被 unittest / import 时会拿 argv[1] 当端口直接崩。
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else int(os.getenv("CONSOLE_PORT", 18890))
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else int(os.getenv("CONSOLE_PORT", 18895))
 os.environ["CONSOLE_PORT"] = str(PORT)
 STATIC_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.dirname(STATIC_DIR)
@@ -125,6 +126,34 @@ def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
     return max(MIN_TIMELINE_CHARS, budget - max(0, int(reserved)))
 
 
+def _clamped_query_int(params, key, default, low, high):
+    """查询参数里的整数，坏值回默认，再夹到安全区间。"""
+    try:
+        value = int((params.get(key) or [default])[0])
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def _curve_payload(events, entries, budget):
+    """记忆曲线预览的返回体：汇总 + 覆盖时长 + 少量样本。"""
+    from agent_core.memory import timeline_curve
+
+    info = timeline_curve.summarize(entries)
+    original = info["original_chars"]
+    info["compression_ratio"] = round(info["kept_chars"] / original, 3) if original else 0.0
+    by_id = {getattr(event, "event_id", ""): event for event in events}
+    samples = []
+    for item in entries[:8]:
+        event = by_id.get(item.event_id)
+        samples.append({**item.as_dict(), "time": getattr(event, "time_str", "") if event else ""})
+    times = [float(getattr(by_id[item.event_id], "timestamp", 0) or 0)
+             for item in entries if item.event_id in by_id]
+    hours = (max(times) - min(times)) / 3600 if len(times) > 1 else 0.0
+    return {"ok": True, "budget": budget, "summary": info,
+            "coverage_hours": round(hours, 2), "samples": samples}
+
+
 RECALL_DEDUPE_SECONDS = 600
 
 
@@ -192,9 +221,9 @@ def _stream_head_state(text: str) -> str:
 
 def _memory_tool_prompt(stream: bool = False) -> str:
     """记忆检索只在非流式可用：流式没法等整轮回复再查库。"""
-    import os
+    from agent_core.memory import settings as memory_settings
 
-    if stream or os.getenv("HUB_MEMORY_TOOL", "1") == "0":
+    if stream or not bool(memory_settings.get("memory_tool_enabled", True)):
         return ""
     return _MEMORY_TOOL_BLOCK
 
@@ -289,6 +318,70 @@ def _header_text(value) -> str:
     return text
 
 
+_GROUP_NAME_CACHE = {}
+_PLATFORM_CONTEXT_CACHE = {}
+_ARCHIVE_ROLE_CACHE = {}
+
+
+def _platform_context(platform: str, group_id: str = "", uid: str = "") -> dict:
+    """按平台 + 群/人查平台上下文，拿到宿主插件（host_id）和显示名。"""
+    platform = str(platform or "").strip()
+    group_id = str(group_id or "").strip()
+    uid = str(uid or "").strip()
+    key = (platform, group_id, uid)
+    if key in _PLATFORM_CONTEXT_CACHE:
+        return _PLATFORM_CONTEXT_CACHE[key]
+    result = {}
+    try:
+        from agent_core.storage import get_store
+
+        with get_store()._connect() as conn:
+            if group_id:
+                row = conn.execute(
+                    "SELECT host_id, source, display_name FROM platform_contexts "
+                    "WHERE platform = ? AND external_id LIKE ? AND status = 'active' "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (platform, f"%GroupMessage:{group_id}"),
+                ).fetchone()
+            elif uid:
+                row = conn.execute(
+                    "SELECT host_id, source, display_name FROM platform_contexts "
+                    "WHERE platform = ? AND external_id LIKE ? AND status = 'active' "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (platform, f"%FriendMessage:{uid}"),
+                ).fetchone()
+            else:
+                row = None
+        if row:
+            result = {
+                "host_id": str(row["host_id"] or "").strip(),
+                "source": str(row["source"] or "").strip(),
+                "display_name": str(row["display_name"] or "").strip(),
+            }
+    except Exception:
+        result = {}
+    _PLATFORM_CONTEXT_CACHE[key] = result
+    return result
+
+
+def _astrbot_group_name(group_id: str) -> str:
+    """群号 → 群名；走适配器注册表，AstrBot 只是其中一个实现。"""
+    gid = str(group_id or "").strip()
+    if not gid:
+        return ""
+    if gid in _GROUP_NAME_CACHE:
+        return _GROUP_NAME_CACHE[gid]
+    try:
+        from adapters import get_registry
+
+        name = get_registry().group_name(gid)
+    except Exception:
+        name = ""
+    if name:
+        _GROUP_NAME_CACHE[gid] = name
+    return name
+
+
 def _tool_name_of(tool) -> str:
     """工具条目有两种形状（裸 name / function.name），统一取名字。"""
     return (tool.get("function") or {}).get("name") or tool.get("name") or ""
@@ -313,9 +406,11 @@ def _join_tool_names(tool_calls):
 
 def _narrative_of(ctx, content):
     """一句自传体叙述：谁说了什么、它怎么回。"""
+    group = str(ctx.get("group_name") or "").strip()
+    prefix = f"【{group}】" if group else ""
     if ctx["is_logic_task"]:
-        return f"{ctx['actor_name']}提出了复杂逻辑任务；{_persona_name()}调度幕后工兵推导并转述：「{content[:50]}」"
-    return f"{ctx['actor_name']}说：「{ctx['user_query'][:50]}」；{_persona_name()}回答：「{content[:50]}」"
+        return f"{prefix}{ctx['actor_name']}提出了复杂逻辑任务；{_persona_name()}调度幕后工兵推导并转述：「{content[:50]}」"
+    return f"{prefix}{ctx['actor_name']}说：「{ctx['user_query'][:50]}」；{_persona_name()}回答：「{content[:50]}」"
 
 
 def _record_fact_usage(p_in, p_out):
@@ -366,7 +461,10 @@ def _affection_step(ctx, content):
 
 
 def _ledger_tool_calls(accumulator):
-    """流式只给了 tool_calls 增量，这里还原成账本要的形状。"""
+    """流式增量还原成完整 tool_calls；没有参数时退回只记名字。"""
+    data = [item for item in getattr(accumulator, "tool_calls_data", []) if item.get("function", {}).get("name")]
+    if data:
+        return data
     return [{"function": {"name": name}} for name in accumulator.tool_call_names]
 
 def _bearer_token(headers) -> str:
@@ -515,6 +613,9 @@ _CONSOLE_GET_ROUTES = {
     '/api/audit': '_get_audit',
     '/api/deploy_check': '_get_deploy_check',
     '/api/memory/timeline_curve': '_get_timeline_curve',
+    '/api/memory/settings': '_get_memory_settings',
+    '/api/memory/export': '_get_memory_export',
+    '/api/token/alerts': '_get_token_alerts',
 }
 
 
@@ -529,9 +630,13 @@ _POST_ROUTES = {
     '/api/identity/bind': ('_post_identity_bind', True),
     '/api/identity/hide': ('_post_identity_hide', True),
     '/api/ledger/clear': ('_post_ledger_clear', True),
+    '/api/ledger/update': ('_post_ledger_update', True),
     '/api/access_policy': ('_post_access_policy', True),
     '/api/memory/facts/rollback': ('_post_fact_rollback', True),
     '/api/memory/facts': ('_post_fact_upsert', True),
+    '/api/memory/settings': ('_post_memory_settings', True),
+    '/api/memory/import': ('_post_memory_import', True),
+    '/api/token/alerts/settings': ('_post_token_alert_settings', True),
     '/api/auth/login': ('_post_login', False),
     '/api/auth/logout': ('_post_logout', False),
     '/api/auth/change_password': ('_post_change_password', True),
@@ -912,21 +1017,121 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _get_timeline_curve(self):
         """预览时间轴记忆曲线：前 30% 完整、中 40% 轻压、后 30% 深压。"""
         from agent_core.memory import timeline_curve
+        from agent_core.memory.episodic_stream import _drop_empty_summaries
 
-        params = dict(part.split('=', 1) for part in urlparse(self.path).query.split('&') if '=' in part)
-        try:
-            budget = max(500, min(int(params.get('budget', '20000')), 200000))
-        except ValueError:
-            budget = 20000
+        params = parse_qs(urlparse(self.path).query)
+        budget = _clamped_query_int(params, "budget", 20000, 500, 200000)
+        person_id = (params.get("person_id") or [""])[0].strip()
         store = self._memory_store()
-        events = store.list_candidates(limit=5000) if store else []
-        entries = timeline_curve.build_curve(events, budget_chars=budget)
-        return self._send_json({
-            "ok": True,
-            "budget": budget,
-            "summary": timeline_curve.summarize(entries),
-            "entries": [item.as_dict() for item in entries[:200]],
-        })
+        events = store.list_candidates(
+            person_ids=[person_id] if person_id else None, limit=5000
+        ) if store else []
+        entries = timeline_curve.build_curve(
+            _drop_empty_summaries(events), budget_chars=budget, line_overhead=22
+        )
+        return self._send_json(_curve_payload(events, entries, budget))
+
+    def _get_memory_settings(self):
+        """记忆调参面板：当前值、来源、输入范围、库规模一次给全。"""
+        from agent_core.memory import settings as memory_settings
+
+        payload = memory_settings.public_payload()
+        payload["stats"] = memory_settings.memory_stats(self._memory_store())
+        return self._send_json(payload)
+
+    def _post_ledger_update(self, body):
+        """修正单条流水的金额，用于厂商计费异常。"""
+        import sqlite3
+
+        record_id = str(body.get("id") or "").strip()
+        if not record_id:
+            return self._send_json({"ok": False, "error": "缺少 id"}, status=400)
+        try:
+            new_cost = float(body.get("cost_usd"))
+        except (TypeError, ValueError):
+            return self._send_json({"ok": False, "error": "cost_usd 无效"}, status=400)
+        new_cost = max(0.0, round(new_cost, 6))
+        reason = str(body.get("reason") or "").strip()[:200]
+        from agent_core.storage import get_store
+
+        path = get_store().path
+        con = sqlite3.connect(str(path), timeout=20)
+        con.row_factory = sqlite3.Row
+        try:
+            row = con.execute(
+                "SELECT id, cost_usd, source, model FROM token_usage WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+            if not row:
+                return self._send_json({"ok": False, "error": "流水不存在"}, status=404)
+            with con:
+                con.execute("UPDATE token_usage SET cost_usd = ? WHERE id = ?", (new_cost, record_id))
+        finally:
+            con.close()
+        try:
+            audit_log.record(
+                "ledger_price_adjust", dedupe=False, record_id=record_id,
+                old_cost=float(row["cost_usd"] or 0.0), new_cost=new_cost, reason=reason,
+            )
+        except Exception:
+            pass
+        return self._send_json({"ok": True, "id": record_id, "old_cost": float(row["cost_usd"] or 0.0),
+                                "cost_usd": new_cost})
+
+    def _get_token_alerts(self):
+        from console.modules import token_alerts
+
+        return self._send_json(token_alerts.evaluate(self._memory_store(), mark=True))
+
+    def _post_token_alert_settings(self, body):
+        from console.modules import token_alerts
+
+        try:
+            settings = token_alerts.save_settings(body or {})
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+        payload = token_alerts.evaluate(self._memory_store(), mark=False)
+        payload["settings"] = settings
+        return self._send_json(payload)
+
+    def _get_memory_export(self):
+        from agent_core.memory import portability
+
+        bundle = portability.export_bundle(self._memory_store())
+        filename = f"stellaris_memory_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        return self._send_json(
+            bundle,
+            extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    def _post_memory_import(self, body):
+        from agent_core.memory import portability
+
+        content = str(body.get("content") or "")
+        if not content.strip():
+            return self._send_json({"ok": False, "error": "content 为空"}, status=400)
+        mode = str(body.get("mode") or "merge").lower()
+        if mode not in ("merge", "replace"):
+            return self._send_json({"ok": False, "error": "mode 只能是 merge/replace"}, status=400)
+        try:
+            result = portability.import_content(
+                content,
+                fmt=str(body.get("format") or "auto"),
+                mode=mode,
+                store=self._memory_store(),
+            )
+        except Exception as exc:
+            return self._send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=400)
+        try:
+            audit_log.record(
+                "memory_import", dedupe=False,
+                mode=mode, format=str(body.get("format") or "auto"),
+                counts=result.get("counts") or {},
+                backup=result.get("backup") or "",
+            )
+        except Exception:
+            pass
+        return self._send_json(result)
 
     def _get_deploy_check(self):
         """部署自检：端口 / docker 挂载 / 密钥 / 安全配置 / 审计日志。"""
@@ -996,6 +1201,31 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 "secret_configured": bool(saved["signature"]["secret"]),
             },
         })
+
+    def _post_memory_settings(self, body):
+        """保存记忆调参；字段白名单与范围校验都在 settings 模块里。"""
+        from agent_core.memory import settings as memory_settings
+
+        changed: list = []
+        try:
+            if body.get("reset"):
+                memory_settings.reset()
+                action = "reset"
+            else:
+                patch = body.get("settings") if isinstance(body.get("settings"), dict) else body
+                patch = {key: value for key, value in patch.items() if key != "reset"}
+                if not patch:
+                    return self._send_json({"ok": False, "error": "没有可更新的字段"}, status=400)
+                memory_settings.save(patch)
+                action, changed = "save", sorted(patch)
+        except ValueError as exc:
+            return self._send_json({"ok": False, "error": str(exc)}, status=400)
+        except OSError as exc:
+            return self._send_json({"ok": False, "error": f"写入配置失败: {exc}"}, status=500)
+        audit_log.record("memory_settings_changed", dedupe=False, action=action, fields=changed)
+        payload = memory_settings.public_payload()
+        payload["stats"] = memory_settings.memory_stats(self._memory_store())
+        return self._send_json(payload)
 
     def _get_messages(self):
         """顶部消息铃铛：只返回本次启动之后的消息。"""
@@ -1138,11 +1368,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             approval = body.get("approval")
             if approval is not None and not isinstance(approval, bool):
                 return self._send_json({"ok": False, "error": "approval 必须是布尔值"}, status=400)
+            enabled = body.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                return self._send_json({"ok": False, "error": "enabled 必须是布尔值"}, status=400)
             result = admin.update_tool(
                 name,
                 mode=mode,
                 approval=approval,
                 category=body.get("category"),
+                enabled=enabled,
                 cfg=self._tool_shelf_cfg(),
             )
             return self._send_json(result)
@@ -2442,6 +2676,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if raw or not user_query:
             return raw
         sniffed = re.search(r"\((\d{5,12})\):", user_query)
+        if not sniffed:
+            sniffed = re.search(
+                r"(?:用户ID|用户id|User ID|UserID|user_id|QQ|qq|uid|UID)"
+                r"\s*[：:]\s*(\d{5,12})",
+                user_query,
+            )
         return sniffed.group(1) if sniffed else ""
 
     def _strip_query_prefix(self, user_query):
@@ -2452,12 +2692,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         cleaned = re.sub(r"^.*?\(\d{5,12}\):\s*", "", cleaned).strip()
         return cleaned or user_query
 
-    def _resolve_platform_name(self, body, channel_id):
+    def _resolve_platform_name(self, body, channel_id, adapter_ctx=None):
         from agent_core.identity_binding import infer_platform
+
         return (
             self.headers.get("X-Platform")
             or str(body.get("platform") or "")
             or infer_platform(channel_id, self.headers.get("X-External-Id") or "")
+            or str((adapter_ctx or {}).get("platform") or "")
             or "web"
         )
 
@@ -2513,7 +2755,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if not access_policy.get("guest_enabled", False):
                     return {"error": "guest_disabled"}
                 return self._build_guest_identity(result, raw_user_id, platform_name, profile, access_policy)
-            return self._build_member_identity(result, th, actor_id, master_qq, bound_archive)
+            return self._build_member_identity(result, th, actor_id, master_qq, bound_archive, archive)
         except Exception:
             return result
 
@@ -2534,12 +2776,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         })
         return result
 
-    def _build_member_identity(self, result, timeline_hub, actor_id, master_qq, bound_archive):
+    def _build_member_identity(self, result, timeline_hub, actor_id, master_qq, bound_archive, archive=None):
         """有档案的人：读好感度；主人再额外读一次长期事实。"""
+        from agent_core.identity import IdentityResolver
+
         person_id = bound_archive or result["archive_id"] or (
             master_qq if str(actor_id) in ("master", master_qq) else actor_id
         )
         result["person_id"] = person_id
+        # 说话人用档案昵称；客户端名只属于传输层，不能进记忆和提示词
+        display_name = str((archive or {}).get("display_name") or "").strip()
+        if display_name:
+            result["actor_name"] = display_name
+        elif str(actor_id) in ("master", master_qq):
+            result["actor_name"] = IdentityResolver.get_master_name()
+        else:
+            result["actor_name"] = str(actor_id)
         result["affection"] = timeline_hub.get_user_affection(person_id)
         if str(actor_id) in ("master", master_qq):
             profile_row = timeline_hub.get_user_profile(person_id)
@@ -2615,18 +2867,57 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         session_id = _header_text(self.headers.get("X-Session-Id"))
         raw = session_id or _header_text(self.headers.get("x-astrbot-conversation-id"))
         kind, parsed_group, parsed_session = _split_conversation_id(raw)
+        resolved_group = group_id or parsed_group
+        group_name = _header_text(self.headers.get("X-Group-Name"))
+        if resolved_group and not group_name:
+            group_name = _astrbot_group_name(resolved_group)
         return {
-            "group_id": group_id or parsed_group,
+            "group_id": resolved_group,
+            "group_name": group_name,
             "session_id": session_id or parsed_session,
             "conversation_type": kind,
+            "external_id": _header_text(self.headers.get("X-External-Id")),
         }
 
     def _gateway_ids(self, body, messages, channel_id):
-        """用户原话、平台 UID、平台名：后面到处都要用的三个值。"""
+        """用户原话、平台 UID、平台名、插件调用链。"""
         user_query = self._strip_query_prefix(self._extract_user_query(messages))
-        raw_user_id = self._extract_raw_user_id(body, user_query)
-        platform_name = self._resolve_platform_name(body, channel_id)
-        return {"user_query": user_query, "raw_user_id": raw_user_id, "platform": platform_name}
+        adapter_ctx = self._adapter_context(body, channel_id)
+        raw_user_id = self._extract_raw_user_id(body, user_query) or str(
+            adapter_ctx.get("uid") or ""
+        )
+        platform_name = self._resolve_platform_name(body, channel_id, adapter_ctx)
+        host_plugin = _header_text(self.headers.get("X-Host-Id")) or str(
+            adapter_ctx.get("host_id") or adapter_ctx.get("plugin_id") or ""
+        )
+        return {
+            "user_query": user_query,
+            "raw_user_id": raw_user_id,
+            "platform": platform_name,
+            "plugin_chain": _header_text(self.headers.get("X-Plugin-Chain")),
+            "caller_plugin": _header_text(self.headers.get("X-Caller-Plugin")),
+            "host_plugin": host_plugin,
+            "adapter": adapter_ctx,
+        }
+
+    def _adapter_context(self, body, channel_id):
+        """让注册表里的适配器归一化请求；失败不影响主流程。"""
+        try:
+            from adapters import RequestView, get_registry
+
+            session_id = (
+                _header_text(self.headers.get("X-Session-Id"))
+                or _header_text(self.headers.get("x-astrbot-conversation-id"))
+            )
+            return get_registry().resolve(RequestView(
+                headers=dict(self.headers),
+                body=body or {},
+                channel_id=channel_id,
+                session_id=session_id,
+                path=self.path,
+            )) or {}
+        except Exception:
+            return {}
 
     def _gateway_actor(self, body, profile, ids, channel_id):
         """把平台身份换成中枢身份（actor / person / archive）。"""
@@ -2775,23 +3066,82 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _gateway_tools(self, body, request, session):
         """透传字段 + 工具闸门 + 工具结果压缩。"""
+        from agent_core.tool_shelves import broker
+
         extra = {k: body[k] for k in self.PASSTHROUGH_FIELDS if body.get(k) is not None}
         decision, extra = self._gateway_tool_gate(request["messages"], extra, session)
+        tools_all = list(body.get("tools") or [])
+        dynamic = self._dynamic_tools_enabled(request, extra, tools_all)
+        if dynamic:
+            extra = dict(extra)
+            extra["tools"] = list(extra.get("tools") or []) + [broker.tool_spec()]
+        host_backup = self._host_backup_enabled(session)
+        if host_backup:
+            from agent_core import host_control
+
+            extra = dict(extra)
+            extra["tools"] = list(extra.get("tools") or []) + [host_control.tool_spec()]
+        ledger_tool = self._ledger_tool_enabled(session)
+        if ledger_tool:
+            from agent_core import ledger_tool
+
+            extra = dict(extra)
+            extra["tools"] = list(extra.get("tools") or []) + [ledger_tool.tool_spec()]
         messages, compression = self._gateway_compress(request["messages"], session["user_query"])
         return {
             "extra": extra,
             "messages": messages,
-            "tools_all": list(body.get("tools") or []),
+            "tools_all": tools_all,
+            "dynamic": dynamic,
+            "host_backup": host_backup,
+            "ledger_tool": ledger_tool,
             "decision": decision,
             "compression": compression,
         }
 
+    def _host_backup_enabled(self, session):
+        """中枢备用宿主机控制：仅管理员客户端。"""
+        if os.getenv("HUB_HOST_CONTROL", "1") == "0":
+            return False
+        profile = session.get("profile")
+        perms = getattr(profile, "tool_permissions", None) or {}
+        role = str(perms.get("role") or "").strip().lower()
+        admin_clients = (
+            set(tool_gate.cfg.admin_clients()) if tool_gate is not None else {"astrbot"}
+        )
+        if role != "admin" or session.get("client_id") not in admin_clients:
+            return False
+        from agent_core.tool_shelves import system_tools
+
+        return system_tools.enabled("hub_host_control") and self._admin_identity(session)
+
+    def _ledger_tool_enabled(self, session):
+        """账本查询：管理员身份 + 系统工具开关；只读。"""
+        if os.getenv("HUB_LEDGER_TOOL", "1") == "0":
+            return False
+        from agent_core.tool_shelves import system_tools
+
+        return system_tools.enabled("hub_ledger_query") and self._admin_identity(session)
+
+    def _dynamic_tools_enabled(self, request, extra, tools_all):
+        """只有被裁过、非流式、且有完整目录时才开放工具申请。"""
+        if os.getenv("HUB_DYNAMIC_TOOLS", "1") == "0":
+            return False
+        if tool_gate is None:
+            return False
+        visible = list(extra.get("tools") or [])
+        return bool(tools_all) and len(visible) < len(tools_all)
+
     def _gateway_tool_gate(self, messages, extra, session):
         """工具闸门：权限硬拒绝 → 分类裁剪；任何异常都全量透传。"""
-        if tool_gate is None or not extra.get("tools"):
+        if not extra.get("tools"):
             return None, extra
         try:
+            extra, identity_denied = self._gateway_tool_identity_deny(extra, session)
+            if tool_gate is None:
+                return None, extra
             extra, denied = self._gateway_tool_hard_deny(extra, session)
+            denied |= identity_denied
             decision = self._gateway_tool_decide(messages, extra, session)
             extra = self._gateway_tool_apply(decision, extra, denied, messages)
             return decision, extra
@@ -2810,6 +3160,43 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             for key in ("tools", "tool_choice", "parallel_tool_calls"):
                 extra.pop(key, None)
         return extra, denied
+
+    def _gateway_tool_identity_deny(self, extra, session):
+        """宿主机工具按「档案身份 + 系统开关」再拒一次。"""
+        from agent_core.tool_shelves import system_tools
+
+        protected = set(tool_gate.cfg.host_tools()) if tool_gate is not None else {
+            "control_host_pc_via_antigravity"
+        }
+        disabled = {name for name in protected if not system_tools.enabled(name)}
+        admin_identity = self._admin_identity(session)
+        if admin_identity and not disabled:
+            return extra, set()
+        names = [_tool_name_of(item) for item in (extra.get("tools") or [])]
+        denied = (protected if not admin_identity else disabled) & set(names)
+        if not denied:
+            return extra, set()
+        extra = dict(extra)
+        extra["tools"] = [item for item in extra.get("tools") or [] if _tool_name_of(item) not in denied]
+        if not extra["tools"]:
+            for key in ("tools", "tool_choice", "parallel_tool_calls"):
+                extra.pop(key, None)
+        return extra, denied
+
+    def _admin_identity(self, session):
+        """管理员身份 = 明确 UID 绑定到 role=admin 的档案。"""
+        from agent_core.storage import get_store
+
+        uid = str(session.get("sender_uid") or "").strip()
+        archive_id = str(session.get("archive_id") or "").strip()
+        bound_by = str(session.get("bound_by") or "").strip()
+        if not uid or not archive_id or bound_by not in ("binding", "master"):
+            return False
+        try:
+            archive = get_store().get_archive(archive_id) or {}
+        except Exception:
+            return False
+        return str(archive.get("role") or "").strip().lower() == "admin"
 
     def _gateway_tool_decide(self, messages, extra, session):
         """问闸门要一份裁剪决策；档案级策略用本轮解析出的档案 ID。"""
@@ -2920,6 +3307,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "extra": tools["extra"],
             "has_tools": bool(tools["extra"].get("tools")),
             "tools_all": tools["tools_all"],
+            "dynamic_tools": tools.get("dynamic", False),
+            "host_backup": tools.get("host_backup", False),
+            "ledger_tool": tools.get("ledger_tool", False),
             "tool_gate": decision.as_dict() if decision is not None else None,
             "tool_gate_state": {"decision": decision},
             "tool_compression": tools["compression"],
@@ -2931,12 +3321,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return ctx
 
     def _timeline_keep(self):
-        import os
+        from agent_core.memory import settings as memory_settings
 
         try:
-            return int(os.getenv("HUB_TIMELINE_KEEP", "") or TIMELINE_KEEP_CHARS)
-        except ValueError:
+            return int(memory_settings.get("timeline_keep_chars", TIMELINE_KEEP_CHARS))
+        except (TypeError, ValueError):
             return TIMELINE_KEEP_CHARS
+
+    def _recall_max_chars(self):
+        from agent_core.memory import settings as memory_settings
+
+        try:
+            return int(memory_settings.get("recall_max_chars", RECALL_MAX_CHARS))
+        except (TypeError, ValueError):
+            return RECALL_MAX_CHARS
 
     def _person_of(self, ctx):
         return str(ctx.get("person_id") or ctx.get("actor_id") or "")
@@ -2975,11 +3373,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _prefetch_memory_block(self, ctx):
         """默认不预取：让模型自己判断要不要回忆，只在开了兜底时才查。"""
-        import os
-
-        if os.getenv("HUB_MEMORY_PREFETCH", "0") != "1":
-            return ""
         from agent_core.memory import deep_recall
+        from agent_core.memory import settings as memory_settings
+
+        if not bool(memory_settings.get("prefetch_enabled", False)):
+            return ""
 
         store = self._memory_store()
         if store is None:
@@ -2997,7 +3395,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                             str(getattr(row, "narrative", "") or ""))
             for row in rows
         ]
-        kept, mode = deep_recall.trim_hits(hits, RECALL_MAX_CHARS)
+        kept, mode = deep_recall.trim_hits(hits, self._recall_max_chars())
         if not kept:
             return ""
         _recall_writeback(store, ctx, kept, mode)
@@ -3013,7 +3411,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "channel_type": session["channel_type"],
             "conversation_type": session.get("conversation_type", ""),
             "group_id": session.get("group_id", ""),
+            "group_name": session.get("group_name", ""),
             "session_id": session.get("session_id", ""),
+            "external_id": session.get("external_id", ""),
+            "plugin_chain": session.get("plugin_chain", ""),
+            "caller_plugin": session.get("caller_plugin", ""),
+            "host_plugin": session.get("host_plugin", ""),
             "actor_id": session["actor_id"],
             "actor_name": session["actor_name"],
             "role_type": session["role_type"],
@@ -3068,6 +3471,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             metadata = dict(kwargs.get("metadata") or {})
             metadata.setdefault("channel_type", ctx.get("conversation_type") or ctx.get("channel_type", ""))
             metadata.setdefault("group_id", ctx.get("group_id", ""))
+            metadata.setdefault("group_name", ctx.get("group_name", ""))
+            metadata.setdefault("peer_name", ctx.get("actor_name") or ctx.get("actor_id", ""))
+            metadata.setdefault("plugin_name", self._timeline_plugin_name(ctx))
+            metadata.setdefault("plugin_chain", self._plugin_chain(ctx))
+            metadata.setdefault("platform", ctx.get("platform", ""))
+            metadata.setdefault("archive_id", ctx.get("archive_id") or "")
+            metadata.setdefault("tag_permission", self._timeline_permission(ctx))
+            metadata.setdefault("sender_uid", ctx.get("sender_uid") or ctx.get("actor_id", ""))
             metadata.setdefault("session_id", ctx.get("session_id", ""))
             kwargs["metadata"] = metadata
             return store.record_invocation(
@@ -3124,8 +3535,135 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return None
         return event if isinstance(event, str) else None
 
+    def _plugin_chain(self, ctx):
+        """插件调用链：优先 X-Plugin-Chain，其次 caller + host。"""
+        raw = str(ctx.get("plugin_chain") or "").strip()
+        parts = [item.strip() for item in re.split(r"\s*(?:→|->|>|,|\|)\s*", raw) if item.strip()]
+        if not parts:
+            caller = str(ctx.get("caller_plugin") or "").strip()
+            host = str(ctx.get("host_plugin") or "").strip()
+            if caller and host and caller != host:
+                parts = [caller, host]
+        return " → ".join(parts)
+
+    def _timeline_plugin_name(self, ctx):
+        """插件名优先取调用链；否则取宿主上下文 host_id（napcat / astrbot / ...）。"""
+        chain = self._plugin_chain(ctx)
+        if chain:
+            return chain
+        host_plugin = str(ctx.get("host_plugin") or "").strip()
+        if host_plugin:
+            return host_plugin
+        platform = str(ctx.get("platform") or "").strip()
+        uid = str(ctx.get("sender_uid") or ctx.get("actor_id") or "").strip()
+        info = _platform_context(platform, ctx.get("group_id", ""), uid)
+        host = str(info.get("host_id") or "").strip()
+        if host:
+            return host
+        source = str(info.get("source") or "").split(",")[0].strip()
+        if source.endswith("_plugin"):
+            source = source[:-7]
+        if source:
+            return source
+        external = str(ctx.get("external_id") or ctx.get("session_id") or "")
+        head = external.split(":", 1)[0].strip()
+        if head.startswith("onebot_"):
+            head = head[7:]
+        if (
+            head and head not in ("aiocqhttp", "web", "unknown")
+            and not re.fullmatch(r"[0-9a-fA-F-]{32,36}", head)
+        ):
+            return head
+        if platform in ("web", "universal_proxy"):
+            return platform
+        return str(ctx.get("client_id") or ctx.get("channel_id") or platform or "unknown")
+
+    def _timeline_person_uid(self, ctx):
+        """标签用的人 UID：优先请求 UID；没有就按档案身份回查。"""
+        platform = str(ctx.get("platform") or "").strip()
+        uid = str(ctx.get("sender_uid") or ctx.get("actor_id") or "").strip()
+        archive_id = str(ctx.get("archive_id") or ctx.get("person_id") or "").strip()
+        try:
+            from agent_core.storage import get_store
+
+            with get_store()._connect() as conn:
+                if archive_id and platform:
+                    row = conn.execute(
+                        "SELECT platform_user_id FROM archive_identities "
+                        "WHERE archive_id = ? AND platform = ? "
+                        "ORDER BY is_primary DESC, confidence DESC LIMIT 1",
+                        (archive_id, platform),
+                    ).fetchone()
+                elif archive_id:
+                    row = conn.execute(
+                        "SELECT platform_user_id FROM archive_identities "
+                        "WHERE archive_id = ? ORDER BY is_primary DESC, confidence DESC LIMIT 1",
+                        (archive_id,),
+                    ).fetchone()
+                else:
+                    row = None
+            if row and row["platform_user_id"]:
+                return str(row["platform_user_id"])
+        except Exception:
+            pass
+        if (
+            platform not in ("qq", "onebot", "")
+            and str(ctx.get("actor_id")) == "master"
+            and uid not in ("master", "self")
+        ):
+            # web/cron 只是传输层，不把 QQ UID 当成 web 账号展示；
+            # 鉴权仍使用请求里的真实 UID
+            return "master"
+        if uid in ("master", "self"):
+            from agent_core.identity import IdentityResolver
+
+            # 只有 QQ 才把 master 回落成 QQ 号；web/cron 没有 web 绑定，
+            # 不能把 QQ 号伪装成 web UID
+            if platform in ("qq", "onebot", ""):
+                return IdentityResolver.get_master_qq() or uid
+            return "master"
+        return uid
+
+    def _timeline_initiator_tag(self, ctx):
+        """发起人标签：有档案用档案 ID；没有档案才回落到平台:UID。"""
+        archive_id = str(ctx.get("archive_id") or "").strip()
+        if archive_id:
+            return archive_id
+        uid = str(
+            ctx.get("sender_uid") or ctx.get("person_id") or ctx.get("actor_id") or ""
+        ).strip()
+        if not uid:
+            return "system"
+        if ":" in uid:
+            return uid
+        platform = str(ctx.get("platform") or "").strip()
+        return f"{platform}:{uid}" if platform else uid
+
+    def _timeline_permission(self, ctx):
+        """权限标签：档案 role（admin / guest），无档案则 unknown/system。"""
+        archive_id = str(ctx.get("archive_id") or "").strip()
+        if not archive_id:
+            return "system" if str(ctx.get("actor_id") or "") in ("self", "system") else "unknown"
+        if archive_id in _ARCHIVE_ROLE_CACHE:
+            return _ARCHIVE_ROLE_CACHE[archive_id]
+        role = "unknown"
+        try:
+            from agent_core.storage import get_store
+
+            archive = get_store().get_archive(archive_id) or {}
+            role = str(archive.get("role") or "unknown").strip().lower() or "unknown"
+        except Exception:
+            pass
+        _ARCHIVE_ROLE_CACHE[archive_id] = role
+        return role
+
+    def _timeline_tag_secondary(self, ctx):
+        """兼容旧调用：二级标签现在返回发起人档案 ID。"""
+        return self._timeline_initiator_tag(ctx)
+
     def _timeline_payload(self, ctx, detail_id):
         """时间轴附加字段：档案归属、重要度、来源明细。"""
+        plugin_name = self._timeline_plugin_name(ctx)
         return {
             "actor_id": ctx["actor_id"],
             "archive_id": ctx.get("archive_id"),
@@ -3134,7 +3672,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "channel": ctx["channel_id"],
             "channel_type": ctx.get("conversation_type") or ctx.get("channel_type", ""),
             "group_id": ctx.get("group_id", ""),
+            "group_name": ctx.get("group_name", ""),
+            "peer_name": ctx.get("actor_name") or ctx.get("actor_id", ""),
             "session_id": ctx.get("session_id", ""),
+            "external_id": ctx.get("external_id", ""),
+            "plugin_name": plugin_name,
+            "plugin_chain": self._plugin_chain(ctx),
+            "plugin_id": plugin_name,
+            "platform": ctx.get("platform", ""),
+            "sender_uid": ctx.get("raw_user_id", ""),
+            "tag_primary": plugin_name,
+            "tag_secondary": self._timeline_initiator_tag(ctx),
+            "tag_permission": self._timeline_permission(ctx),
+            "trace_id": ctx.get("trace_id", ""),
             "detail_id": detail_id,
         }
 
@@ -3363,6 +3913,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         message, finish, usage, used_model = self._persona_request(
             ctx, active_msgs, dict(ctx.get("extra") or {})
         )
+        message, finish, usage = self._maybe_expand_tools(
+            ctx, active_msgs, message, finish, usage
+        )
+        message, finish, usage = self._maybe_host_control(
+            ctx, active_msgs, message, finish, usage
+        )
+        message, finish, usage = self._maybe_ledger_tool(
+            ctx, active_msgs, message, finish, usage
+        )
         # enforce_soft：既无正文也无 tool_calls，多半是被裁没了工具
         if self._gate_empty_reply(message) and self._gate_auto_expand_allowed(ctx, self._gate_live(ctx)):
             self._gate_expand(ctx)
@@ -3373,6 +3932,304 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if used_model:
             ctx["actual_model"] = used_model
         return {"message": message, "finish_reason": finish, "usage": usage}
+
+    def _maybe_expand_tools(self, ctx, active_msgs, message, finish, usage):
+        """主 AI 申请工具：同一轮可多次加载，直到拿到真实工具或到上限。"""
+        if not ctx.get("dynamic_tools") or not message:
+            return message, finish, usage
+        from agent_core.tool_shelves import broker
+
+        conversation = list(active_msgs)
+        for _ in range(self._dynamic_round_limit() + 1):
+            calls = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) == broker.TOOL_NAME
+            ]
+            if not calls:
+                return message, finish, usage
+            actual = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) != broker.TOOL_NAME
+            ]
+            if actual:
+                # 模型同时给了真实工具：优先真实调用，别把已选工具吞掉
+                return self._strip_dynamic_calls(message), finish, usage
+            if ctx.get("dynamic_rounds", 0) >= self._dynamic_round_limit():
+                break
+            ctx["dynamic_rounds"] = int(ctx.get("dynamic_rounds") or 0) + 1
+            started = time.time()
+            selected = self._select_dynamic_tools(ctx, calls)
+            latency_ms = int((time.time() - started) * 1000)
+            self._note_dynamic_request(ctx, calls, selected, latency_ms)
+            extra = self._with_dynamic_tools(ctx, selected)
+            assistant = dict(message)
+            assistant["tool_calls"] = calls
+            tool_messages = [
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"hub_{index}",
+                    "name": broker.TOOL_NAME,
+                    "content": broker.result_payload(selected),
+                }
+                for index, call in enumerate(calls)
+            ]
+            conversation = conversation + [assistant] + tool_messages
+            again, new_finish, new_usage, _ = self._persona_request(ctx, conversation, extra)
+            ctx["extra"] = extra
+            if not again:
+                break
+            message = again
+            finish = new_finish or finish
+            usage = self._merge_usage(usage, new_usage)
+        return self._strip_dynamic_calls(message), finish, usage
+
+    def _dynamic_round_limit(self):
+        try:
+            return max(1, min(int(os.getenv("HUB_DYNAMIC_TOOL_ROUNDS", "2")), 4))
+        except ValueError:
+            return 2
+
+    def _note_dynamic_request(self, ctx, calls, selected, latency_ms=0):
+        """申请审计 + 指标：只记申请，不记成真实工具调用。"""
+        from agent_core.tool_shelves import broker
+        from agent_core.tool_shelves.catalog import tool_name
+        from agent_core.tool_shelves.metrics import metrics as shelf_metrics
+
+        intents = [broker.parse_request(call).get("intent", "") for call in calls]
+        intent = " / ".join(item for item in intents if item)[:200]
+        loaded = [tool_name(item) for item in selected]
+        try:
+            shelf_metrics.record_dynamic(intent, len(calls), len(loaded), latency_ms)
+        except Exception:
+            pass
+        try:
+            audit_log.record(
+                "dynamic_tool_request", dedupe=False,
+                actor_id=ctx.get("actor_id", ""), client_id=ctx.get("client_id", ""),
+                intent=intent, requested=len(calls), loaded=loaded,
+            )
+        except Exception:
+            pass
+
+    def _select_dynamic_tools(self, ctx, calls):
+        """从已授权目录里按意图挑工具；不碰可见工具和权限外工具。"""
+        from agent_core.tool_shelves import broker
+        from agent_core.tool_shelves.catalog import tool_name
+
+        if tool_gate is None:
+            return []
+        profile = (ctx.get("_session") or {}).get("profile")
+        allowed = tool_gate.allowed_tools(
+            ctx.get("tools_all") or [],
+            client_id=ctx.get("client_id", ""),
+            client_perms=getattr(profile, "tool_permissions", None),
+            archive_id=ctx.get("archive_id") or "",
+            actor_id=ctx.get("actor_id") or "",
+        )
+        visible = {tool_name(item) for item in (ctx.get("extra") or {}).get("tools") or []}
+        picked = {}
+        for call in calls:
+            request = broker.parse_request(call)
+            for item in broker.select_tools(
+                request["intent"], allowed, exclude=visible | set(picked),
+                limit=request["limit"],
+            ):
+                picked[tool_name(item)] = item
+        return list(picked.values())[:broker.MAX_LIMIT]
+
+    def _with_dynamic_tools(self, ctx, selected):
+        from agent_core.tool_shelves import broker
+        from agent_core.tool_shelves.catalog import tool_name
+
+        extra = dict(ctx.get("extra") or {})
+        existing = [
+            item for item in (extra.get("tools") or [])
+            if tool_name(item) != broker.TOOL_NAME
+        ]
+        names = {tool_name(item) for item in existing}
+        for item in selected:
+            if tool_name(item) not in names:
+                existing.append(item)
+        # 保留申请入口，允许同一轮继续申请；上限由 dynamic_rounds 控制
+        existing.append(broker.tool_spec())
+        extra["tools"] = existing
+        return extra
+
+    def _strip_named_calls(self, message, tool_name):
+        calls = [
+            call for call in (message.get("tool_calls") or [])
+            if ((call.get("function") or {}).get("name")) != tool_name
+        ]
+        stripped = dict(message)
+        if calls:
+            stripped["tool_calls"] = calls
+        else:
+            stripped.pop("tool_calls", None)
+        return stripped
+
+    def _strip_dynamic_calls(self, message):
+        from agent_core.tool_shelves import broker
+
+        return self._strip_named_calls(message, broker.TOOL_NAME)
+
+    def _maybe_host_control(self, ctx, active_msgs, message, finish, usage):
+        """中枢备用宿主机控制：管理员调用时由中枢本地执行，不走 AstrBot。"""
+        if not ctx.get("host_backup") or not message:
+            return message, finish, usage
+        from agent_core import host_control
+
+        name = host_control.TOOL_NAME
+        conversation = list(active_msgs)
+        for _ in range(self._host_control_rounds() + 1):
+            calls = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) == name
+            ]
+            if not calls:
+                return message, finish, usage
+            actual = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) != name
+            ]
+            if actual:
+                return self._strip_named_calls(message, name), finish, usage
+            if ctx.get("host_control_rounds", 0) >= self._host_control_rounds():
+                break
+            ctx["host_control_rounds"] = int(ctx.get("host_control_rounds") or 0) + 1
+            tool_messages = []
+            for index, call in enumerate(calls):
+                args = self._tool_arguments(call)
+                result = host_control.execute(
+                    args.get("action"), args.get("command", ""), args.get("timeout", 60)
+                )
+                self._note_host_control(ctx, args, result)
+                tool_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"host_{index}",
+                    "name": name,
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+            assistant = dict(message)
+            assistant["tool_calls"] = calls
+            conversation = conversation + [assistant] + tool_messages
+            again, new_finish, new_usage, _ = self._persona_request(
+                ctx, conversation, dict(ctx.get("extra") or {})
+            )
+            if not again:
+                break
+            message = again
+            finish = new_finish or finish
+            usage = self._merge_usage(usage, new_usage)
+        return self._strip_named_calls(message, name), finish, usage
+
+    def _maybe_ledger_tool(self, ctx, active_msgs, message, finish, usage):
+        """中枢原生账本查询：只读，管理员可用，不走 AstrBot。"""
+        if not ctx.get("ledger_tool") or not message:
+            return message, finish, usage
+        from agent_core import ledger_tool
+
+        name = ledger_tool.TOOL_NAME
+        conversation = list(active_msgs)
+        for _ in range(self._ledger_tool_rounds() + 1):
+            calls = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) == name
+            ]
+            if not calls:
+                return message, finish, usage
+            actual = [
+                call for call in (message.get("tool_calls") or [])
+                if ((call.get("function") or {}).get("name")) != name
+            ]
+            if actual:
+                return self._strip_named_calls(message, name), finish, usage
+            if ctx.get("ledger_tool_rounds", 0) >= self._ledger_tool_rounds():
+                break
+            ctx["ledger_tool_rounds"] = int(ctx.get("ledger_tool_rounds") or 0) + 1
+            tool_messages = []
+            for index, call in enumerate(calls):
+                args = self._tool_arguments(call)
+                result = ledger_tool.execute(
+                    args.get("action", "summary"),
+                    args.get("days", 7),
+                    args.get("limit", 10),
+                )
+                self._note_ledger_tool(ctx, args, result)
+                tool_messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id") or f"ledger_{index}",
+                    "name": name,
+                    "content": json.dumps(result, ensure_ascii=False),
+                })
+            assistant = dict(message)
+            assistant["tool_calls"] = calls
+            conversation = conversation + [assistant] + tool_messages
+            again, new_finish, new_usage, _ = self._persona_request(
+                ctx, conversation, dict(ctx.get("extra") or {})
+            )
+            if not again:
+                break
+            message = again
+            finish = new_finish or finish
+            usage = self._merge_usage(usage, new_usage)
+        return self._strip_named_calls(message, name), finish, usage
+
+    def _ledger_tool_rounds(self):
+        try:
+            return max(1, min(int(os.getenv("HUB_LEDGER_TOOL_ROUNDS", "2")), 4))
+        except ValueError:
+            return 2
+
+    def _note_ledger_tool(self, ctx, args, result):
+        try:
+            audit_log.record(
+                "ledger_query", dedupe=False,
+                actor_id=ctx.get("actor_id", ""), client_id=ctx.get("client_id", ""),
+                action=str(args.get("action") or ""),
+                ok=bool(result.get("ok")),
+                rows=len(result.get("recent") or result.get("daily") or []),
+            )
+        except Exception:
+            pass
+
+    def _host_control_rounds(self):
+        try:
+            return max(1, min(int(os.getenv("HUB_HOST_CONTROL_ROUNDS", "2")), 4))
+        except ValueError:
+            return 2
+
+    @staticmethod
+    def _tool_arguments(tool_call):
+        args = ((tool_call or {}).get("function") or {}).get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (TypeError, ValueError):
+                args = {}
+        return args if isinstance(args, dict) else {}
+
+    def _note_host_control(self, ctx, args, result):
+        try:
+            audit_log.record(
+                "host_control", dedupe=False,
+                actor_id=ctx.get("actor_id", ""), client_id=ctx.get("client_id", ""),
+                action=str(args.get("action") or ""),
+                command=str(args.get("command") or "")[:500],
+                ok=bool(result.get("ok")),
+                result=str(result.get("text") or "")[:300],
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _merge_usage(first, second):
+        merged = dict(first or {})
+        for key, value in (second or {}).items():
+            try:
+                merged[key] = int(merged.get(key) or 0) + int(value or 0)
+            except (TypeError, ValueError):
+                merged[key] = value
+        return merged
 
     def _complete_with_memory_lookup(self, ctx, active_msgs, message, usage):
         """模型要回忆时可以连续查几轮，累计不超上限，再把结果交给它作答。"""
@@ -3385,7 +4242,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             if not request or request == last_request:
                 break
             found = self._run_memory_lookup(ctx, request)
-            if used + len(found) > RECALL_MAX_CHARS:
+            if used + len(found) > self._recall_max_chars():
                 break  # 这一段会撑爆回忆上限，整段丢弃
             last_request = request
             used += len(found)
@@ -3470,7 +4327,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                             str(getattr(row, "narrative", "") or ""))
             for row in rows
         ]
-        kept, mode = deep_recall.trim_hits(hits, RECALL_MAX_CHARS)
+        kept, mode = deep_recall.trim_hits(hits, self._recall_max_chars())
         if not kept:
             return ("【记忆库】没有找到相关记录。请用你自己的语气说明你暂时想不起来了，"
                     "不要提数据库、检索、记录库这类词，也不要编造内容。")
@@ -3592,7 +4449,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         store = state["store"]
         if not store:
             return
-        if record_tools:  # 流式路径不单独记 tool invocation，只记名字
+        if record_tools:  # 流式也在收尾时补记工具事件；参数已从增量还原
             for tool_call in out["tool_calls"] or []:
                 self._record_tool_call(ctx, state, tool_call)
         status = "fallback" if out["fallback"] else "ok"
@@ -3610,8 +4467,52 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             summary="客户端请求工具",
         )
         self._l3(store, "tool_args", tool_call, invocation_id=inv_tool)
+        self._ingest_tool_event(ctx, fn_name, tool_call)
         try:
             store.finish_invocation(inv_tool, status="requested")
+        except Exception:
+            pass
+
+    def _tool_plugin_name(self, fn_name, tool_call):
+        """call_raw_tool 这类壳：从参数里取真正被请求的工具插件名。"""
+        name = str(fn_name or "").strip()
+        arguments = ((tool_call or {}).get("function") or {}).get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except (TypeError, ValueError):
+                arguments = {}
+        if isinstance(arguments, dict) and name == "call_raw_tool":
+            inner = str(arguments.get("tool") or "").strip()
+            if inner:
+                return inner
+        return name or "unknown"
+
+    def _ingest_tool_event(self, ctx, fn_name, tool_call=None):
+        """人对工具插件的请求单独成事件：工具插件名 + 发起人档案 + 权限。"""
+        tool_plugin = self._tool_plugin_name(fn_name, tool_call)
+        payload = self._timeline_payload(ctx, "")
+        secondary = self._timeline_initiator_tag(ctx)
+        payload.update({
+            "plugin_id": tool_plugin,
+            "tag_primary": tool_plugin,
+            "tag_secondary": secondary,
+            "tag_permission": self._timeline_permission(ctx),
+            "tool_name": tool_plugin,
+            "importance": 1.5,
+        })
+        group = str(ctx.get("group_name") or "").strip()
+        prefix = f"【{group}】" if group else ""
+        actor = ctx.get("actor_name") or secondary
+        narrative = f"{prefix}{actor} 请求调用工具：{tool_plugin}"
+        try:
+            backend.ingest_timeline_event(
+                source=tool_plugin,
+                actor_name=actor,
+                narrative=narrative,
+                payload=payload,
+                session_window_seconds=0,
+            )
         except Exception:
             pass
 
@@ -3657,7 +4558,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             ctx, out["content"], out["in"], out["out"], out["tool_call_flag"],
             detail_id=detail_id or "", tool_calls=out["tool_calls"],
         )
-        self._complete_invocations(ctx, state, out, event_id, record_tools=False)
+        self._complete_invocations(ctx, state, out, event_id)
         self._timeline_release(ctx)
 
     def _stream_prepare(self, ctx):
@@ -3694,7 +4595,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         """转发上游 SSE；返回 {wrote: 是否写过内容, aborted: 是否要中止}。"""
         pump = {"wrote": False, "aborted": False}
         try:
-            if ctx["compute_mgr"] and ctx["user_query"]:
+            if ctx["compute_mgr"] and ctx["user_query"] and (
+                ctx.get("dynamic_tools") or ctx.get("host_backup")
+            ):
+                # 动态工具/中枢控制需要先知道模型是否发起调用，这一轮用完整结果回放 SSE
+                pump["wrote"] = self._stream_completion(ctx, accumulator)
+            elif ctx["compute_mgr"] and ctx["user_query"]:
                 pump["wrote"] = self._stream_forward(ctx, accumulator)
             if not pump["wrote"]:
                 self._stream_fallback_chunk(ctx, accumulator)
@@ -3706,6 +4612,35 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             print(f"[Gateway] 流式异常: {exc}", flush=True)
         return pump
+
+    def _stream_completion(self, ctx, accumulator):
+        """动态工具场景：先跑完整结果（含工具申请），再回放成 SSE。"""
+        result = self._complete_persona(ctx) or {}
+        message = result.get("message") or {}
+        content = str(message.get("content") or "")
+        calls = list(message.get("tool_calls") or [])
+        if not content and not calls:
+            return False
+        for index, call in enumerate(calls):
+            call.setdefault("index", index)
+        finish = "tool_calls" if calls else (result.get("finish_reason") or "stop")
+        chunk = {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": ctx.get("req_model") or "",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": content, "tool_calls": calls} if calls else {"content": content},
+                "finish_reason": finish,
+            }],
+            "usage": result.get("usage") or {},
+        }
+        self._stream_write(
+            f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"),
+            accumulator,
+        )
+        return True
 
     def _stream_forward(self, ctx, accumulator):
         """转发上游 SSE：开头缓冲一小段，模型要回忆就先查库再重推。"""
@@ -3809,6 +4744,7 @@ class _StreamAccumulator:
         self.saw_done = False
         self.tool_calls = False
         self.tool_call_names = []
+        self.tool_calls_data = []
 
     def feed(self, chunk):
         """按行拆 SSE：一行一个 data: 载荷，喂完就丢。"""
@@ -3851,9 +4787,30 @@ class _StreamAccumulator:
             self.content.append(delta["content"])
         for call in delta.get("tool_calls") or []:
             self.tool_calls = True
-            name = ((call or {}).get("function") or {}).get("name")
-            if name and name not in self.tool_call_names:
-                self.tool_call_names.append(name)
+            self._merge_tool_call(call or {})
+
+    def _merge_tool_call(self, call):
+        """按 index 拼接流式 tool_call 的名字和参数，供时间轴取真实工具名。"""
+        try:
+            index = int(call.get("index") or 0)
+        except (TypeError, ValueError):
+            index = 0
+        while len(self.tool_calls_data) <= index:
+            self.tool_calls_data.append({
+                "id": "", "type": "function",
+                "function": {"name": "", "arguments": ""},
+            })
+        current = self.tool_calls_data[index]
+        if call.get("id"):
+            current["id"] = str(call["id"])
+        fn = call.get("function") or {}
+        if fn.get("name"):
+            current["function"]["name"] = str(fn["name"])
+        if fn.get("arguments"):
+            current["function"]["arguments"] += str(fn["arguments"])
+        name = current["function"]["name"]
+        if name and name not in self.tool_call_names:
+            self.tool_call_names.append(name)
 
 
 class ReusableThreadingServer(ThreadingHTTPServer):
@@ -3929,7 +4886,6 @@ def _start_aggregator():
 
         threading.Thread(
             target=run_forever, args=(get_store(),),
-            kwargs={"interval": 30.0},
             daemon=True, name="segment-aggregator",
         ).start()
     except Exception as e:
