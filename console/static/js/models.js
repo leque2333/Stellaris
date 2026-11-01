@@ -874,11 +874,18 @@
             if (!listEl) return;
             listEl.innerHTML = '';
 
-            Object.keys(providers).forEach(pKey => {
+            Object.keys(providers).forEach((pKey, providerIndex) => {
                 const p = providers[pKey];
                 const card = document.createElement('div');
                 card.style.cssText = 'background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius-sm); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;';
-                
+                // 供应商名/描述/端点都可能来自配置文件，一律先转义再拼进 HTML
+                const eName = escapeHtml(p.name || '');
+                const eDesc = escapeHtml(p.description || '');
+                const eBase = escapeHtml(p.base_url || '');
+                const eModel = escapeHtml(p.model || '');
+                const eMasked = escapeHtml(p.api_key_masked || '');
+                const eKey = escapeHtml(pKey);
+
                 let typeBadge = '';
                 if (p.auth_type === 'ide_bridge') {
                     typeBadge = '<span style="font-size: 11px; padding: 2px 7px; border-radius: 8px; background: rgba(59,130,246,0.15); color: #60a5fa;">IDE / 开发者环境</span>';
@@ -891,32 +898,47 @@
                 card.innerHTML = `
                     <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
                         <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-weight: 600; font-size: 14px;">${p.name}</span>
+                            <span style="font-weight: 600; font-size: 14px;">${eName}</span>
                             ${typeBadge}
                         </div>
                         <div style="display: flex; align-items: center; gap: 10px;">
-                            <span id="test-status-${pKey}" style="font-size: 12px; color: var(--text-muted);">未测试</span>
-                            <button class="btn btn-secondary" style="font-size: 11.5px; padding: 4px 10px;" onclick="testProviderConnection('${pKey}')">连通性测试 (Ping)</button>
+                            <span id="test-status-${eKey}" style="font-size: 12px; color: var(--text-muted);">未测试</span>
+                            <button class="btn btn-secondary" style="font-size: 11.5px; padding: 4px 10px;" data-provider-index="${providerIndex}" onclick="testProviderConnectionAt(this)">连通性测试 (Ping)</button>
                         </div>
                     </div>
-                    <div style="font-size: 12px; color: var(--text-muted);">${p.description || ''}</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">${eDesc}</div>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 4px;">
                         <div>
                             <span style="font-size: 11px; color: var(--text-muted);">服务端点 (Base URL)</span>
-                            <input class="form-input" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" value="${p.base_url || ''}" onchange="updateProviderField('${pKey}', 'base_url', this.value)" />
+                            <input class="form-input" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" value="${eBase}" onchange="updateProviderFieldAt(${providerIndex}, 'base_url', this.value)" />
                         </div>
                         <div>
                             <span style="font-size: 11px; color: var(--text-muted);">调用模型 (Model)</span>
-                            <input class="form-input" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" value="${p.model || ''}" onchange="updateProviderField('${pKey}', 'model', this.value)" />
+                            <input class="form-input" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" value="${eModel}" onchange="updateProviderFieldAt(${providerIndex}, 'model', this.value)" />
                         </div>
                         <div>
                             <span style="font-size: 11px; color: var(--text-muted);">访问凭证 (API Key / Token)</span>
-                            <input class="form-input" type="password" placeholder="${p.api_key_masked || (p.auth_type === 'ide_bridge' ? '本地会话免填' : '填入官方 API Key')}" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" onchange="updateProviderField('${pKey}', 'api_key', this.value)" />
+                            <input class="form-input" type="password" placeholder="${eMasked || (p.auth_type === 'ide_bridge' ? '本地会话免填' : '填入官方 API Key')}" style="padding: 5px 8px; font-size: 12px; margin-top: 3px;" onchange="updateProviderFieldAt(${providerIndex}, 'api_key', this.value)" />
                         </div>
                     </div>
                 `;
                 listEl.appendChild(card);
             });
+        }
+
+        function providerKeyAt(index) {
+            const providers = (globalComputeConfig && globalComputeConfig.providers) || {};
+            return Object.keys(providers)[index];
+        }
+
+        function testProviderConnectionAt(btn) {
+            const key = providerKeyAt(Number(btn.dataset.providerIndex));
+            if (key) testProviderConnection(key);
+        }
+
+        function updateProviderFieldAt(index, field, val) {
+            const key = providerKeyAt(index);
+            if (key) updateProviderField(key, field, val);
         }
 
         function updateProviderField(providerKey, field, val) {
@@ -1022,10 +1044,10 @@
                     body: JSON.stringify({provider_key: pKey})
                 });
                 const d = await res.json();
-                if (d.ok) {
-                    if (statusEl) statusEl.innerHTML = `<span style="color: var(--accent-green);">正常 (${d.latency_ms}ms)</span>`;
+                if (d.ok || d.success) {
+                    if (statusEl) statusEl.innerHTML = `<span style="color: var(--accent-green);">正常 (${d.latency_ms || 0}ms)</span>`;
                 } else {
-                    if (statusEl) statusEl.innerHTML = `<span style="color: var(--accent-rose);">失败 (${d.error || '连接超时'})</span>`;
+                    if (statusEl) statusEl.innerHTML = `<span style="color: var(--accent-rose);">失败 (${escapeHtml(d.error || d.msg || '连接超时')})</span>`;
                 }
             } catch (e) {
                 if (statusEl) statusEl.innerHTML = `<span style="color: var(--accent-rose);">错误: ${e}</span>`;

@@ -249,7 +249,26 @@ class TimelineOps:
             rows = conn.execute(
                 f"SELECT * FROM agent_timeline {where} ORDER BY timestamp DESC LIMIT ?", tuple(params)
             ).fetchall()
-        return [self._row_to_event(r) for r in rows]
+        events = [self._row_to_event(r) for r in rows]
+        if exclude_group:
+            # 真实写入把群聊信息放在 metadata 里，单看 source_module 过滤不到（审计 B25）
+            events = [e for e in events if not self._is_group_event(e)]
+        return events
+
+    @staticmethod
+    def _is_group_event(event) -> bool:
+        """判断一条事件是不是群聊产生的：来源前缀 + metadata 双重判断。"""
+        source = str(getattr(event, "source_module", "") or "")
+        if source.startswith(("qq_group:", "group:")):
+            return True
+        meta = getattr(event, "metadata", None) or {}
+        if isinstance(meta, str):
+            meta = _loads(meta, {})
+        if not isinstance(meta, dict):
+            return False
+        if str(meta.get("channel_type") or "").lower() == "group":
+            return True
+        return bool(str(meta.get("group_id") or "").strip())
 
     def search_narratives(
         self,

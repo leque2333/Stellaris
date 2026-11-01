@@ -125,11 +125,23 @@ def import_bundle(bundle: Dict[str, Any], mode: str = "merge", store=None) -> Di
     return {"ok": True, "mode": mode, "backup": backup, "counts": counts}
 
 
-def _insert_events(store, records: Iterable[Dict[str, Any]], source: str) -> Dict[str, Any]:
+def _default_person(store) -> str:
+    """导入的记忆默认挂在主人档案下，否则任何档案都召回不到（审计 B26）。"""
+    try:
+        from ..profile.archives import ArchiveManager
+
+        return str(ArchiveManager(store).admin().get("archive_id") or "")
+    except Exception:
+        return ""
+
+
+def _insert_events(store, records: Iterable[Dict[str, Any]], source: str,
+                   person_id: str = "") -> Dict[str, Any]:
     backup = _backup(store)
     con = sqlite3.connect(str(store.path), timeout=20)
     inserted = 0
     now = time.time()
+    person = str(person_id or "").strip() or _default_person(store)
     try:
         with con:
             for index, item in enumerate(records):
@@ -148,18 +160,21 @@ def _insert_events(store, records: Iterable[Dict[str, Any]], source: str) -> Dic
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         event_id, timestamp, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp)),
-                        source, "import", "导入记录", narrative, 0, 1.0,
-                        json.dumps({"import_source": source, "role": role}, ensure_ascii=False),
-                        "import", "import", "import", "system", timestamp, timestamp, "private", "import",
+                        source, person or "import", "导入记录", narrative, 0, 1.0,
+                        json.dumps({"import_source": source, "role": role,
+                                    "person_id": person}, ensure_ascii=False),
+                        "import", "import", "import", "system", timestamp, timestamp, "private",
+                        person or "import",
                     ),
                 )
                 inserted += 1
     finally:
         con.close()
-    return {"ok": True, "mode": "merge", "backup": backup, "counts": {"agent_timeline": inserted}}
+    return {"ok": True, "mode": "merge", "backup": backup,
+            "counts": {"agent_timeline": inserted}, "person_id": person}
 
 
-def import_jsonl(store, content: str) -> Dict[str, Any]:
+def import_jsonl(store, content: str, person_id: str = "") -> Dict[str, Any]:
     records = []
     for line in str(content or "").splitlines():
         line = line.strip()
@@ -171,19 +186,19 @@ def import_jsonl(store, content: str) -> Dict[str, Any]:
             continue
         if isinstance(item, dict):
             records.append(item)
-    return _insert_events(store, records, "import_jsonl")
+    return _insert_events(store, records, "import_jsonl", person_id=person_id)
 
 
-def import_text(store, content: str) -> Dict[str, Any]:
+def import_text(store, content: str, person_id: str = "") -> Dict[str, Any]:
     records = [
         {"role": "import", "text": part.strip()}
         for part in str(content or "").split("\n\n")
         if part.strip()
     ]
-    return _insert_events(store, records, "import_text")
+    return _insert_events(store, records, "import_text", person_id=person_id)
 
 
-def import_chatgpt(store, content: str) -> Dict[str, Any]:
+def import_chatgpt(store, content: str, person_id: str = "") -> Dict[str, Any]:
     data = json.loads(content)
     conversations = data if isinstance(data, list) else [data]
     records = []
@@ -205,29 +220,31 @@ def import_chatgpt(store, content: str) -> Dict[str, Any]:
                         "text": f"[{title}] {text.strip()}",
                         "timestamp": msg.get("create_time"),
                     })
-    return _insert_events(store, records[:2000], "import_chatgpt")
+    return _insert_events(store, records[:2000], "import_chatgpt", person_id=person_id)
 
 
 def detect_format(content: str) -> str:
     text = str(content or "").strip()
     if not text:
         return "empty"
-    if text.startswith("{"):
+    # ChatGPT 导出是顶层数组，以 "[" 开头；只判断 "{" 会把它当纯文本（审计 B27）
+    if text.startswith(("{", "[")):
         try:
             data = json.loads(text)
-            if isinstance(data, dict) and data.get("format") == FORMAT:
-                return "native"
-            if isinstance(data, list) and any(isinstance(x, dict) and "mapping" in x for x in data):
-                return "chatgpt"
         except json.JSONDecodeError:
-            pass
+            data = None
+        if isinstance(data, dict) and data.get("format") == FORMAT:
+            return "native"
+        if isinstance(data, list) and any(isinstance(x, dict) and "mapping" in x for x in data):
+            return "chatgpt"
     first = text.splitlines()[0].strip()
     if first.startswith("{") and first.endswith("}"):
         return "jsonl"
     return "text"
 
 
-def import_content(content: str, fmt: str = "auto", mode: str = "merge", store=None) -> Dict[str, Any]:
+def import_content(content: str, fmt: str = "auto", mode: str = "merge", store=None,
+                   person_id: str = "") -> Dict[str, Any]:
     raw = str(content or "")
     if len(raw) > MAX_IMPORT_CHARS:
         raise ValueError("导入内容过大（上限 50MB）")
@@ -236,11 +253,11 @@ def import_content(content: str, fmt: str = "auto", mode: str = "merge", store=N
     if kind == "native":
         return import_bundle(json.loads(raw), mode=mode, store=store)
     if kind == "jsonl":
-        return import_jsonl(store, raw)
+        return import_jsonl(store, raw, person_id=person_id)
     if kind == "chatgpt":
-        return import_chatgpt(store, raw)
+        return import_chatgpt(store, raw, person_id=person_id)
     if kind == "text":
-        return import_text(store, raw)
+        return import_text(store, raw, person_id=person_id)
     raise ValueError(f"不支持导入格式: {kind}")
 
 

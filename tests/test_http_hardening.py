@@ -25,9 +25,15 @@ class BindHostTest(unittest.TestCase):
         from server import _bind_host  # noqa: PLC0415
 
         old = os.environ.pop("HUB_BIND", None)
+        old_path = os.environ.get("HUB_API_SECURITY_PATH")
+        # 默认必须只监听本机，不能一装上就暴露在 0.0.0.0
+        os.environ["HUB_API_SECURITY_PATH"] = str(ROOT / ".tmp" / "no_such_api_security.json")
         try:
-            self.assertEqual(_bind_host(), "0.0.0.0")
+            self.assertEqual(_bind_host(), "127.0.0.1")
         finally:
+            os.environ.pop("HUB_API_SECURITY_PATH", None)
+            if old_path is not None:
+                os.environ["HUB_API_SECURITY_PATH"] = old_path
             if old is not None:
                 os.environ["HUB_BIND"] = old
 
@@ -50,21 +56,21 @@ class BindHostTest(unittest.TestCase):
 class CorsTest(unittest.TestCase):
     def test_same_origin_allowed(self):
         handler = _handler({
-            "Origin": "https://leque233.xyz:49257",
-            "Host": "leque233.xyz:49257",
+            "Origin": "https://hub.example.test:18895",
+            "Host": "hub.example.test:18895",
         })
-        self.assertEqual(handler._allowed_origin(), "https://leque233.xyz:49257")
+        self.assertEqual(handler._allowed_origin(), "https://hub.example.test:18895")
 
     def test_cross_origin_blocked(self):
-        handler = _handler({"Origin": "https://evil.example", "Host": "leque233.xyz:49257"})
+        handler = _handler({"Origin": "https://evil.example", "Host": "hub.example.test:18895"})
         self.assertEqual(handler._allowed_origin(), "")
 
     def test_no_origin_header(self):
-        handler = _handler({"Host": "leque233.xyz:49257"})
+        handler = _handler({"Host": "hub.example.test:18895"})
         self.assertEqual(handler._allowed_origin(), "")
 
     def test_origin_without_host(self):
-        handler = _handler({"Origin": "https://leque233.xyz:49257"})
+        handler = _handler({"Origin": "https://hub.example.test:18895"})
         self.assertEqual(handler._allowed_origin(), "")
 
 

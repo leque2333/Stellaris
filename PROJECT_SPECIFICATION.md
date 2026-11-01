@@ -1,4 +1,4 @@
-﻿# 项目方案 / Stellaris Specification
+# 项目方案 / Stellaris Specification
 
 > 版本：v8.0-AstrBot  
 > 更新时间：2026-10-30  
@@ -160,13 +160,23 @@ platform + platform_user_id
 → archive_id / person_id
 ```
 
-`archive_identities` 是唯一白名单表：
+`archive_identities` 是按「平台账号」建档的白名单表：
 
 ```text
 UNIQUE(platform, platform_user_id)
 ```
 
 只有表里的身份才有档案、长期记忆和自定义好感度。
+
+另有两类**显式**入口，属于管理动作而非隐式放行：
+
+```text
+platform_bindings  模块/控制台把一个外部会话显式绑到某个档案（等同管理员手动绑定）
+MASTER_QQ          主人自己的底层 UID（来自 data/identity.json 或环境变量）
+```
+
+除这三者之外没有别的认主途径：`MASTER_ALIASES` 默认只含 `MASTER_QQ`，
+不再内置 `admin` / `leque` 这类通用词；缺失 UID 的请求一律按访客处理。
 
 档案角色：
 

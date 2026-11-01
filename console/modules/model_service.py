@@ -147,8 +147,72 @@ def get_models_config():
 
     return config
 
+_MASKED_MARK = "****"
+
+
+def _mask_key(raw: str) -> str:
+    """只回掩码，绝不把完整 Key 回给浏览器。"""
+    key = str(raw or "")
+    if not key:
+        return ""
+    if len(key) > 8 and not key.startswith("local"):
+        return f"{key[:3]}{_MASKED_MARK}{key[-4:]}"
+    return key[:1] + _MASKED_MARK
+
+
+def redact_models_config(config):
+    """把模型配置里的 api_key 全部换成掩码 + has_key 标记（GET 用）。"""
+    if not isinstance(config, dict):
+        return config
+    safe = json.loads(json.dumps(config))
+    for pool in ("master_credentials", "function_credentials", "api_pool"):
+        for item in safe.get(pool) or []:
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.pop("api_key", "") or "")
+            item["api_key_masked"] = _mask_key(raw)
+            item["has_key"] = bool(raw and raw != "none")
+    return safe
+
+
+def _looks_masked(value: str) -> bool:
+    text = str(value or "")
+    return (not text) or _MASKED_MARK in text
+
+
+def _restore_masked_keys(new_config, old_config):
+    """保存时把「掩码/空」的 api_key 还原成旧值，避免把掩码写进配置。"""
+    for pool in ("master_credentials", "function_credentials", "api_pool"):
+        olds = [x for x in (old_config.get(pool) or []) if isinstance(x, dict)]
+        for index, item in enumerate(new_config.get(pool) or []):
+            if not isinstance(item, dict):
+                continue
+            if not _looks_masked(item.get("api_key")):
+                item.pop("api_key_masked", None)
+                continue
+            match = _find_old_credential(olds, item, index)
+            item["api_key"] = str((match or {}).get("api_key") or "")
+            item.pop("api_key_masked", None)
+            item.pop("has_key", None)
+
+
+def _find_old_credential(olds, item, index):
+    """优先按 name+base_url 找回旧凭证，其次按位置。"""
+    name = str(item.get("name") or "")
+    base_url = str(item.get("base_url") or "")
+    for old in olds:
+        if name and str(old.get("name") or "") == name and str(old.get("base_url") or "") == base_url:
+            return old
+    for old in olds:
+        if name and str(old.get("name") or "") == name:
+            return old
+    return olds[index] if index < len(olds) else {}
+
+
 def save_models_config(new_config):
     downgraded = False
+    # 前端拿到的是掩码，保存前先把未改动的 Key 还原回来
+    _restore_masked_keys(new_config, get_models_config())
     active_m = new_config.get("active_model", "")
     effort = new_config.get("reasoning_effort", "none")
 

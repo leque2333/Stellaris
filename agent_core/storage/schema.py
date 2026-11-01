@@ -840,6 +840,36 @@ def _v28_timeline_permission(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE agent_timeline ADD COLUMN tag_permission TEXT DEFAULT ''")
 
 
+def _v29_fact_confidence_and_buffer_unique(conn: sqlite3.Connection) -> None:
+    """事实置信度/失效时间 + 缓冲区去重索引。
+
+    - user_facts.confidence：低置信度事实写 pending，不再一律 active
+    - user_facts.superseded_at：记录旧事实退役时间，回滚时能还原
+    - idx_facts_conflict：同人 / 同分类 / 同状态的事实检索更快
+    - uq_buffer_event：同一事件在缓冲区里只留一份（审计 B23）
+    """
+    fact_cols = _columns(conn, "user_facts")
+    if "confidence" not in fact_cols:
+        conn.execute("ALTER TABLE user_facts ADD COLUMN confidence REAL DEFAULT 1.0")
+    if "superseded_at" not in fact_cols:
+        conn.execute("ALTER TABLE user_facts ADD COLUMN superseded_at REAL")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_facts_conflict "
+        "ON user_facts(user_id, category, status)"
+    )
+    buffer_cols = _columns(conn, "timeline_buffer")
+    if buffer_cols:
+        conn.execute(
+            "DELETE FROM timeline_buffer WHERE rowid NOT IN ("
+            "  SELECT MIN(rowid) FROM timeline_buffer GROUP BY person_id, event_id"
+            ")"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_buffer_event "
+            "ON timeline_buffer(person_id, event_id)"
+        )
+
+
 MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "baseline", _v1_baseline),
     (2, "timeline_tags_plugins_ledger", _v2_timeline_and_plugins),
@@ -869,6 +899,7 @@ MIGRATIONS: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (26, "token_usage_tools", _v26_token_usage_tools),
     (27, "timeline_buffer", _v27_timeline_buffer),
     (28, "timeline_permission", _v28_timeline_permission),
+    (29, "fact_confidence_and_buffer_unique", _v29_fact_confidence_and_buffer_unique),
 ]
 
 

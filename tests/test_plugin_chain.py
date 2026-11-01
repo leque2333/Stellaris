@@ -30,13 +30,13 @@ class PluginChainTest(unittest.TestCase):
         self.assertEqual(self.handler._timeline_plugin_name(ctx), "napcat")
 
     def test_initiator_tag_is_archive_id(self):
-        ctx = {"archive_id": "arc_master", "actor_id": "master", "sender_uid": "2986371638"}
+        ctx = {"archive_id": "arc_master", "actor_id": "master", "sender_uid": "2000000001"}
         self.assertEqual(self.handler._timeline_initiator_tag(ctx), "arc_master")
         self.assertEqual(self.handler._timeline_tag_secondary(ctx), "arc_master")
 
     def test_initiator_falls_back_to_platform_uid_without_archive(self):
-        ctx = {"platform": "qq", "sender_uid": "2622164205", "actor_id": "user_2622164205"}
-        self.assertEqual(self.handler._timeline_initiator_tag(ctx), "qq:2622164205")
+        ctx = {"platform": "qq", "sender_uid": "10001", "actor_id": "user_10001"}
+        self.assertEqual(self.handler._timeline_initiator_tag(ctx), "qq:10001")
 
     def test_initiator_falls_back_to_actor_without_platform(self):
         ctx = {"actor_id": "user_123"}
@@ -46,7 +46,7 @@ class PluginChainTest(unittest.TestCase):
         ctx = {
             "platform": "web",
             "session_id": "eee4b2e1-be5f-4914-bcbe-a0487e293b1d",
-            "sender_uid": "2986371638",
+            "sender_uid": "2000000001",
         }
         self.assertEqual(self.handler._timeline_plugin_name(ctx), "web")
 

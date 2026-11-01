@@ -96,10 +96,13 @@ class FactManager:
         category: str = "preference",
         supersedes_id: Optional[str] = None,
         source: str = "manual",
+        confidence: float = 1.0,
+        status: Optional[str] = None,
     ) -> str:
         uid = self._normalize_uid(user_id)
         fact_id = self.store.add_fact(
-            uid, content, category=category, supersedes_id=supersedes_id, source=source,
+            uid, content, category=category, supersedes_id=supersedes_id,
+            source=source, confidence=confidence, status=status,
         )
         self._sync_profile_facts(uid)
         return fact_id

@@ -1,0 +1,34 @@
+# 构建上下文排除项：镜像里只应该有代码，不能把记忆库/密钥/日志带进去
+.git
+.gitignore
+.github
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+
+# 私人数据与备份（挂载卷负责提供）
+data/
+backups/
+logs/
+archive/
+.agents/
+
+# 本地临时件与文档
+.tmp/
+.tmp_*
+*.log
+*.db
+*.db-shm
+*.db-wal
+docs/
+tests/
+.env
+.env.*
+*.key
+*.pem
+*.token
+*.secret
+.idea
+.vscode

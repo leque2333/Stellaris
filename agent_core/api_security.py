@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "bind_host": "0.0.0.0",
+    # 默认只监听本机：控制台是私人面板，要对外必须先显式改 bind_host / HUB_BIND
+    "bind_host": "127.0.0.1",
     "local_only": False,
     "allow_cidrs": ["127.0.0.1/32", "::1/128"],
     "trusted_proxies": ["127.0.0.1/32", "::1/128"],
@@ -100,8 +101,11 @@ def save_config(patch: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _merged(data: Dict[str, Any]) -> Dict[str, Any]:
+    # 老配置文件可能没有 bind_host（docs/API_SECURITY.md 的示例就是）；回落必须和
+    # DEFAULT_CONFIG 一致，否则按示例升级的用户会重新暴露到 0.0.0.0（复核报告 §4.1）
+    fallback_host = str(DEFAULT_CONFIG.get("bind_host") or "127.0.0.1")
     config = {
-        "bind_host": str(data.get("bind_host") or "0.0.0.0").strip() or "0.0.0.0",
+        "bind_host": str(data.get("bind_host") or fallback_host).strip() or fallback_host,
         "local_only": bool(data.get("local_only", False)),
         "allow_cidrs": _cidrs(data.get("allow_cidrs"), DEFAULT_CONFIG["allow_cidrs"]),
         "trusted_proxies": _cidrs(data.get("trusted_proxies"), DEFAULT_CONFIG["trusted_proxies"]),

@@ -115,16 +115,16 @@ class ComputeManager:
     def get_config(self) -> Dict[str, Any]:
         if not self._config:
             self.load_config()
-        # 敏感信息保护：返回给前端时隐藏完整 API Key
+        # 敏感信息保护：返回给前端时**删掉**完整 API Key，只留掩码与 has_key
         safe_copy = json.loads(json.dumps(self._config))
-        for p_id, p in safe_copy.get("providers", {}).items():
-            k = p.get("api_key", "")
-            if k and len(k) > 8 and not k.startswith("local"):
-                p["api_key_masked"] = f"{k[:3]}****{k[-4:]}"
+        for p in safe_copy.get("providers", {}).values():
+            raw_key = str(p.pop("api_key", "") or "")
+            if raw_key and len(raw_key) > 8 and not raw_key.startswith("local"):
+                p["api_key_masked"] = f"{raw_key[:3]}****{raw_key[-4:]}"
                 p["has_key"] = True
             else:
-                p["api_key_masked"] = "" if not k else k
-                p["has_key"] = bool(k and k != "none")
+                p["api_key_masked"] = "" if not raw_key else raw_key[:1] + "****"
+                p["has_key"] = bool(raw_key and raw_key != "none")
         return safe_copy
 
     def update_slots(self, persona_slot: str, logic_slot: str) -> bool:
@@ -383,6 +383,8 @@ class ComputeManager:
                     prov, messages, temperature, max_tokens, timeout, current_port, extra
                 )
                 if data and data.get("choices"):
+                    # 记账要用真正跑通的那个凭证的模型，failover 之后不能记候选第一名
+                    data.setdefault("_hub_model", str(prov.get("model") or ""))
                     return data
             except Exception as e:
                 logger.warning("凭证 [%s] 调用报错: %s，切换备用凭证", p_name, e)
@@ -416,18 +418,35 @@ class ComputeManager:
         extra: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[str], int, int]:
         """兼容旧调用：只取文本内容与 token 数"""
+        content, p_in, p_out, _ = self.chat_completion_meta(
+            slot_or_key, messages, temperature, max_tokens, timeout, current_port, extra
+        )
+        return content, p_in, p_out
+
+    def chat_completion_meta(
+        self,
+        slot_or_key: str,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: int = 30,
+        current_port: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Optional[str], int, int, str]:
+        """同上，但额外返回**上游实际使用的模型名**，供账本按真实模型计价。"""
         data = self.chat_completion_response(
             slot_or_key, messages, temperature, max_tokens, timeout, current_port, extra
         )
         if not data:
-            return None, 0, 0
+            return None, 0, 0, ""
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message", {}) or {}
         content = message.get("content") or ""
         usage = data.get("usage", {}) or {}
         p_in = int(usage.get("prompt_tokens", len(str(messages)) // 3) or 0)
         p_out = int(usage.get("completion_tokens", len(content) // 2) or 0)
-        return content, p_in, p_out
+        model = str(data.get("model") or data.get("_hub_model") or "")
+        return content, p_in, p_out, model
 
     def stream_chat_completion(
         self,
@@ -448,6 +467,9 @@ class ComputeManager:
 
             payload = self._build_payload(prov, messages, temperature, max_tokens, extra)
             payload["stream"] = True
+            # 让上游在流末尾补一条真实 usage，账本就不用全靠字数估（审计 B18）
+            if os.getenv("HUB_STREAM_USAGE", "1") not in ("0", "false", "False"):
+                payload["stream_options"] = {"include_usage": True}
             headers = self._request_headers(prov)
             headers["Accept"] = "text/event-stream"
 

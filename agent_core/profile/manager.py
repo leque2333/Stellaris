@@ -48,12 +48,21 @@ class ProfileManager:
 
     # ---- 事实 ----
     def add_fact(
-        self, user_id: str, content: str, category: str = "preference", source: str = "manual"
+        self,
+        user_id: str,
+        content: str,
+        category: str = "preference",
+        source: str = "manual",
+        confidence: float = 1.0,
+        status: Any = None,
     ) -> str:
         aid = self._aid(user_id)
         if not aid:
             return ""  # 未建档用户不写入；需先手动创建档案
-        return self.facts.add_fact(aid, content, category=category, source=source)
+        return self.facts.add_fact(
+            aid, content, category=category, source=source,
+            confidence=confidence, status=status,
+        )
 
     def supersede_fact(
         self, old_fact_id: str, new_content: str, category: str = "preference", source: str = "manual"

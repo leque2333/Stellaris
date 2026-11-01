@@ -5,6 +5,7 @@
 
 ```json
 {
+  "bind_host": "127.0.0.1",
   "local_only": false,
   "allow_cidrs": ["127.0.0.1/32", "::1/128"],
   "trusted_proxies": ["127.0.0.1/32", "::1/128"],
@@ -19,7 +20,7 @@
 
 | 字段 | 作用 |
 |---|---|
-| `bind_host` | 监听地址，默认 `0.0.0.0`；只给本机用就写 `127.0.0.1`（改完要重启） |
+| `bind_host` | 监听地址，默认 `127.0.0.1`（只给本机用）；要让局域网/反代访问改成 `0.0.0.0`，改完要重启 |
 | `local_only` | 只允许本机访问。开启后不在 `allow_cidrs` 的客户端一律 403 |
 | `allow_cidrs` | 本机模式下放行的网段。默认只有回环；要让局域网/容器访问就加网段 |
 | `trusted_proxies` | 只有这些来源的 `X-Forwarded-For` 才可信（默认本机 nginx） |
@@ -123,7 +124,7 @@ req = urllib.request.Request(
     "http://127.0.0.1:18895/v1/chat/completions", data=body, method="POST",
     headers={"Content-Type": "application/json", "Authorization": "Bearer <客户端 Key>",
              "X-Timestamp": ts, "X-Signature": sig,
-             "X-User-Id": "2986371638", "X-Channel": "qq"},
+             "X-User-Id": "10001", "X-Channel": "qq"},
 )
 print(urllib.request.urlopen(req, timeout=60).read()[:80])
 ```

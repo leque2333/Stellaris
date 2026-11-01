@@ -3,6 +3,12 @@
 
 只做执行，不做权限判断；权限由网关（管理员客户端）和时间轴审计负责。
 动作：status / powershell / screenshot / lock。
+
+安全约定：
+- `powershell` 默认**关闭**：工具描述里不出现该动作，调用也会被拒绝；
+- 确实需要时用 HUB_HOST_POWERSHELL_ENABLED=1 显式打开，且只放行只读白名单命令，
+  含命令拼接/重定向/下载执行的写法一律拒绝；
+- 每次执行都写审计日志，超时上限不变。
 """
 
 from __future__ import annotations
@@ -17,34 +23,81 @@ TOOL_NAME = "hub_host_control"
 MAX_OUTPUT = 12000
 DEFAULT_TIMEOUT = 60
 MAX_TIMEOUT = 180
+POWERSHELL_ENV = "HUB_HOST_POWERSHELL_ENABLED"
+
+# 只读命令白名单：动作默认关闭，打开后也只放行这些前缀
+POWERSHELL_ALLOWED_PREFIXES = (
+    "get-process", "get-service", "get-ciminstance", "get-computerinfo",
+    "get-date", "get-childitem", "get-content", "get-psdrive", "get-netadapter",
+    "get-nettcpconnection", "get-volume", "get-eventlog", "get-winevent",
+    "test-connection", "test-path", "dir", "ls", "type", "whoami", "hostname",
+    "systeminfo", "ipconfig", "tasklist",
+)
+
+# 命令拼接 / 重定向 / 下载执行 / 进程拉起：出现就整条拒绝
+POWERSHELL_FORBIDDEN_TOKENS = (
+    ";", "&&", "||", "|", ">", "<", "`", "$(", "invoke-expression", "iex",
+    "invoke-webrequest", "invoke-restmethod", "start-process", "new-object",
+    "add-type", "remove-item", "rm ", "del ", "set-", "new-item", "out-file",
+    "downloadstring", "curl", "wget", "certutil", "reg add", "schtasks",
+    "net user", "stop-process", "restart-computer", "stop-computer",
+)
+
+
+def powershell_enabled() -> bool:
+    """powershell 动作是否被显式打开（默认关闭）。"""
+    return str(os.getenv(POWERSHELL_ENV, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _command_rejection(command: str) -> str:
+    """返回拒绝原因；空串表示放行。"""
+    text = str(command or "").strip()
+    if not text:
+        return "command 不能为空"
+    lowered = text.lower()
+    for token in POWERSHELL_FORBIDDEN_TOKENS:
+        if token in lowered:
+            return f"命令包含不允许的片段：{token.strip()}"
+    if not lowered.startswith(POWERSHELL_ALLOWED_PREFIXES):
+        return "命令不在只读白名单内"
+    return ""
+
+
+def available_actions() -> list:
+    actions = ["status", "screenshot", "lock"]
+    if powershell_enabled():
+        actions.append("powershell")
+    return actions
 
 
 def tool_spec() -> Dict[str, Any]:
+    properties: Dict[str, Any] = {
+        "action": {
+            "type": "string",
+            "enum": available_actions(),
+        },
+        "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_TIMEOUT,
+        },
+    }
+    if powershell_enabled():
+        properties["command"] = {
+            "type": "string",
+            "description": "action=powershell 时要执行的只读 PowerShell 命令",
+        }
     return {
         "type": "function",
         "function": {
             "name": TOOL_NAME,
             "description": (
                 "备用宿主机控制。主控制工具不可用时使用；"
-                "支持查看状态、执行 PowerShell、截图、锁屏。仅管理员可用。"
+                "支持查看状态、截图、锁屏" + ("、执行只读 PowerShell" if powershell_enabled() else "") + "。仅管理员可用。"
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["status", "powershell", "screenshot", "lock"],
-                    },
-                    "command": {
-                        "type": "string",
-                        "description": "action=powershell 时要执行的 PowerShell 命令",
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_TIMEOUT,
-                    },
-                },
+                "properties": properties,
                 "required": ["action"],
             },
         },
@@ -137,11 +190,20 @@ def execute(action: str, command: str = "", timeout: int = DEFAULT_TIMEOUT) -> D
         except Exception as exc:
             return {"ok": False, "action": action, "text": f"锁屏失败: {exc}"}
     if action == "powershell":
-        if not str(command or "").strip():
-            return {"ok": False, "action": action, "text": "command 不能为空"}
+        if not powershell_enabled():
+            return {
+                "ok": False, "action": action,
+                "text": f"宿主机命令执行默认关闭（需要时设置 {POWERSHELL_ENV}=1）",
+            }
+        rejection = _command_rejection(command)
+        if rejection:
+            return {"ok": False, "action": action, "text": rejection}
         text = _run(command, timeout)
         return {"ok": not text.startswith("执行失败") and "命令超时" not in text, "action": action, "text": text}
     return {"ok": False, "action": action, "text": f"未知 action: {action}"}
 
 
-__all__ = ["TOOL_NAME", "tool_spec", "execute", "MAX_OUTPUT"]
+__all__ = [
+    "TOOL_NAME", "tool_spec", "execute", "MAX_OUTPUT",
+    "powershell_enabled", "available_actions", "POWERSHELL_ENV",
+]

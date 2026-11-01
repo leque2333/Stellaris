@@ -103,7 +103,17 @@ class HubKeyTest(unittest.TestCase):
         data = json.loads(self.path.read_text(encoding="utf-8"))
         ids = [c["id"] for c in data["clients"]]
         self.assertEqual(ids, ["astrbot"])
-        self.assertFalse(data["require_key"])
+        # 默认部署必须带 Key，否则匿名会被当成管理员（复核报告 §3）
+        self.assertTrue(data["require_key"])
+
+    def test_backfills_require_key_for_old_file(self):
+        """老 clients.json 没有 require_key 时补成 true，而不是继续放行匿名。"""
+        self.path.write_text(json.dumps({
+            "clients": [{"id": "astrbot", "keys": ["hub_sk_existing"]}],
+        }), encoding="utf-8")
+        conn.ensure_hub_key(self.path)
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertTrue(data["require_key"])
 
     def test_reuses_existing_key(self):
         self.path.write_text(json.dumps({

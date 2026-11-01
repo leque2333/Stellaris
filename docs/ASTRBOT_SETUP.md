@@ -112,14 +112,18 @@ logic_slot = deepseek_official
 
 ---
 
-## 4. 创建 AstrBot 访问 Key（可选）
+## 4. 创建 AstrBot 访问 Key（默认就需要）
 
-默认 `data/clients.json` 不存在时，中枢不强制校验 Key。  
-生产环境建议创建：
+`data/clients.json` 不存在时中枢**默认拒绝匿名调用**（`/v1` 返回 401 `missing_key`），
+因为“没有 Key”绝不能等于“管理员”。所以第一次接入要先建好 Key：
 
 ```bash
-copy data\clients.example.json data\clients.json
+copy clients.example.json data\clients.json
 ```
+
+> 仓库根目录的 `clients.example.json` 是模板（`require_key: true`）；
+> 复制后所有 `hub_sk_*_change_me` 都必须换成随机值。
+> 也可以直接跑 `python scripts/connect_astrbot.py`，它会自动生成 Key 并写好配置。
 
 把 `hub_sk_astrbot_change_me` 改成随机值，并设置：
 

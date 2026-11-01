@@ -180,11 +180,14 @@ def extract_facts_ai(text: str, usage_cb=None) -> List[Dict[str, str]]:
             },
             {"role": "user", "content": text},
         ]
-        out, p_in, p_out = compute_manager.chat_completion(
-            os.getenv("HUB_FACT_AI_SLOT", "logic_slot"), messages, timeout=30,
+        slot = os.getenv("HUB_FACT_AI_SLOT", "logic_slot")
+        out, p_in, p_out, used_model = compute_manager.chat_completion_meta(
+            slot, messages, timeout=30,
         )
         if usage_cb:
             try:
+                usage_cb(int(p_in or 0), int(p_out or 0), used_model or slot)
+            except TypeError:  # 兼容只收两个参数的旧回调
                 usage_cb(int(p_in or 0), int(p_out or 0))
             except Exception:
                 pass
@@ -202,12 +205,23 @@ def _tokenize(text: str) -> str:
         return " ".join(re.findall(r"[\u4e00-\u9fff]|[A-Za-z0-9_]+", str(text or "")))
 
 
+_READY_DBS: set = set()
+_READY_LOCK = threading.Lock()
+
+
 class FactStore:
     def __init__(self, store: Any = None) -> None:
         self.store = store or get_store()
-        self._ensure_schema()
-        self._ensure_fts()
-        self._ensure_tokens()
+        # 建表/建索引/建图库只对每个库做一次：以前每次 /v1 都跑一遍 DDL，
+        # 写锁被反复抢占（审计 F22）。这里只记「已就绪」，不共享 FactStore 实例。
+        key = str(getattr(self.store, "path", "") or id(self.store))
+        with _READY_LOCK:
+            first_init = key not in _READY_DBS
+            _READY_DBS.add(key)
+        if first_init:
+            self._ensure_schema()
+            self._ensure_fts()
+            self._ensure_tokens()
         graph_path = None
         raw_graph = os.getenv("HUB_GRAPH_DB_PATH", "").strip()
         if raw_graph:
@@ -215,15 +229,23 @@ class FactStore:
         elif getattr(self.store, "path", None):
             graph_path = Path(self.store.path).parent / "memory_graph.db"
         self.graph_store = GraphStore(graph_path)
-        self._sync_graph()
+        if first_init:
+            self._sync_graph()
 
     def _sync_graph(self) -> None:
+        """图库为空时，用**现行事实表**补齐（user_facts）。
+
+        历史实现只读 memory_facts，而事实写入早已统一到 user_facts，
+        于是内存图永远是空的（审计 B13）。
+        """
         try:
             if self.graph_store.counts().get("edges", 0):
                 return
             with self.store._connect() as conn:
                 rows = conn.execute(
-                    "SELECT * FROM memory_facts WHERE status = 'active' ORDER BY valid_at"
+                    "SELECT fact_id, user_id AS subject_id, category AS predicate, "
+                    "content AS value, status, updated_at AS valid_at, '' AS source_event_id "
+                    "FROM user_facts WHERE status = 'active' ORDER BY updated_at"
                 ).fetchall()
             for row in rows:
                 self.graph_store.index_fact(dict(row))
@@ -730,11 +752,17 @@ class FactStore:
             value = str(item.get("value") or "").strip()
             if not value:
                 continue
+            # 置信度必须一路传到写入层：太低的事实进 pending，不直接参与召回（审计 B11）
+            try:
+                confidence = float(item.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                confidence = 1.0
             fact_id = pm.add_fact(
                 subject_id,
                 value,
                 category=str(item.get("category") or item.get("predicate") or "preference"),
                 source=source,
+                confidence=confidence,
             )
             if fact_id:
                 stored.append(fact_id)

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """群内工具调用单独成事件：插件名 + 调用者 UID。"""
 
 import sys
@@ -27,7 +27,7 @@ class ToolTimelineTest(unittest.TestCase):
 
     def _ctx(self, group_id):
         return {
-            "actor_id": "2986371638",
+            "actor_id": "2000000001",
             "actor_name": "乐阙",
             "group_id": group_id,
         }

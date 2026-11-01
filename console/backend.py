@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ruff: noqa: F401  —— 本文件是聚合转导出层，名字由 server.py 通过 backend.xxx 调用
 """
 Stellaris Console Backend (Modular Facade)
@@ -34,7 +34,12 @@ try:
         resolve_hub_db_path,
         sanitize_clean_text,
     )
-    from modules.compute_service import get_compute_config, save_compute_config, test_compute_provider
+    from modules.compute_service import (
+        get_compute_config,
+        redact_compute_config,
+        save_compute_config,
+        test_compute_provider,
+    )
     from modules.model_service import (
         build_upstream_network_opener,
         check_model_reasoning_support,
@@ -45,6 +50,7 @@ try:
         get_token_analytics,
         get_universal_models_list,
         handle_sniff_key,
+        redact_models_config,
         save_credits,
         save_models_config,
         sniff_provider_from_key,
@@ -85,7 +91,12 @@ except ImportError:
         resolve_hub_db_path,
         sanitize_clean_text,
     )
-    from console.modules.compute_service import get_compute_config, save_compute_config, test_compute_provider
+    from console.modules.compute_service import (
+        get_compute_config,
+        redact_compute_config,
+        save_compute_config,
+        test_compute_provider,
+    )
     from console.modules.model_service import (
         build_upstream_network_opener,
         check_model_reasoning_support,
@@ -96,6 +107,7 @@ except ImportError:
         get_token_analytics,
         get_universal_models_list,
         handle_sniff_key,
+        redact_models_config,
         save_credits,
         save_models_config,
         sniff_provider_from_key,

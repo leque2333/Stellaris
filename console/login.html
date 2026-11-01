@@ -315,8 +315,13 @@
 
                 const data = await res.json();
                 if (res.ok && data.success) {
+                    // 会话只走 HttpOnly Cookie，不再往 localStorage 里存 Token
+                    if (data.must_change_password) {
+                        btnText.innerText = '首次登录，正在跳转改密...';
+                        window.location.href = '/change-password';
+                        return;
+                    }
                     btnText.innerText = '验证通过，正在进入中枢...';
-                    if (data.token) localStorage.setItem('anan_auth_token', data.token);
                     setTimeout(() => { window.location.href = '/'; }, 300);
                 } else {
                     errText.innerText = data.error || '用户名或密码不正确';

@@ -31,14 +31,18 @@ _LOCAL = _local_identity()
 MASTER_ID = os.getenv("MASTER_ID", "master")
 MASTER_NAME = os.getenv("MASTER_NAME") or str(_LOCAL.get("master_name") or "主人")
 MASTER_QQ = os.getenv("MASTER_QQ") or str(_LOCAL.get("master_qq") or "")
+
+# 平台 UID 别名：默认只认 MASTER_QQ。
+# 历史版本内置过 admin / leque 这类通用英文词，任何平台把 UID 设成它们就能
+# 直接成为主人（审计 P1-5），因此这里不再提供任何通用词兜底，
+# 需要别名请在 MASTER_ALIASES 里显式配置。
 MASTER_ALIASES: Set[str] = {
     x.strip().lower()
-    for x in os.getenv(
-        "MASTER_ALIASES",
-        ",".join(["master", "admin", "leque"] + ([MASTER_QQ] if MASTER_QQ else [])),
-    ).split(",")
+    for x in (os.getenv("MASTER_ALIASES") or "").split(",")
     if x.strip()
 }
+if MASTER_QQ:
+    MASTER_ALIASES.add(MASTER_QQ.strip().lower())
 
 # 智能体自身 (Self) 身份凭证池：名称从人设卡读取，环境变量可覆盖
 BOT_NAME = (os.getenv("BOT_NAME") or "").strip() or get_persona_name()
@@ -73,16 +77,18 @@ class IdentityResolver:
         raw_id = str(platform_user_id or "").strip()
         low_id = raw_id.lower()
 
-        # 1. 判定是否为主人 (Master)
-        if low_id in MASTER_ALIASES:
+        # 1. 判定是否为主人 (Master)：只认中枢自己的人和显式配置的 UID
+        if raw_id and (low_id == MASTER_ID.lower() or low_id in MASTER_ALIASES):
             return "master", (display_name or MASTER_NAME), "admin"
 
         # 2. 判定是否为智能体自身 (Self)
         persona_name = get_persona_name()
-        if low_id in BOT_ALIASES or low_id == persona_name.lower():
+        if raw_id and (low_id in BOT_ALIASES or low_id == persona_name.lower()):
             return "self", (display_name or persona_name), "self"
 
         # 3. 其他访客/交互对象
+        if not raw_id:
+            return "guest", (display_name or "访客"), "visitor"
         name = display_name or f"访客_{raw_id[-4:] if len(raw_id) >= 4 else raw_id}"
         return f"user_{raw_id}", name, "member"
 
@@ -90,7 +96,8 @@ class IdentityResolver:
     def is_master(cls, actor_id: str) -> bool:
         if not actor_id:
             return False
-        return str(actor_id).strip().lower() in MASTER_ALIASES
+        value = str(actor_id).strip()
+        return value.lower() == MASTER_ID.lower() or value.lower() in MASTER_ALIASES
 
     @classmethod
     def get_master_id(cls) -> str:

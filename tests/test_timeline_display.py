@@ -47,14 +47,14 @@ class TimelineDisplayTest(unittest.TestCase):
     def test_tags_split_plugin_platform_and_uid(self):
         self._event(
             "split", 1_800_000_003, "乐阙说：「在吗」",
-            tag_primary="napcat", tag_secondary="qq:2622164205",
-            tag_permission="guest", metadata={"platform": "qq", "sender_uid": "2622164205"},
+            tag_primary="napcat", tag_secondary="qq:10001",
+            tag_permission="guest", metadata={"platform": "qq", "sender_uid": "10001"},
         )
         row = system_service.get_timeline_events(limit=10)[0]
         self.assertEqual(row["tag_primary"], "napcat")
         self.assertEqual(row["platform"], "qq")
-        self.assertEqual(row["uid"], "2622164205")
-        self.assertEqual(row["display_name"], "2622164205")
+        self.assertEqual(row["uid"], "10001")
+        self.assertEqual(row["display_name"], "10001")
 
     def test_summary_with_highlights_is_kept(self):
         self._event("summary_hit", 1_800_000_002,

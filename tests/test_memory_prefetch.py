@@ -25,7 +25,8 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(server._timeline_budget_with_reserved(1000, total=3000), 2000)
 
     def test_floor(self):
-        self.assertEqual(server._timeline_budget_with_reserved(90_000, total=3000), 700)
+        # 下限跟随面板配置的最小值（500），不再是硬编码的 700
+        self.assertEqual(server._timeline_budget_with_reserved(90_000, total=3000), 500)
 
     def test_negative_reserved_ignored(self):
         self.assertEqual(server._timeline_budget_with_reserved(-5, total=3000), 3000)

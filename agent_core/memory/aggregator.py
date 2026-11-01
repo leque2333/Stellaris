@@ -242,6 +242,8 @@ class SegmentAggregator:
         archive_id = str(meta.get("archive_id") or "").strip()
         tag_secondary = archive_id or str(seg.get("context_name") or seg.get("context_id") or "")
         tag_permission = str(meta.get("tag_permission") or "unknown").strip() or "unknown"
+        # 摘要必须落在这个人（档案）的名下，否则按档案召回永远看不到（审计 B22）
+        person_id = archive_id or (str(participants[0]) if len(participants) == 1 else "")
 
         return TimelineEvent(
             event_id="",
@@ -252,6 +254,7 @@ class SegmentAggregator:
             narrative=narrative,
             emotional_impact=emotional,
             importance=importance,
+            person_id=person_id,
             metadata={
                 "segment_id": seg["segment_id"],
                 "invocation_ids": [i["invocation_id"] for i in invs][:100],

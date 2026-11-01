@@ -89,13 +89,35 @@ HTTP 429，状态在内存里（重启清零），登录成功立刻解除。
 
 | # | 问题 | 影响 | 建议 |
 |---|---|---|---|
-| 1 | 18895 明文监听 `0.0.0.0` | 同网段可绕过 nginx 直连，跳过 TLS | 开 `local_only`，或用防火墙只放行本机/nginx |
-| 2 | 密码哈希是单轮 `SHA-256(salt:password)` | `auth_config.json` 泄露后离线爆破很快 | 换 PBKDF2/bcrypt，写迁移 |
-| 3 | 默认密码 `admin888`（未设 `HUB_AUTH_PASSWORD` 时） | 忘记改就是弱口令 | 部署后第一件事改密码；用 `python -c "from agent_core.auth import AuthManager; print(AuthManager('.').verify_credentials('admin','admin888'))"` 自查 |
-| 4 | `require_key: false` 时匿名 `/v1` 按默认主控放行 | 任何能连到 18895 的进程都能用你的额度聊天、并以 master 身份写入时间轴 | 把 `data/clients.json` 的 `require_key` 设为 `true`（已认证客户端本来就有 120/60 次每分钟的限流） |
+| 1 | 18895 明文监听 | 同网段可绕过 nginx 直连，跳过 TLS | 默认已改为只监听 `127.0.0.1`；要对外时开 `local_only` + 防火墙 |
+| 2 | 密码哈希强度 | 旧配置是单轮 `SHA-256(salt:password)` | 新配置一律 PBKDF2-HMAC-SHA256（24 万轮），老哈希登录成功时自动升级 |
+| 3 | 默认密码 | 已移除内置口令 | 首启生成随机口令（控制台打印 + `data/auth_initial_password.txt`），登录后强制改密（≥12 位） |
+| 4 | 显式 `require_key: false` 时匿名可用 `/v1` | 任何人都能让它说话（但身份固定是访客，不是主人） | 默认就是 `true`；除非你明确要公开一个“随便聊”的入口，否则别关 |
 | 5 | 审计日志是本机文件 | 拿到 root 可以改历史 | 需要时外发到远端 syslog/对象存储 |
 | 6 | 将来加 CDN 时 | CDN 回源 IP 会被当成客户端 | 把 CDN 网段加进 `trusted_proxies` |
-| 7 | 会话 7 天有效 | 没有"一键踢下线" | 改密码时轮换 `sessions` 表 |
+| 7 | 会话 7 天有效 | 没有"一键踢下线" | 改密码即吊销全部会话（已实现）；日常可随时改密强制下线 |
+
+已修（2026-11-01 第二轮复核）：
+
+- **默认部署匿名即管理员**：无 `clients.json` / 无 Key 不再返回 master 画像；管理类 `/hub/v1/*` 必须真带 Key；`X-User-Id: master` 无法再匿名提权
+- legacy `api_security.json` 缺 `bind_host` 时不再回落到 `0.0.0.0`
+- `/api/compute/config`、`/api/overview` 回传完整 provider `api_key` → 只回掩码
+- `/api/tools/clean` 匿名可消耗模型额度 → 强制 Key
+- 流式检索深度上限未阻止递归、工具闸门异常 fail-open
+- `/hub/v1/knowledge/search` guest Key 可搜全库 → 需管理员 Key
+- `do_DELETE` 未拦截已下线前缀（死分支仍可执行）
+- 新增 `.dockerignore`；`/api/sniff_key` GET 下线
+
+已修（2026-11-01，按验收审计）：
+
+- 静态目录路径穿越（任意文件读取）→ realpath + commonpath 校验 + 扩展名白名单 + `nosniff`
+- 默认口令 `admin888` / 首启强制改密 / 改密吊销旧会话
+- `/api/adapters/*` 未鉴权读任意 SQLite → 需登录 + 仅允许 `data/imports/`（可用 `HUB_ADAPTER_ROOTS` 追加）
+- `do_PATCH` 缺登录校验、`/hub/v1/archives/resolve` 越权读他人档案
+- localStorage 存会话 Token + 三处存储型 XSS
+- API Key 明文回传浏览器（现在只回掩码，保存时自动还原）
+- 请求体无上限 / 无 socket 超时 / SSE CORS 固定 `*`
+- `hub_host_control` 默认执行任意 PowerShell
 
 已修（2026-10-31 同批）：
 - CORS 反射任意 Origin → 改为只认同源

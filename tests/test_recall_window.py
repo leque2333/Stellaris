@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """召回窗口（时间窗/来源过滤）与聚合分段键（群聊/私聊）。"""
 
 import os
@@ -43,8 +43,8 @@ class ConversationHeaderTest(unittest.TestCase):
     def test_friend_message(self):
         from server import _split_conversation_id
 
-        kind, group, session = _split_conversation_id("aiocqhttp:FriendMessage:2986371638")
-        self.assertEqual((kind, group, session), ("private", "", "2986371638"))
+        kind, group, session = _split_conversation_id("aiocqhttp:FriendMessage:2000000001")
+        self.assertEqual((kind, group, session), ("private", "", "2000000001"))
 
     def test_uuid_falls_back_to_conversation(self):
         from server import _split_conversation_id
@@ -151,10 +151,10 @@ class SegmentKeyTest(unittest.TestCase):
     def test_private_uses_session(self):
         key = SegmentAggregator._key_from_invocation({
             "channel_id": "qq", "actor_id": "master",
-            "metadata": {"session_id": "friend:2986371638", "channel_type": "private"},
+            "metadata": {"session_id": "friend:2000000001", "channel_type": "private"},
         })
         self.assertEqual(key[1], "private")
-        self.assertEqual(key[2], "friend:2986371638")
+        self.assertEqual(key[2], "friend:2000000001")
 
     def test_falls_back_to_actor(self):
         key = SegmentAggregator._key_from_invocation({

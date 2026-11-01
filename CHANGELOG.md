@@ -1,5 +1,63 @@
 # 更新记录
 
+## 2026-11-01
+
+> 本轮按第三方验收审计修复了 3 项 P0、11 项 P1 与关键 P2，并处理了两轮复核提出的残留。
+> 审计与复核报告本身不入库（保留在本地工作区），这里只记录修复结果。
+
+### 安全（第二轮复核修复）
+
+- **默认部署不再是管理员**：`ClientProfile.default_actor` 默认 `guest`；没有 `clients.json` 或配置损坏时 `resolve()` 返回 `missing_key`，`require_key` 默认 `true`；管理类 `/hub/v1/*` 接口必须真带 Key；`connect_astrbot.py` 与 `clients.example.json` 改为 `require_key: true`
+- **legacy 配置不再回退 0.0.0.0**：`api_security._merged()` 的 `bind_host` 回落跟随默认值 `127.0.0.1`，`save_config` 会把字段写全
+- **算力配置脱敏**：`/api/compute/config`、`/api/overview` 只回 `api_key_masked` + `has_key`，保存时自动还原未改动的 Key
+- **清洗接口强制 Key**：`/api/tools/clean` 无条件要求客户端 Key（会消耗模型额度）
+- **流式检索限深真正生效**：到达上限后改用纯转发，不再重新进入指令分支
+- **工具闸门 fail-closed**：身份级拒绝抛异常时摘掉全部工具，不再全量透传
+- **知识库检索收口**：`/hub/v1/knowledge/search` 要求管理员 Key
+- **DELETE 死路由**：`do_DELETE` 拦截已下线前缀，并删除对应死分支
+- 新增 `.dockerignore`（构建上下文不再包含 `data/`、`backups/`、日志、密钥）；`/api/sniff_key` GET 下线
+
+### 安全（第一轮）
+
+- **静态目录路径穿越**：`/static/` 下发前做 realpath + commonpath 校验，只发白名单扩展名，并加 `X-Content-Type-Options: nosniff`
+- **默认口令下线**：删除内置 `admin888`；首启生成随机口令（控制台打印 + `data/auth_initial_password.txt`），登录后强制改密（≥12 位）
+- **口令哈希升级**：改为 PBKDF2-HMAC-SHA256（24 万轮，带算法前缀），旧 `sha256(salt:password)` 登录成功时自动升级
+- **改密即下线**：改密吊销全部旧会话并清 Cookie；存量弱口令启动时自动轮换
+- **适配器接口收口**：`/api/adapters/analyze|generate|attach` 改为需登录，`repo_path` 限定 `data/imports/`（可用 `HUB_ADAPTER_ROOTS` 追加），预览脱敏
+- **`do_PATCH` 补登录校验**：与 `do_DELETE` 对齐，匿名 PATCH 一律 401
+- **身份解析 fail-closed**：无 UID 不再回落主人（按客户端生成访客 actor），解析异常按访客处理并写审计
+- **主人别名收敛**：默认只认 `MASTER_QQ` 与显式 `MASTER_ALIASES`，删除 `admin`/`leque` 通用词旁路
+- **档案越权**：`/hub/v1/archives/resolve` 对非管理员 Key 只回最小字段
+- **XSS / 会话**：登录响应不再回传 Token，前端改用 HttpOnly Cookie；工具行、算力卡片、首页流水三处注入点改为转义 + 事件委托
+- **API Key 脱敏**：`/api/models_config`、`/api/compute/config` 只回掩码与 `has_key`，保存时自动还原未改动的 Key
+- **宿主机控制**：`powershell` 动作默认关闭，需 `HUB_HOST_POWERSHELL_ENABLED=1` 且只放行只读白名单命令
+- **请求面加固**：请求体上限 8MB（超限 413）、handler 超时 60s、并发上限 64
+- **SSE CORS**：不再固定 `*`，仅同源返回
+- **默认监听**：改为 `127.0.0.1`（Docker 用 `HUB_BIND=0.0.0.0`）
+- **审计覆盖**：清账本、绑身份、工具策略、访客策略、改密均写 `audit_log`
+
+### 记忆与账本（P1 功能逻辑）
+
+- **事实时效**：写入即维护 `active` / `pending` / `superseded`；低置信度（<0.6）进 pending，同谓词轴新事实自动覆盖旧事实
+- **图关系可用**：`memory_graph.db` 改为从 `user_facts` 建图，不再永远为空
+- **账本记实际模型**：流式累加器接收上游 `model`；工兵与抽事实按真正跑通的凭证模型记账
+- **未定价不套价**：查不到单价的模型成本记 0，不再套用主控单价
+- **兜底话术不进记忆**：上游失败时不写时间轴、不抽事实、不评好感度
+- **隐私开关贯通**：预取与工具事件同样遵守 `allow_recall_memory` / `allow_ingest_timeline`
+- **预算守恒**：检索占用 `reserved` 真正透传给时间轴预算；下限跟随面板最小值 500
+- **检索写回可召回**：写回事件保留说话人 `actor_id`，主人能按 actor 过滤召回
+- **导入可召回**：导入记忆默认落到主人档案，支持 `person_id`；ChatGPT 顶层数组能被识别
+- **聚合与缓冲**：摘要写入 `person_id`；缓冲区加唯一索引并 `INSERT OR IGNORE`
+- **流式检索限深**：`[[记忆检索]]` 最多重开 2 轮
+
+### 工程
+
+- Docker 改用 `requirements.txt`（原来装的是空的 `requirements-agent.txt`）；`requirements-agent.txt` 改为 `-r requirements.txt`；compose 端口统一 `18895:18890`
+- `Ctrl+C` 正常退出；迁移 29（事实置信度/失效时间 + 缓冲区唯一索引）
+- 前端清理死调用（`refreshAlerts`、`selectSidebarModule`、`/api/patrol_config`）
+- 新增 `tests/test_audit_regressions.py`（路径穿越、适配器根目录、请求体上限、身份、事实时效、Key 脱敏等）
+- 测试数 305 → **645**；文档同步更新（监听地址、预算默认值、测试数、安全清单、端口）
+
 ## 2026-10-31
 
 ### 新增
@@ -26,9 +84,9 @@
 - 长期事实 / 实体关系面板读错表：写入已统一到 `user_facts`，面板却仍读空的 `memory_facts`，导致一直显示「还没有」；现在统一读 `user_facts`
 - 实体关系不再整句照搬事实：从「喜欢… / 是…的主人 / 使用… / 答应给…」等句式抽「谓词 + 客体」，和事实列表区分开
 - 时间轴页面混入纯模块聚合摘要（如「master；模块：llm.persona、qq（共 4 个片段）」）；这类行不再展示，带「要点」的摘要和真实对话仍保留
-- 时间轴命名与标签：页面统一叫「时间轴」；主标签取平台上下文的宿主插件（如 `napcat`），副标签统一为 `平台:UID`（如 `qq:2986371638`），不再写死 QQ/B站；群名保留在正文前缀
+- 时间轴命名与标签：页面统一叫「时间轴」；主标签取平台上下文的宿主插件（如 `napcat`），副标签统一为 `平台:UID`（如 `qq:<主人UID>`），不再写死 QQ/B站；群名保留在正文前缀
 - 群内工具调用单独成事件：标签为「真实工具插件名 + 平台:人的UID」；`call_raw_tool` 会从参数里取内层工具名，不再把宿主插件当工具名
-- 人员 UID 兜底：请求头没带 UID 时按档案主身份回查（如 `arc_master` → `2986371638`），避免标签退化成 `qq:master`
+- 人员 UID 兜底：请求头没带 UID 时按档案主身份回查（如 `arc_master` → 主人 UID），避免标签退化成 `qq:master`
 - 支持插件调用链：`X-Plugin-Chain` / `X-Caller-Plugin` + `X-Host-Id`，时间轴主标签显示 `A → B`；不传则退回单插件
 - 主 AI 动态工具申请：被裁剪后可调 `hub_request_tools(intent)` 按意图加载已授权工具；中枢只加载、不执行
 - 动态工具补齐：流式请求先完整生成再回放 SSE；每轮默认 2 次（`HUB_DYNAMIC_TOOL_ROUNDS` 最高 4）；申请写 `dynamic_tool_request` 审计和 `dynamic` 指标

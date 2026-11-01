@@ -242,11 +242,21 @@ def probe_hub(base: str, timeout: float = 5.0) -> Tuple[bool, str, str]:
 # 3. 中枢客户端 Key
 # ----------------------------------------------------------------------
 def ensure_hub_key(clients_path: Path, dry_run: bool = False) -> str:
-    """确保 clients.json 里有一个 AstrBot 客户端；返回它的 Key。"""
+    """确保 clients.json 里有一个 AstrBot 客户端；返回它的 Key。
+
+    新建时写 `require_key: true`：默认部署必须带 Key，
+    否则匿名请求会被当成管理员（复核报告 §3）。
+    """
     data = read_json(clients_path)
+    changed = False
     if data is None:
-        data = {"require_key": False, "clients": []}
-        log("clients.json 不存在，将创建（require_key 保持 false，避免打断现有客户端）", "warn")
+        data = {"require_key": True, "clients": []}
+        changed = True
+        log("clients.json 不存在，将创建（require_key=true，需要带 Key 才能调用 /v1）", "ok")
+    elif "require_key" not in data:
+        data["require_key"] = True
+        changed = True
+        log("clients.json 没有 require_key 字段，已补为 true", "warn")
     clients = data.setdefault("clients", [])
     for item in clients:
         if not isinstance(item, dict):
@@ -254,6 +264,9 @@ def ensure_hub_key(clients_path: Path, dry_run: bool = False) -> str:
         if item.get("id") == "astrbot":
             keys = item.get("keys") or []
             if keys:
+                # 只是补了 require_key 也要落盘，否则等于没改
+                if changed and not dry_run:
+                    write_json(clients_path, data)
                 return str(keys[0])
             item["keys"] = [DEFAULT_KEY]
             if not dry_run:

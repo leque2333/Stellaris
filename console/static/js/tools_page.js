@@ -60,7 +60,9 @@ function renderToolsList() {
     });
 
     host.innerHTML = order.map((key) => {
-        const rows = groups.get(key).map(renderToolRow).join('');
+        const rows = toolsState.items.length
+            ? groups.get(key).map((tool) => renderToolRow(tool, items.indexOf(tool))).join('')
+            : '';
         const open = key === '系统工具' ? ' open' : '';
         return `
             <details class="tool-group"${open}>
@@ -71,9 +73,22 @@ function renderToolsList() {
                 <div class="tool-group-body">${rows}</div>
             </details>`;
     }).join('');
+    bindToolListClicks(host);
 }
 
-function renderToolRow(tool) {
+function bindToolListClicks(host) {
+    // 内联 onclick 会把工具名拼进 HTML 属性，等于把注入点交给任何客户端 Key
+    if (host.dataset.clickBound === '1') return;
+    host.dataset.clickBound = '1';
+    host.addEventListener('click', (event) => {
+        const row = event.target.closest ? event.target.closest('.tool-row') : null;
+        if (!row || !host.contains(row)) return;
+        const tool = toolsState.items[Number(row.dataset.toolIndex)];
+        if (tool) openToolEditor(tool.name);
+    });
+}
+
+function renderToolRow(tool, index) {
     const modeText = tool.mode === 'direct'
         ? '<span class="tool-badge direct">直接使用</span>'
         : (tool.mode === 'filtered'
@@ -83,8 +98,9 @@ function renderToolRow(tool) {
     const systemBadge = tool.system
         ? `<span class="tool-badge system">系统工具${tool.enabled === false ? ' · 已停用' : ''}</span>`
         : '';
+    // 行内不拼任何用户可控字符串：只传下标，工具名统一走 textContent / escapeHtml
     return `
-        <div class="tool-row" onclick="openToolEditor('${toolsEsc(tool.name)}')">
+        <div class="tool-row" data-tool-index="${index}">
             <span class="tool-name">${toolsEsc(tool.name)}</span>
             <span class="tool-badges">${modeText}${systemBadge}${approvalBadge}</span>
         </div>`;

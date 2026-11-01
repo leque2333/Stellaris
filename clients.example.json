@@ -1,0 +1,36 @@
+{
+  "_comment": "复制为 data/clients.json 后生效。require_key=true 是安全默认：没有 Key 的请求不会被当成管理员。所有 Key 都请换成随机值。",
+  "require_key": true,
+  "clients": [
+    {
+      "id": "astrbot",
+      "name": "AstrBot QQ 通道",
+      "keys": ["hub_sk_astrbot_change_me"],
+      "channel": "qq",
+      "default_actor": "master",
+      "allow_recall_memory": true,
+      "allow_ingest_timeline": true,
+      "rate_limit_per_minute": 120
+    },
+    {
+      "id": "nextchat",
+      "name": "NextChat",
+      "keys": ["hub_sk_nextchat_change_me"],
+      "channel": "nextchat",
+      "default_actor": "guest",
+      "allow_recall_memory": true,
+      "allow_ingest_timeline": true,
+      "rate_limit_per_minute": 60
+    },
+    {
+      "id": "cline",
+      "name": "Cline / IDE",
+      "keys": ["hub_sk_cline_change_me"],
+      "channel": "cline",
+      "default_actor": "guest",
+      "allow_recall_memory": false,
+      "allow_ingest_timeline": false,
+      "rate_limit_per_minute": 60
+    }
+  ]
+}

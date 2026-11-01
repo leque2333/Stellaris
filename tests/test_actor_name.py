@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """网关身份：说话人必须是人物档案昵称，不能是 API 客户端名。"""
 
 import sys
@@ -40,14 +40,14 @@ class ActorNameTest(unittest.TestCase):
     def test_archive_display_name_wins(self):
         result = self._result()
         self.handler._build_member_identity(
-            result, self.hub, "master", "2986371638", None, {"display_name": "乐阙"}
+            result, self.hub, "master", "2000000001", None, {"display_name": "乐阙"}
         )
         self.assertEqual(result["actor_name"], "乐阙")
 
     def test_master_falls_back_to_identity_name(self):
         result = self._result()
         self.handler._build_member_identity(
-            result, self.hub, "master", "2986371638", None, None
+            result, self.hub, "master", "2000000001", None, None
         )
         self.assertEqual(result["actor_name"], IdentityResolver.get_master_name())
 
@@ -55,7 +55,7 @@ class ActorNameTest(unittest.TestCase):
         result = self._result()
         result["actor_id"] = "user_10001"
         self.handler._build_member_identity(
-            result, self.hub, "user_10001", "2986371638", None, None
+            result, self.hub, "user_10001", "2000000001", None, None
         )
         self.assertNotIn("AstrBot", result["actor_name"])
 

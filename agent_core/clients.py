@@ -29,7 +29,7 @@ class ClientProfile:
     id: str = "legacy"
     name: str = "未登记客户端"
     channel: Optional[str] = None
-    default_actor: str = "master"          # master | guest
+    default_actor: str = "guest"           # master | guest（默认 guest：无配置不等于主人）
     allow_recall_memory: bool = True
     allow_ingest_timeline: bool = True
     rate_limit_per_minute: int = 0         # 0 = 不限制
@@ -48,7 +48,7 @@ class ClientRegistry:
 
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path or os.getenv("HUB_CLIENTS_PATH") or (Path(__file__).resolve().parent.parent / "data" / "clients.json"))
-        self.require_key = False
+        self.require_key = True  # 安全默认：没配置也要 Key
         self._clients: List[ClientProfile] = []
         self._mtime: Optional[float] = None
         self._configured = False
@@ -67,20 +67,23 @@ class ClientRegistry:
         with self._lock:
             self._mtime = mtime
             if mtime is None:
-                self.require_key = False
+                # 没有配置文件：没有任何合法 Key，按“必须带 Key”处理
+                self.require_key = True
                 self._clients = []
                 self._configured = False
                 return
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except Exception:
-                self.require_key = False
+                # 文件坏了和不存是一个下场：宁可拒绝，也不要悄悄放行
+                self.require_key = True
                 self._clients = []
-                self._configured = True
+                self._configured = False
                 return
 
             self._configured = True
-            self.require_key = bool(data.get("require_key", False))
+            # 默认必须带 Key：只有显式写 "require_key": false 才允许匿名
+            self.require_key = bool(data.get("require_key", True))
             clients: List[ClientProfile] = []
             for item in data.get("clients", []):
                 if not isinstance(item, dict):
@@ -94,7 +97,8 @@ class ClientRegistry:
                     id=cid,
                     name=str(item.get("name") or cid),
                     channel=item.get("channel"),
-                    default_actor=str(item.get("default_actor") or "master"),
+                    # 没写 default_actor 的客户端按 guest 处理，不再默认成主人
+                    default_actor=str(item.get("default_actor") or "guest"),
                     allow_recall_memory=bool(item.get("allow_recall_memory", True)),
                     allow_ingest_timeline=bool(item.get("allow_ingest_timeline", True)),
                     rate_limit_per_minute=int(item.get("rate_limit_per_minute", 0) or 0),
@@ -105,12 +109,18 @@ class ClientRegistry:
 
     # ---------------- 解析 ----------------
     def resolve(self, token: Optional[str]) -> AuthResult:
+        """把请求里的 Key 解析成客户端画像。
+
+        安全默认（对应复核报告 §3）：**没有 clients.json 就没有主人**。
+        配置缺失时一律按 `missing_key` 拒绝，绝不返回一个隐含 master 的画像；
+        显式写了 `require_key=false` 才允许无 Key 访问，且此时画像仍是 guest。
+        """
         self._reload()
         token = (token or "").strip()
 
         if not self._configured:
-            # 没有配置文件：保持旧行为，不做鉴权拦截
-            return AuthResult(ClientProfile())
+            # 连配置都没有：不存在任何合法 Key，拒绝而不是放行
+            return AuthResult(ClientProfile(id="unconfigured"), error="missing_key")
 
         if token:
             for client in self._clients:
@@ -122,8 +132,8 @@ class ClientRegistry:
         if self.require_key:
             return AuthResult(ClientProfile(id="anonymous"), error="missing_key")
 
-        # 未要求 Key 且没带 Key：按旧的默认主控行为
-        return AuthResult(ClientProfile())
+        # 显式关闭 require_key：允许匿名，但画像固定是 guest，不能借此成为主人
+        return AuthResult(ClientProfile(id="legacy", default_actor="guest"))
 
     def allow_request(self, client_id: str, limit: int) -> bool:
         if not limit or limit <= 0:

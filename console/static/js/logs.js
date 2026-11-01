@@ -118,10 +118,7 @@ function openLogsTab() {
     loadLogs();
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    setInterval(refreshAlerts, 20000);
-});
-
+// 日志页只在打开时按需加载，不再挂一个指向未定义函数的定时器（审计 B29）。
 window.loadLogs = loadLogs;
 window.loadAudit = loadAudit;
 window.loadDeployCheck = loadDeployCheck;

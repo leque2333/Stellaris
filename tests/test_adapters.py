@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """插件适配器注册表：内置 AstrBot + 生成适配器的归一化接口。"""
 
 import json
@@ -107,11 +107,11 @@ class AdapterRegistryTest(unittest.TestCase):
             0.5,
         )
         ctx = adapter.context(RequestView(
-            headers={"X-Platform": "qq", "X-User-Id": "2986371638"},
+            headers={"X-Platform": "qq", "X-User-Id": "2000000001"},
             session_id="onebot_napcat:GroupMessage:784826874",
         ))
         self.assertEqual(ctx["platform"], "qq")
-        self.assertEqual(ctx["uid"], "2986371638")
+        self.assertEqual(ctx["uid"], "2000000001")
         self.assertEqual(ctx["group"], "784826874")
 
 

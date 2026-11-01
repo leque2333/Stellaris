@@ -300,7 +300,7 @@ L3 memory_details   原文（941 条）
 
 ```text
 aiocqhttp:GroupMessage:784826874   → (group,   784826874)
-aiocqhttp:FriendMessage:2986371638 → (private, 2986371638)
+aiocqhttp:FriendMessage:2000000001 → (private, 2000000001)
 <uuid>                             → (conversation, <uuid>)   按会话分开，但不知道群号
 ```
 
@@ -310,7 +310,7 @@ aiocqhttp:FriendMessage:2986371638 → (private, 2986371638)
 
 ```text
 带 GroupMessage 头 → timeline_segments: (qq, group, 784826874)
-带 FriendMessage 头 → timeline_segments: (qq, private, 2986371638)
+带 FriendMessage 头 → timeline_segments: (qq, private, 2000000001)
 ```
 
 ### 4.3.1 调参面板（2026-10-31）
@@ -347,9 +347,9 @@ aiocqhttp:FriendMessage:2986371638 → (private, 2986371638)
 人在 QQ 里说「给我生一张图」
   → 中枢收到请求，确定发起人档案
   → 模型发起 tool_call: generate_image
-  → 中枢记一条：generate_image · qq · 乐阙
+  → 中枢记一条：generate_image · qq · 主人
   → AstrBot 执行工具（成功/失败都归 AstrBot 日志）
-  → 模型再次回复时，中枢再记一条：napcat · qq · 乐阙
+  → 模型再次回复时，中枢再记一条：napcat · qq · 主人
 ```
 
 展示规则：插件 / 平台 / 人员拆成独立标签。
@@ -358,7 +358,7 @@ aiocqhttp:FriendMessage:2986371638 → (private, 2986371638)
 |---|---|---|
 | 插件标签 | `tag_primary` | `napcat`、`generate_image` |
 | 平台标签 | 事件 platform（有才显示） | `qq`、`bilibili`、`web` |
-| 人员标签 | 档案显示名；无档案才显示 UID | `乐阙`、`2622164205` |
+| 人员标签 | 档案显示名；无档案才显示 UID | `主人`、`10001` |
 
 - 人员标签有档案时用 `archives.display_name`，并按 role 着色：管理员红色、访客灰色、系统青色。
 - 没有档案时才回落到 UID，并在标签里带平台上下文。
@@ -441,7 +441,8 @@ curl.exe "http://127.0.0.1:18895/api/memory/timeline_curve?budget=20000" -H "X-S
 实现：`agent_core/memory/timeline_curve.py`（`build_curve` / `compress_narrative` / `summarize`）。
 
 **已接入 prompt（2026-10-31）**：`_collect_recall_memories` 改为整段曲线注入，
-不再切 8 条；预算 `HUB_TIMELINE_BUDGET` 默认 8,000 字（含 `[时间] ` 前缀开销）。
+不再切 8 条；预算 `HUB_TIMELINE_BUDGET` 默认 **3,000** 字（含 `[时间] ` 前缀开销），
+面板可调范围 500~200,000，代码下限跟随面板最小值。
 
 实测（测试端，8,000 预算）：
 
@@ -573,9 +574,12 @@ prompt    3.7k（基础） → 8.7k tokens
 
 - **流式也能检索**：模型在回复开头写 `[[记忆检索: ...]]`，中枢缓冲开头识别后
   查库重推；缓冲只覆盖开头几十字，没命中就直接放行，不影响首字延迟。
+- 流式请求**不注入上面那段说明**（`_memory_tool_prompt(stream=True)` 返回空）：
+  流式没法先等整轮回复再判断，只有模型自发写出指令时才会走 `_stream_recall`；
+  需要模型稳定使用这个能力时走非流式。
 - 指令式（`[[记忆检索: ...]]`）**流式也支持**：开头先缓冲一小段，
   看到指令就丢掉这段、查库、让出预算重拼、换一轮流式重推；
-  没有指令则原样吐出，零额外延迟。
+  没有指令则原样吐出，零额外延迟。重开最多 2 轮（`MAX_STREAM_RECALL_DEPTH`），防止死循环。
 - 检索结果按字数闸门裁剪，默认取一半预算（4,000 字）
 
 接口用法：
@@ -594,7 +598,7 @@ curl.exe -X POST http://127.0.0.1:18895/hub/v1/memory/search `
 
 - 关键词默认 **AND**（全词命中）；没结果才自动降级成 OR
 - `start` / `end` 支持 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`、unix 秒
-- `budget` 默认 8000，最大 50000；`person_id` 可选
+- `budget` 默认 **3000**（`deep_recall.DEFAULT_BUDGET`），最大 50000；`person_id` 可选
 - 只返回时间轴叙述，原文不进这次响应（避免一次灌满上下文）
 
 ### 6.5 与现有实现的衔接

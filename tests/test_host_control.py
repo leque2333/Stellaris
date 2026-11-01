@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """中枢备用宿主机控制：schema 与执行边界。"""
 
 import sys
@@ -26,8 +26,28 @@ class HostControlTest(unittest.TestCase):
         spec = host_control.tool_spec()
         self.assertEqual(spec["function"]["name"], "hub_host_control")
         actions = spec["function"]["parameters"]["properties"]["action"]["enum"]
-        self.assertIn("powershell", actions)
         self.assertIn("screenshot", actions)
+        # 宿主机命令执行默认关闭：只有显式打开才出现在 schema 里
+        self.assertNotIn("powershell", actions)
+
+    def test_powershell_requires_explicit_enable(self):
+        with patch.dict("os.environ", {host_control.POWERSHELL_ENV: "1"}, clear=False):
+            actions = host_control.tool_spec()["function"]["parameters"]["properties"]["action"]["enum"]
+            self.assertIn("powershell", actions)
+
+    def test_powershell_disabled_by_default(self):
+        result = host_control.execute("powershell", "Get-Date")
+        self.assertFalse(result["ok"])
+        self.assertIn("默认关闭", result["text"])
+
+    def test_powershell_whitelist_blocks_chaining(self):
+        with patch.dict("os.environ", {host_control.POWERSHELL_ENV: "1"}, clear=False):
+            for command in ("Get-Date; Remove-Item C:\\x", "Invoke-Expression 'rm'", "Get-Date > out.txt"):
+                result = host_control.execute("powershell", command)
+                self.assertFalse(result["ok"], command)
+            with patch.object(host_control.subprocess, "run", return_value=_Proc()):
+                good = host_control.execute("powershell", "Get-Date")
+        self.assertTrue(good["ok"])
 
     def test_unknown_action_is_rejected(self):
         result = host_control.execute("rm_rf")
@@ -63,7 +83,7 @@ class HostControlTest(unittest.TestCase):
             "archive_id": "arc_master",
         })
         web_with_uid = handler._timeline_person_uid({
-            "platform": "web", "sender_uid": "2986371638", "actor_id": "master",
+            "platform": "web", "sender_uid": "2000000001", "actor_id": "master",
             "archive_id": "arc_master",
         })
         self.assertEqual(web, "master")
@@ -75,14 +95,14 @@ class HostControlTest(unittest.TestCase):
         handler = server.ConsoleHandler.__new__(server.ConsoleHandler)
         handler.headers = {}
         self.assertEqual(
-            handler._extract_raw_user_id({}, "用户ID: 2986371638 你好"),
-            "2986371638",
+            handler._extract_raw_user_id({}, "用户ID: 2000000001 你好"),
+            "2000000001",
         )
         self.assertEqual(
             handler._extract_raw_user_id(
-                {}, "# CRON JOB CONTEXT\n<system_reminder>User ID: 2986371638, Nickname: Scheduler"
+                {}, "# CRON JOB CONTEXT\n<system_reminder>User ID: 2000000001, Nickname: Scheduler"
             ),
-            "2986371638",
+            "2000000001",
         )
 
     def test_admin_identity_requires_mapped_admin_archive(self):
@@ -92,7 +112,7 @@ class HostControlTest(unittest.TestCase):
         })()
         with patch("agent_core.storage.get_store", return_value=store):
             self.assertTrue(handler._admin_identity({
-                "sender_uid": "2986371638", "archive_id": "arc_master", "bound_by": "binding",
+                "sender_uid": "2000000001", "archive_id": "arc_master", "bound_by": "binding",
             }))
             self.assertFalse(handler._admin_identity({
                 "sender_uid": "", "archive_id": "arc_master", "bound_by": "master",
@@ -102,8 +122,9 @@ class HostControlTest(unittest.TestCase):
             }))
 
     def test_powershell_runs_without_shell(self):
-        with patch.object(host_control.subprocess, "run", return_value=_Proc()) as run:
-            result = host_control.execute("powershell", "Get-Date", 10)
+        with patch.dict("os.environ", {host_control.POWERSHELL_ENV: "1"}, clear=False):
+            with patch.object(host_control.subprocess, "run", return_value=_Proc()) as run:
+                result = host_control.execute("powershell", "Get-Date", 10)
         self.assertTrue(result["ok"])
         self.assertEqual(result["text"], "ok")
         kwargs = run.call_args.kwargs

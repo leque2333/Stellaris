@@ -45,3 +45,17 @@ Thumbs.db
 archive/
 .agents/
 requirements-agent.txt
+
+# ==========================================
+# 本地临时文件（测试输出 / 首启口令，绝不入库）
+# ==========================================
+.tmp/
+.tmp_*
+data/auth_initial_password.txt
+
+# ==========================================
+# 审计 / 复核报告：只留本地，不随仓库发布
+# ==========================================
+docs/ACCEPTANCE_AUDIT_*.md
+docs/ACCEPTANCE_RECHECK_*.md
+docs/ACCEPTANCE_RETEST_*.md

@@ -1,4 +1,4 @@
-﻿# 重构交接文档
+# 重构交接文档
 
 > 更新：2026-10-31（第 1 步「合并代码分叉」已完成）
 > 目标：拒绝屎山。四个硬指标见下。
@@ -184,7 +184,7 @@ curl -X GET http://127.0.0.1:18895/api/system/resources -H "X-Session-Token: <to
 curl -X POST http://127.0.0.1:18895/v1/chat/completions \
   -H "Authorization: Bearer hub-sk-astrbot" \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: 2986371638" -H "X-Channel: verify" \
+  -H "X-User-Id: 2000000001" -H "X-Channel: verify" \
   -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"在吗"}]}'
 ```
 

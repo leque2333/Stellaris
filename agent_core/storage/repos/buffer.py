@@ -20,9 +20,10 @@ class BufferOps:
         now = float(time.time())
         with self._tx() as conn:
             for event in events:
+                # 同一事件重复腾挪只留一份（uq_buffer_event 兜底）
                 conn.execute(
-                    "INSERT INTO timeline_buffer (person_id, event_id, payload, released_at) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO timeline_buffer "
+                    "(person_id, event_id, payload, released_at) VALUES (?, ?, ?, ?)",
                     (
                         str(person_id),
                         str(event.get("event_id") or ""),
@@ -92,8 +93,8 @@ class BufferOps:
                 payload = {key: row[key] for key in row.keys()}
                 payload["embedding"] = None  # 二进制不进 JSON
                 conn.execute(
-                    "INSERT INTO timeline_buffer (person_id, event_id, payload, released_at) "
-                    "VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO timeline_buffer "
+                    "(person_id, event_id, payload, released_at) VALUES (?, ?, ?, ?)",
                     (str(person_id), str(row["event_id"]), _json(payload, "{}"), float(now)),
                 )
                 # 软归档：不删行，避免触发 FTS 删除触发器（历史索引不一致会报 malformed）

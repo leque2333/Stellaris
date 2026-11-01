@@ -322,29 +322,16 @@
             globalConfig.bilibili.master_uid = document.getElementById('p-master-uid').value.trim();
             globalConfig.bilibili.master_qq = document.getElementById('p-master-qq').value.trim();
             globalConfig.bilibili.max_comment_body_len = parseInt(document.getElementById('p-body-len').value) || 40;
-            
+
             const kw = document.getElementById('p-keywords').value;
             globalConfig.bilibili.keywords = kw.split(/[,，]/).map(s => s.trim()).filter(Boolean);
 
             const tk = document.getElementById('p-target-pool').value;
             globalConfig.bilibili.target_keyword_pool = tk.split(/[,，]/).map(s => s.trim()).filter(Boolean);
 
+            // 巡检模块已随 /api/patrol_config 一起下线，这里只保留前端状态，不再打不存在的接口
             const pack = i18n[currentLang] || i18n['zh-CN'];
-            try {
-                const res = await fetch('/api/patrol_config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(globalConfig)
-                });
-                const ret = await res.json();
-                if (ret.success) {
-                    showToast(pack.toast_saved);
-                } else {
-                    showToast('Error');
-                }
-            } catch (e) {
-                showToast('Error');
-            }
+            showToast(pack.toast_saved || '已保存到本地界面配置');
         }
 
         // 后台定时轮询：专职更新看板数字与流水表格，绝不触碰任何表单输入与选择，彻底解决回退问题

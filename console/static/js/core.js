@@ -1,27 +1,29 @@
 // -*- coding: utf-8 -*-
 // Stellaris - Core Engine (State, i18n, Navigation, Polling)
 
-// 核心补丁：全局拦截所有 fetch，全自动注入 Authorization 和 X-Session-Token，确保公网反代/子路径/端口跨域永不掉线
+// 核心补丁：全局拦截所有 fetch，统一带上同源 Cookie（会话只走 HttpOnly Cookie，
+// 不再从 localStorage 取 Token，避免任一 XSS 直接接管控制台）。
         (function() {
             const originalFetch = window.fetch;
             window.fetch = function(url, options) {
                 options = options || {};
                 options.credentials = options.credentials || 'include';
-                options.headers = options.headers || {};
-                const token = localStorage.getItem('anan_auth_token');
-                if (token) {
-                    if (options.headers instanceof Headers) {
-                        if (!options.headers.has('Authorization')) options.headers.set('Authorization', 'Bearer ' + token);
-                        if (!options.headers.has('X-Session-Token')) options.headers.set('X-Session-Token', token);
-                    } else if (Array.isArray(options.headers)) {
-                        options.headers.push(['Authorization', 'Bearer ' + token]);
-                        options.headers.push(['X-Session-Token', token]);
-                    } else {
-                        if (!options.headers['Authorization']) options.headers['Authorization'] = 'Bearer ' + token;
-                        if (!options.headers['X-Session-Token']) options.headers['X-Session-Token'] = token;
+                return originalFetch.apply(this, [url, options]).then(function(resp) {
+                    // 登录态失效/首次改密：统一回登录页，别让页面在半登录状态下空转
+                    if (resp && (resp.status === 401 || resp.status === 403)) {
+                        const path = window.location.pathname || '';
+                        if (!/^\/login|^\/change-password/.test(path)) {
+                            resp.clone().json().then(function(data) {
+                                if (data && data.must_change_password) {
+                                    window.location.href = '/change-password';
+                                } else if (data && data.require_login) {
+                                    window.location.href = '/login';
+                                }
+                            }).catch(function() {});
+                        }
                     }
-                }
-                return originalFetch.apply(this, [url, options]);
+                    return resp;
+                });
             };
         })();
 
@@ -502,20 +504,20 @@
                                         <td style="color: var(--text-muted);">--</td>
                                         <td style="color: var(--text-muted);">--</td>
                                         <td style="color: var(--text-muted);">--</td>
-                                        <td style="color: #22c55e; font-family: var(--font-mono); font-weight: 700;">${r.cost_formatted || '+$0.00'}</td>
-                                        <td style="color: var(--text-muted); font-size: 12px;">${r.time}</td>
+                                        <td style="color: #22c55e; font-family: var(--font-mono); font-weight: 700;">${escapeHtml(r.cost_formatted || '+$0.00')}</td>
+                                        <td style="color: var(--text-muted); font-size: 12px;">${escapeHtml(r.time || '')}</td>
                                     </tr>
                                 `;
                             } else {
                                 html += `
                                     <tr>
-                                        <td style="color: var(--text-muted);">#${r.id ? (r.id.length > 10 ? r.id.slice(-8) : r.id) : ''}</td>
-                                        <td style="color: var(--primary); font-weight: 600;">${r.model}</td>
+                                        <td style="color: var(--text-muted);">#${r.id ? (r.id.length > 10 ? escapeHtml(r.id.slice(-8)) : escapeHtml(r.id)) : ''}</td>
+                                        <td style="color: var(--primary); font-weight: 600;">${escapeHtml(r.model || '')}</td>
                                         <td>${(r.input || 0).toLocaleString()}</td>
                                         <td style="color: var(--accent-green);">${(r.cached || 0).toLocaleString()}</td>
                                         <td style="color: var(--accent-amber);">${(r.output || 0).toLocaleString()}</td>
-                                        <td style="color: var(--text-primary); font-family: var(--font-mono); font-weight: 600;">${r.cost_formatted || '$0.0000'}</td>
-                                        <td style="color: var(--text-muted); font-size: 12px;">${r.time}</td>
+                                        <td style="color: var(--text-primary); font-family: var(--font-mono); font-weight: 600;">${escapeHtml(r.cost_formatted || '$0.0000')}</td>
+                                        <td style="color: var(--text-muted); font-size: 12px;">${escapeHtml(r.time || '')}</td>
                                     </tr>
                                 `;
                             }
@@ -592,12 +594,6 @@
                 }
                 isInitialLoaded = true;
 
-                // 优先从 overview 中提取 modules 立即渲染，彻底杜绝空白延迟
-                if (data.modules && data.modules.modules && data.modules.modules.length > 0) {
-                    globalModulesData = data.modules;
-                    if (typeof renderModulesUI === 'function') renderModulesUI();
-                }
-
                 // 动态无硬编码更新：根据当前实际访问的原点及激活模型更新 Base URL
                 try {
                     const currentOrigin = window.location.origin;
@@ -623,11 +619,8 @@
 
                 // 统计由 startHubApp 统一并发触发，避免这里二次 pollMetrics 覆盖动画
                 
-                // 支持 URL Hash 极速直达页面与组件详情
-                if (window.location.hash.startsWith('#mod-')) {
-                    const targetModId = window.location.hash.replace('#mod-', '');
-                    setTimeout(() => selectSidebarModule(targetModId), 150);
-                } else if (window.location.hash === '#settings') {
+                // 支持 URL Hash 极速直达设置页（模块详情页已下线，不再引用旧跳转）
+                if (window.location.hash === '#settings') {
                     setTimeout(() => openSettingsTab(), 150);
                 }
             } catch (err) {
@@ -649,7 +642,6 @@
             try {
                 await fetch('/api/auth/logout', { method: 'POST' });
             } catch (e) {}
-            localStorage.removeItem('anan_auth_token');
             window.location.href = '/login';
         }
 
@@ -660,8 +652,8 @@
                 alert('请完整填写原密码与新密码');
                 return;
             }
-            if (newP.length < 4) {
-                alert('新密码长度不能少于 4 位');
+            if (newP.length < 12) {
+                alert('新密码长度不能少于 12 位');
                 return;
             }
             const orig = btn.innerText;
@@ -675,9 +667,8 @@
                 });
                 const data = await res.json();
                 if (res.ok && data.success) {
-                    showToast('✓ 密码修改成功！请妥善保存');
-                    document.getElementById('pwd-old').value = '';
-                    document.getElementById('pwd-new').value = '';
+                    showToast('✓ 密码修改成功，请重新登录');
+                    setTimeout(() => { window.location.href = '/login'; }, 800);
                 } else {
                     alert(data.error || data.message || '密码修改失败');
                 }

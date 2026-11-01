@@ -23,6 +23,7 @@ Stellaris Console HTTP Server
 #   - 或一人一 Key，用 clients.json 的 default_actor / 档案映射。
 # ---------------------------------------------------------------------------
 
+import hashlib
 import json
 import os
 import re
@@ -60,7 +61,7 @@ def _master_name() -> str:
 def _split_conversation_id(raw):
     """把 AstrBot 的会话标识拆成 (类型, 群号, 会话 id)。
 
-    兼容 `platform:GroupMessage:784826874`、`platform:FriendMessage:2986371638`
+    兼容 `platform:GroupMessage:784826874`、`platform:FriendMessage:2000000001`
     以及纯 UUID / 纯 session id 三种形态。
     """
     value = str(raw or "").strip()
@@ -116,14 +117,116 @@ def _prefetch_terms(user_query: str) -> list:
 MIN_TIMELINE_CHARS = 700
 RECALL_MAX_CHARS = 2_000
 TIMELINE_KEEP_CHARS = 4_000  # 时间轴常驻字数，超出搬进缓冲区
+MAX_BODY_BYTES = 8 * 1024 * 1024  # 单次请求体上限，防止大 body 打爆内存
+MAX_STREAM_RECALL_DEPTH = 2  # 流式「记忆检索」最多重开几轮，防止无限递归
 
 
 def _timeline_budget_with_reserved(reserved: int, total: int = 0) -> int:
-    """检索占了多少字，时间轴就让出多少；至少留 2000 字。"""
+    """检索占了多少字，时间轴就让出多少；下限跟随配置里的最小值（500）。"""
+    from agent_core.memory import settings as memory_settings
     from agent_core.memory import timeline_curve
 
     budget = int(total or timeline_curve.budget_chars())
-    return max(MIN_TIMELINE_CHARS, budget - max(0, int(reserved)))
+    floor = MIN_TIMELINE_CHARS
+    try:
+        # 面板允许调到 500，代码不能硬抬到 700，否则数值和实际不符（审计 B28）
+        param = next(p for p in memory_settings.PARAMS if p["key"] == "timeline_budget_chars")
+        floor = int(param.get("min") or floor)
+    except Exception:
+        pass
+    floor = min(floor, budget)  # 预算本身比下限还小的时候别再反向放大
+    return max(floor, budget - max(0, int(reserved)))
+
+
+ADAPTER_ROOT_ENV = "HUB_ADAPTER_ROOTS"
+
+
+def _adapter_roots():
+    """源码适配器允许扫描的根目录。
+
+    默认只放开 `data/imports/`；确实需要扫别的目录时用 HUB_ADAPTER_ROOTS
+    显式追加（多个用系统路径分隔符），不提供“任意路径”的开关。
+    """
+    default_root = os.path.join(PROJECT_ROOT, "data", "imports")
+    try:
+        os.makedirs(default_root, exist_ok=True)
+    except Exception:
+        pass
+    roots = [default_root]
+    extra = os.getenv(ADAPTER_ROOT_ENV) or ""
+    roots.extend(part for part in extra.split(os.pathsep) if part.strip())
+    return [os.path.realpath(item) for item in roots]
+
+
+def _adapter_repo_path(raw):
+    """校验 repo_path 是否落在允许根目录内；越界一律返回 None。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        target = os.path.realpath(text)
+    except (OSError, ValueError):
+        return None
+    for root in _adapter_roots():
+        try:
+            if os.path.commonpath([root, target]) == root:
+                return target
+        except ValueError:  # 不同盘符 / UNC
+            continue
+    return None
+
+
+def _identity_scan_roots():
+    """身份扫描允许的根目录：项目数据目录 + 适配器登记的插件目录。"""
+    roots = [os.path.join(PROJECT_ROOT, "data"), PROJECT_ROOT]
+    extra = os.getenv("HUB_IDENTITY_SCAN_ROOTS") or ""
+    roots.extend(part for part in extra.split(os.pathsep) if part.strip())
+    allowed = []
+    for item in roots:
+        try:
+            allowed.append(os.path.realpath(item))
+        except (OSError, ValueError):
+            continue
+    return allowed
+
+
+def _path_within_any(raw, roots) -> bool:
+    """路径是否落在任一允许根目录内（realpath + commonpath 校验）。"""
+    try:
+        target = os.path.realpath(str(raw or "").strip())
+    except (OSError, ValueError):
+        return False
+    for root in roots:
+        try:
+            if os.path.commonpath([root, target]) == root:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _redact_adapter_result(result):
+    """适配器预览脱敏：只留少量行、长值截断，不把整库内容回显给浏览器。"""
+    if not isinstance(result, dict):
+        return result
+
+    def _trim(value):
+        text = str(value)
+        return text if len(text) <= 60 else text[:57] + "..."
+
+    specs = []
+    for item in (result.get("specs") or [])[:6]:
+        if not isinstance(item, dict):
+            continue
+        preview = []
+        for row in (item.get("preview") or [])[:5]:
+            if isinstance(row, dict):
+                preview.append({k: _trim(v) for k, v in list(row.items())[:8]})
+            else:
+                preview.append(_trim(row))
+        specs.append({**item, "preview": preview})
+    result["specs"] = specs
+    return result
 
 
 def _clamped_query_int(params, key, default, low, high):
@@ -167,6 +270,9 @@ def _recall_writeback(store, session, kept, mode) -> str:
     if store is None or not kept:
         return ""
     person = str(session.get("person_id") or session.get("actor_id") or "master")
+    # actor 必须保持「说话人」口径：写回事件的 actor_id 若写成 person_id，
+    # 按 actor 过滤的召回永远看不到它（审计 B8）
+    actor = str(session.get("actor_id") or person)
     recent = store.list_candidates(person_ids=[person], limit=1)
     if recent:
         last = recent[0]
@@ -177,7 +283,7 @@ def _recall_writeback(store, session, kept, mode) -> str:
     text = compress_narrative("回忆：" + body, 0.6)
     store.append_event(TimelineEvent(
         event_id="", timestamp=time.time(), source_module="memory_recall",
-        actor_id=person, actor_name=str(session.get("actor_name") or person),
+        actor_id=actor, actor_name=str(session.get("actor_name") or actor),
         narrative=text, person_id=person, importance=1.5,
         metadata={"recall": True, "compressed": True, "mode": mode, "hits": len(kept)},
     ))
@@ -413,9 +519,11 @@ def _narrative_of(ctx, content):
     return f"{prefix}{ctx['actor_name']}说：「{ctx['user_query'][:50]}」；{_persona_name()}回答：「{content[:50]}」"
 
 
-def _record_fact_usage(p_in, p_out):
-    """AI 抽事实的 token 走 memory.facts 通道记账。"""
-    backend.record_token_usage_event("memory.fact_extraction", p_in, p_out, source="memory.facts")
+def _record_fact_usage(p_in, p_out, model=""):
+    """AI 抽事实的 token 按实际模型记账，不再写虚构的 memory.fact_extraction。"""
+    backend.record_token_usage_event(
+        model or "unknown_model", p_in, p_out, source="memory.facts",
+    )
 
 
 def _extract_facts_with_ai(person_id, user_query):
@@ -580,6 +688,13 @@ _REMOVED_PATH_PREFIXES = (
     '/api/bridges', '/api/plugins', '/api/execution_ai', '/qq/events',
 )
 
+# 首次登录强制改密期间仍然放行的接口（否则改不了密也退不出去）
+_MUST_CHANGE_EXEMPT = (
+    '/api/auth/change_password',
+    '/api/auth/logout',
+)
+
+
 # 控制台 GET 路由表：路径 → 方法名（方法名延迟解析，表可以写在类外）
 _CONSOLE_GET_ROUTES = {
     '/api/overview': '_get_overview',
@@ -640,10 +755,10 @@ _POST_ROUTES = {
     '/api/auth/login': ('_post_login', False),
     '/api/auth/logout': ('_post_logout', False),
     '/api/auth/change_password': ('_post_change_password', True),
-    '/api/connectors/scan': ('_post_connectors_scan', False),
-    '/api/adapters/analyze': ('_post_adapter_analyze', False),
-    '/api/adapters/generate': ('_post_adapter_generate', False),
-    '/api/adapters/attach': ('_post_adapter_attach', False),
+    '/api/connectors/scan': ('_post_connectors_scan', True),
+    '/api/adapters/analyze': ('_post_adapter_analyze', True),
+    '/api/adapters/generate': ('_post_adapter_generate', True),
+    '/api/adapters/attach': ('_post_adapter_attach', True),
     '/api/bindings': ('_post_bindings', True),
     '/api/persona': ('_post_persona', True),
     '/api/persona/rules': ('_post_persona_rules', True),
@@ -661,6 +776,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         "/api/tokens", "/api/overview", "/api/resources",
         "/api/logs", "/api/health", "/favicon.ico",
     )
+    # 慢速连接/半开连接 60 秒后自动断开，避免线程被长期占住
+    timeout = 60
 
     def log_message(self, format, *args):
         """访问日志走 stdout；err.log 只留真正的异常，避免徽章误判。"""
@@ -775,9 +892,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     # ---------------- GET：页面与静态资源 ----------------
     def _serve_public_page(self, path):
-        """登录页 / 静态资源 / 根路由：这三类不查登录态。"""
+        """登录页 / 改密页 / 静态资源 / 根路由：这三类不查登录态。"""
         if path in ('/login', '/login.html'):
-            return self._send_login_page()
+            if self._send_login_page():
+                return True
+            return False
+        if path in ('/change-password', '/change_password', '/change_password.html'):
+            self._send_change_password_page()
+            return True
         if path.startswith('/static/'):
             self._send_static(path[len('/static/'):].lstrip('/'))
             return True
@@ -794,9 +916,22 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self._send_file(login_file, 'text/html; charset=utf-8')
         return True
 
+    def _send_change_password_page(self):
+        """首次登录强制改密页；没登录也能打开，提交时才校验会话。"""
+        page = os.path.join(STATIC_DIR, 'change_password.html')
+        if not os.path.exists(page):
+            return self._send_not_found()
+        self._send_file(page, 'text/html; charset=utf-8', 'no-cache, no-store, must-revalidate')
+
     def _send_console_page(self):
-        """根路由：未登录先给登录页；登录页缺失就照旧给控制台。"""
-        if not self._is_authenticated() and self._send_login_page():
+        """根路由：未登录先给登录页；首次登录还没改密的先去改密页。"""
+        if not self._is_authenticated():
+            if self._send_login_page():
+                return
+        elif auth_mgr.must_change_password():
+            self.send_response(302)
+            self.send_header('Location', '/change-password')
+            self.end_headers()
             return
         html_file = os.path.join(STATIC_DIR, 'index.html')
         if not os.path.exists(html_file):
@@ -812,27 +947,52 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         html = re.sub(r'\?v=\d+', f'?v={_asset_version()}', html)
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
 
+    def _send_not_found(self):
+        """统一的 404（带上 nosniff，别让浏览器猜类型）。"""
+        self.send_response(404)
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+
+    def _static_path(self, rel_path):
+        """把 URL 里的相对路径解析成静态根内的真实文件；越界一律 None。
+
+        先解码再校验：`..%2f..%2fdata` 解码后同样会落到根目录之外，
+        realpath + commonpath 会把它挡下来，因此不用另做黑名单。
+        """
+        root = os.path.realpath(os.path.join(STATIC_DIR, 'static'))
+        wanted = unquote(str(rel_path or '')).replace('\\', '/').lstrip('/')
+        target = os.path.realpath(os.path.join(root, wanted))
+        try:
+            inside = os.path.commonpath([root, target]) == root
+        except ValueError:  # 不同盘符 / UNC，直接拒绝
+            return None
+        if not inside or target == root or not os.path.isfile(target):
+            return None
+        if os.path.splitext(target)[1].lower() not in _STATIC_CONTENT_TYPES:
+            return None
+        return target
+
     def _send_static(self, rel_path):
-        """静态资源：命中就发，未命中 404。"""
-        file_path = os.path.join(STATIC_DIR, 'static', rel_path)
-        if not (os.path.exists(file_path) and os.path.isfile(file_path)):
-            self.send_response(404)
-            self.end_headers()
-            return
+        """静态资源：只发静态根内、扩展名白名单内的文件，其余 404。"""
+        file_path = self._static_path(rel_path)
+        if not file_path:
+            return self._send_not_found()
         extension = os.path.splitext(file_path)[1].lower()
-        content_type = _STATIC_CONTENT_TYPES.get(extension, 'application/octet-stream')
+        content_type = _STATIC_CONTENT_TYPES[extension]
         self._send_file(file_path, content_type, 'no-cache, no-store, must-revalidate')
 
     def _send_file(self, file_path, content_type, cache_control=None):
         """最朴素的静态文件下发；要禁缓存就传 cache_control。"""
         self.send_response(200)
         self.send_header('Content-Type', content_type)
+        self.send_header('X-Content-Type-Options', 'nosniff')
         if cache_control:
             self.send_header('Cache-Control', cache_control)
         self.end_headers()
@@ -859,9 +1019,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _handle_console_api_get(self, path):
-        """控制台 /api/*：先过登录态，再查路由表。"""
-        if not self._is_authenticated():
-            return self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+        """控制台 /api/*：先过登录态（首次改密期间同样拦截），再查路由表。"""
+        if self._require_login():
+            return
         if path.startswith('/api/archives'):
             return self._handle_console_archive_get()
         handler = _CONSOLE_GET_ROUTES.get(path)
@@ -871,8 +1031,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _get_hub_knowledge_search(self):
-        """知识库检索（外部工具用）。"""
-        _, err = self._hub_client(require_admin=False)
+        """知识库检索（外部工具用）；内容可能含私人资料，只给管理员 Key。"""
+        _, err = self._hub_client(require_admin=True)
         if err:
             return self._hub_error(err)
         from agent_core.knowledge import KnowledgeBase
@@ -896,11 +1056,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "presets": backend.get_preset_personas(),
             "persona_rules": backend.get_persona_rules(),
             "tokens": backend.get_token_analytics(),
-            "models_config": backend.get_models_config(),
+            "models_config": backend.redact_models_config(backend.get_models_config()),
             "timeline": backend.get_timeline_events(limit=60),
             "modules": backend.get_modules_overview(),
             "modules_permissions": backend.get_module_permissions(),
-            "compute_config": backend.get_compute_config(),
+            "compute_config": backend.redact_compute_config(backend.get_compute_config()),
         })
 
     def _get_system_resources(self):
@@ -919,10 +1079,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._send_json(backend.sync_models_from_upstream())
 
     def _get_models_config(self):
-        return self._send_json(backend.get_models_config())
+        # 只回掩码与 has_key，完整 Key 永远不出服务端
+        return self._send_json(backend.redact_models_config(backend.get_models_config()))
 
     def _get_compute_config(self):
-        return self._send_json(backend.get_compute_config())
+        # 和 models_config 一样：只回掩码，完整 Key 不出服务端
+        return self._send_json(backend.redact_compute_config(backend.get_compute_config()))
 
     def _get_ledger(self):
         """账单页：完整 token_analytics（含 recent_ledger / 分组 / 余额）。"""
@@ -933,10 +1095,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._send_json(backend.get_token_analytics())
 
     def _get_sniff_key(self):
-        """从 URL 里取一个 key（前端粘贴用）。"""
-        query = parse_qs(urlparse(self.path).query)
-        key = (query.get('key') or query.get('api_key') or [''])[0]
-        return self._send_json(backend.handle_sniff_key({"key": key}))
+        """已下线：Key 不该出现在 URL 里（会原样进访问日志）。"""
+        return self._send_json({'error': '该接口已下线'}, status=404)
 
     def _get_access_policy(self):
         from agent_core.access_policy import load_policy
@@ -1119,6 +1279,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 fmt=str(body.get("format") or "auto"),
                 mode=mode,
                 store=self._memory_store(),
+                person_id=str(body.get("person_id") or body.get("archive_id") or ""),
             )
         except Exception as exc:
             return self._send_json({"ok": False, "error": f"{type(exc).__name__}: {exc}"}, status=400)
@@ -1286,6 +1447,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 results.append({'ok': False, 'uid': uid, 'error': f'{type(exc).__name__}: {exc}'})
 
         ok_count = sum(1 for r in results if r.get('ok'))
+        audit_log.record(
+            "identity_bind", dedupe=False,
+            bound=ok_count, failed=len(results) - ok_count,
+            uids=[str(r.get('uid') or '') for r in results][:20],
+        )
         return self._send_json({
             'ok': ok_count == len(results),
             'bound': ok_count,
@@ -1333,17 +1499,30 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _tools_policy_update(self, body):
         from agent_core.tool_shelves import admin as _admin
 
-        return _admin.update_policy(
+        result = _admin.update_policy(
             str(body.get("archive_id") or ""),
             str(body.get("mode") or "all"),
             [str(x) for x in (body.get("tools") or [])],
             self._tool_shelf_cfg(),
         )
+        audit_log.record(
+            "tools_policy_update", dedupe=False,
+            archive_id=str(body.get("archive_id") or ""),
+            mode=str(body.get("mode") or "all"),
+            tools=[str(x) for x in (body.get("tools") or [])][:30],
+            ok=bool((result or {}).get("ok", True)),
+        )
+        return result
 
     def _tools_policy_delete(self, body):
         from agent_core.tool_shelves import admin as _admin
 
-        return _admin.delete_policy(str(body.get("archive_id") or ""), self._tool_shelf_cfg())
+        result = _admin.delete_policy(str(body.get("archive_id") or ""), self._tool_shelf_cfg())
+        audit_log.record(
+            "tools_policy_delete", dedupe=False,
+            archive_id=str(body.get("archive_id") or ""),
+        )
+        return result
 
     def _tools_admin_list(self):
         """工具页：所有已知工具 + 当前设置。"""
@@ -1499,6 +1678,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             roots = (qs.get('roots') or [''])[0].strip()
             root_list = [r.strip() for r in roots.split(';') if r.strip()] if roots else None
+            if root_list:
+                # 只允许扫描「本机已注册适配器根目录 / 项目内数据目录」，
+                # 不能借登录态去枚举任意磁盘（审计 F26）
+                allowed = _identity_scan_roots()
+                bad = [r for r in root_list if not _path_within_any(r, allowed)]
+                if bad:
+                    return {
+                        'ok': False,
+                        'error': 'roots 必须在允许目录内',
+                        'blocked': bad,
+                        'allowed_roots': allowed,
+                    }
             plugin = (qs.get('plugin') or [''])[0].strip()
             reset_hidden = (qs.get('reset_hidden') or [''])[0].strip() in ('1', 'true', 'yes')
             return scan(
@@ -1548,11 +1739,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self._clean_with_model(tool, raw, body, config)
 
     def _clean_auth_denied(self):
-        """带 Key 就校验 Key；没带 Key 时按 clients.json 的 require_key 决定。"""
+        """清洗接口会消耗模型额度：必须带客户端 Key，匿名一律拒绝。
+
+        即使运维把 `require_key` 显式关掉（那是给 /v1 的兼容开关），
+        这个会花钱的接口也不接受匿名调用（复核报告 §4.3）。
+        """
         token = _bearer_token(self.headers)
         if not token:
-            if not client_registry.require_key:
-                return False
             self._send_json({'ok': False, 'error': 'missing_key'}, status=401)
             return True
         auth = client_registry.resolve(token)
@@ -1664,6 +1857,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if path.startswith(_REMOVED_PATH_PREFIXES):
             return self._send_json({'error': '连接管理已移除'}, status=404)
         raw = self._read_raw_body()
+        if raw is None:  # 长度非法或超过上限，_read_raw_body 已经回过 4xx
+            return
         if self._signature_blocked('POST', path, raw):
             return
         body = self._parse_json_body(raw)
@@ -1679,8 +1874,24 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _read_raw_body(self):
-        """把原始 body 读出来（签名要用原始字节）。"""
-        length = int(self.headers.get('Content-Length', 0) or 0)
+        """把原始 body 读出来（签名要用原始字节）。
+
+        Content-Length 有上限：超了直接 413，不读进内存，避免大 body 打爆进程。
+        """
+        try:
+            length = int(self.headers.get('Content-Length', 0) or 0)
+        except (TypeError, ValueError):
+            length = -1
+        if length < 0:
+            self._send_json({"error": "Invalid Content-Length"}, status=400)
+            return None
+        if length > MAX_BODY_BYTES:
+            self.close_connection = True
+            self._send_json({
+                "error": "请求体过大",
+                "limit": MAX_BODY_BYTES,
+            }, status=413)
+            return None
         return self.rfile.read(length) if length else b''
 
     def _parse_json_body(self, raw):
@@ -1737,11 +1948,23 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return True
 
     def _require_login(self):
-        """未登录就直接回 401；返回 True 表示已经处理完。"""
-        if self._is_authenticated():
-            return False
-        self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
-        return True
+        """未登录就直接回 401；返回 True 表示已经处理完。
+
+        首启/口令轮换后还没改密的，除改密与登出外一律 403，
+        让「首次登录强制改密」真正生效。
+        """
+        if not self._is_authenticated():
+            self._send_json({"error": "未登录或登录已过期", "require_login": True}, status=401)
+            return True
+        if auth_mgr.must_change_password():
+            path = self.path.split('?')[0]
+            if path not in _MUST_CHANGE_EXEMPT:
+                self._send_json({
+                    "error": "首次登录请先修改密码",
+                    "must_change_password": True,
+                }, status=403)
+                return True
+        return False
 
     # ---------------- POST：三套接口分发 ----------------
     def _handle_gateway_post(self, path, body):
@@ -1831,6 +2054,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             conn.commit()
             conn.close()
             reset_credits_and_balances()
+            audit_log.record("ledger_cleared", dedupe=False, cleared=int(count or 0))
             return self._send_json({
                 "ok": True,
                 "cleared": int(count or 0),
@@ -1844,6 +2068,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         from agent_core.access_policy import save_policy
 
         policy = save_policy(body if isinstance(body, dict) else {})
+        audit_log.record(
+            "access_policy_saved", dedupe=False,
+            guest_enabled=bool(policy.get("guest_enabled")),
+            guest_timeline_enabled=bool(policy.get("guest_timeline_enabled")),
+        )
         return self._send_json({"ok": True, "policy": policy})
 
     def _post_fact_rollback(self, body):
@@ -1904,8 +2133,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         token = auth_mgr.create_session(username, duration_days=7 if remember else 1)
         max_age = 604800 if remember else 86400
         cookie = self._session_cookie(token, max_age)
+        # 会话只走 HttpOnly Cookie，不再把 Token 回给前端脚本（防 XSS 盗用）
         return self._send_json_with_cookie(
-            {"success": True, "token": token, "username": username}, cookie
+            {
+                "success": True,
+                "username": username,
+                "must_change_password": auth_mgr.must_change_password(),
+            },
+            cookie,
         )
 
     def _post_logout(self, body):
@@ -1919,7 +2154,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         ok, message = auth_mgr.change_password(
             body.get('old_password', ''), body.get('new_password', '')
         )
-        return self._send_json({"success": ok, "message": message}, status=200 if ok else 400)
+        audit_log.record(
+            "password_changed" if ok else "password_change_failed",
+            level="info" if ok else "warn",
+            dedupe=False,
+        )
+        if not ok:
+            return self._send_json({"success": False, "message": message}, status=400)
+        # 改密会吊销全部会话，这里顺手清掉浏览器 Cookie，让前端回到登录页
+        return self._send_json_with_cookie(
+            {"success": True, "message": message, "relogin": True},
+            'anan_session=; Path=/; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+        )
 
     def _send_json_with_cookie(self, payload, cookie):
         """登录态要顺手写 Set-Cookie，_send_json 不够用。"""
@@ -1938,12 +2184,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def _post_connectors_scan(self, body):
         return self._send_json(_get_discovery_service().scan())
 
+    def _adapter_target(self, body):
+        """从请求体取并校验 repo_path；不合法时已经回过 4xx，返回 None。"""
+        repo = _adapter_repo_path(body.get('repo_path') or body.get('path'))
+        if repo:
+            return repo
+        self._send_json({
+            'ok': False,
+            'error': 'repo_path 必须在允许的导入目录内',
+            'allowed_roots': _adapter_roots(),
+        }, status=400)
+        return None
+
     def _post_adapter_analyze(self, body):
         from agent_core.source import SourceAnalyzer
 
-        repo = str(body.get('repo_path') or body.get('path') or '').strip()
+        repo = self._adapter_target(body)
         if not repo:
-            return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
+            return
+        audit_log.record("adapter_analyze", dedupe=False, path=repo)
         return self._send_json(SourceAnalyzer().analyze(repo))
 
     def _post_adapter_generate(self, body):
@@ -1958,15 +2217,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         from agent_core.source import SourceSynthesizer
 
-        repo = str(body.get('repo_path') or body.get('path') or '').strip()
+        repo = self._adapter_target(body)
         if not repo:
-            return self._send_json({'ok': False, 'error': 'repo_path 必填'}, status=400)
+            return
         try:
             result = asyncio.run(SourceSynthesizer().generate(repo))
         except Exception as exc:
             return self._send_json({'ok': False, 'error': str(exc)}, status=500)
+        audit_log.record("adapter_generate", dedupe=False, path=repo, attach=bool(attach))
+        result = _redact_adapter_result(result)
         if attach and body.get('start'):
-            result['started'] = self._start_bridges(result.get('specs') or [])
+            started = self._start_bridges(result.get('specs') or [])
+            audit_log.record("adapter_attach", dedupe=False, path=repo, started=len(started))
+            result['started'] = started
         return self._send_json(result)
 
     def _start_bridges(self, specs):
@@ -2116,16 +2379,23 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if self._access_blocked():
             return
-        length = int(self.headers.get('Content-Length', 0))
-        raw = self.rfile.read(length)
+        raw = self._read_raw_body()
+        if raw is None:
+            return
         if self._signature_blocked('PATCH', path, raw):
+            return
+        if path.startswith('/hub/v1/archives'):
+            body = self._parse_json_body(raw)
+            if body is None:
+                return
+            return self._handle_archive_patch(path, body)
+        # 控制台写接口一律先过登录态，别和 do_DELETE 不一致
+        if path.startswith('/api/') and self._require_login():
             return
         try:
             body = json.loads(raw.decode('utf-8')) if raw else {}
         except Exception:
             return self._send_json({"error": {"message": "Invalid JSON", "code": "bad_request"}}, status=400)
-        if path.startswith('/hub/v1/archives'):
-            return self._handle_archive_patch(path, body)
         if path.startswith('/api/archives'):
             return self._handle_console_archive_patch(path, body)
         if path.startswith('/api/affection/'):
@@ -2144,6 +2414,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if not pm.get_archive(archive_id):
                     return self._send_json({'error': '档案不存在'}, status=404)
                 new_value = pm.set_affection(archive_id, value, reason='好感度模块手动设定')
+                audit_log.record("affection_set", dedupe=False, archive_id=archive_id,
+                                 value=new_value)
                 return self._send_json({'ok': True, 'affection': new_value})
             except Exception as exc:
                 return self._send_json({'error': f'{type(exc).__name__}: {exc}'}, status=500)
@@ -2157,6 +2429,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip('/')
         query = parse_qs(parsed.query)
         if path.startswith('/api/'):
+            # 已下线的模块前缀在 GET/POST 上已经 404，DELETE 也要一致
+            if path.startswith(_REMOVED_PATH_PREFIXES):
+                return self._send_json({'error': '连接管理已移除'}, status=404)
             if self._require_login():
                 return
             return self._delete_console(path, query)
@@ -2165,23 +2440,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _delete_console(self, path, query):
-        """控制台删除类接口：按路径尾巴分派，全部要求登录。"""
+        """控制台删除类接口：按路径尾巴分派，全部要求登录。
+
+        已下线模块（bridges / plugins / components / mcp）的分支删掉了：
+        路由既然对外 404，代码里就不该留能执行的入口（复核报告 §4.7）。
+        """
         if path == '/api/memory/facts':
             return self._delete_fact(query)
         if path.endswith('/settings') and '/api/archives/' in path:
             return self._delete_archive_setting(path, query)
         if path == '/api/bindings':
             return self._delete_binding(query)
-        if path == '/api/bridges/spec':
-            return self._delete_bridge_spec(query)
-        if path.startswith('/api/plugins/'):
-            return self._delete_plugin(path)
         if path.startswith('/api/knowledge/'):
             return self._delete_knowledge(path)
-        if path.startswith('/api/components/'):
-            return self._delete_component(path)
-        if path.startswith('/api/mcp/'):
-            return self._send_json(_get_mcp_manager().close(path.rsplit('/', 1)[-1]))
         self.send_response(404)
         self.end_headers()
 
@@ -2215,27 +2486,6 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         removed = get_store().unbind_context(platform, external_id)
         return self._send_json({'ok': True, 'removed': removed})
 
-    def _delete_bridge_spec(self, query):
-        """删桥接规格前先停掉在跑的实例，停不掉也照删。"""
-        source_id = (query.get('source_id') or [''])[0].strip()
-        if not source_id:
-            return self._send_json({'error': 'source_id 必填'}, status=400)
-        from agent_core.storage import get_store
-
-        try:
-            _get_bridge_manager().stop(source_id)
-        except Exception:
-            pass
-        removed = get_store().delete_bridge_spec(source_id)
-        return self._send_json({'ok': True, 'removed': removed})
-
-    def _delete_plugin(self, path):
-        from agent_core.plugins import PluginRegistry
-        from agent_core.storage import get_store
-
-        removed = PluginRegistry(get_store()).delete(path.rsplit('/', 1)[-1])
-        return self._send_json({'ok': True, 'removed': removed})
-
     def _delete_knowledge(self, path):
         from agent_core.knowledge import KnowledgeBase
         from agent_core.storage import get_store
@@ -2243,25 +2493,28 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         removed = KnowledgeBase(get_store()).delete(path.rsplit('/', 1)[-1])
         return self._send_json({'ok': True, 'removed': removed})
 
-    def _delete_component(self, path):
-        from agent_core.storage import get_store
-
-        removed = get_store().delete_component(path.rsplit('/', 1)[-1])
-        return self._send_json({'ok': True, 'removed': removed})
-
     # ------------------------------------------------------------------
     # 档案 API（/hub/v1/archives）
     # ------------------------------------------------------------------
     def _hub_client(self, require_admin=False):
+        """解析 /hub/v1 的客户端 Key。
+
+        管理类接口（require_admin=True）必须**真的带了 Key**：
+        没有 clients.json、或 `require_key: false` 时，匿名请求都不能当管理员。
+        """
         auth_header = self.headers.get('Authorization', '')
         token = auth_header[7:].strip() if auth_header.lower().startswith('bearer ') else (
             self.headers.get('X-Hub-Key') or ''
         )
+        token = str(token or '').strip()
         result = client_registry.resolve(token)
         if result.error:
             return None, result.error
-        if require_admin and result.profile.default_actor != 'master':
-            return None, 'forbidden'
+        if require_admin:
+            if not token:
+                return None, 'missing_key'
+            if result.profile.default_actor != 'master':
+                return None, 'forbidden'
         return result.profile, None
 
     def _hub_error(self, code, status=None):
@@ -2335,6 +2588,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             data.setdefault('settings', [])
         return data
 
+    def _archive_minimal_view(self, am, archive):
+        """非管理员 Key 只拿最小字段：能认出是谁，但读不到记忆/设置。"""
+        return {
+            'archive_id': archive.get('archive_id'),
+            'display_name': archive.get('display_name'),
+            'role': archive.get('role'),
+            'platforms': sorted({
+                str(item.get('platform') or '')
+                for item in am.identities(archive.get('archive_id'))
+                if item.get('platform')
+            }),
+        }
+
     def _handle_archive_get(self, console=False):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip('/')
@@ -2351,8 +2617,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return self._send_json({'object': 'list', 'data': data})
 
         if path == '/hub/v1/archives/resolve':
+            profile = None
             if not console:
-                _, err = self._hub_client(require_admin=False)
+                profile, err = self._hub_client(require_admin=False)
                 if err:
                     return self._hub_error(err)
             platform = (qs.get('platform') or [''])[0].strip()
@@ -2362,6 +2629,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             archive = am.resolve(platform, uid, create=False)
             if not archive:
                 return self._hub_error('not_found')
+            # 只有管理员 Key（或已登录控制台）能读完整档案，其余只回最小字段
+            is_admin = console or (profile is not None and profile.default_actor == 'master')
+            if not is_admin:
+                return self._send_json(self._archive_minimal_view(am, archive))
             return self._send_json(self._archive_view(am, archive))
 
         if path.startswith('/hub/v1/archives/'):
@@ -2704,13 +2975,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         )
 
     def _resolve_gateway_actor(self, profile, platform_name, raw_user_id, display_name):
-        """访客客户端不许冒充主人；其余交给 IdentityResolver。"""
+        """访客客户端不许冒充主人；没有 UID 也不再回落成主人。"""
         if profile.default_actor == "guest":
             return f"guest_{profile.id}", profile.name, "guest"
         from agent_core.identity import IdentityResolver
-        return IdentityResolver.resolve_actor(
-            platform_name, raw_user_id or profile.default_actor or "master", display_name
-        )
+
+        uid = str(raw_user_id or "").strip()
+        if not uid:
+            # 没有 UID 就没有身份：按客户端 + 平台生成一个稳定的访客 actor，
+            # 绝不因为“缺字段”就把调用方当成主人（审计 P1-3 / PoC B1）。
+            digest = hashlib.sha256(
+                f"{profile.id}:{platform_name}".encode("utf-8")
+            ).hexdigest()[:10]
+            return f"guest_{profile.id}_{digest}", profile.name, "guest"
+        return IdentityResolver.resolve_actor(platform_name, uid, display_name)
 
     def _resolve_channel_perms(self, profile, channel_id):
         """客户端自己声明了记忆开关就覆盖模块级默认。"""
@@ -2742,6 +3020,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "is_guest": False, "bound_archive": bound_archive,
             "affection": None, "master_facts": [],
         }
+        archive = None
         try:
             th = TimelineHub()
             try:
@@ -2749,6 +3028,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 result["archive_id"] = archive["archive_id"] if archive else None
             except Exception:
                 result["archive_id"] = None
+                archive = None
             # 白名单制度：没有档案的人按访客处理；访客开关默认关闭
             is_guest = not bool(bound_archive or result["archive_id"])
             if is_guest:
@@ -2756,8 +3036,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     return {"error": "guest_disabled"}
                 return self._build_guest_identity(result, raw_user_id, platform_name, profile, access_policy)
             return self._build_member_identity(result, th, actor_id, master_qq, bound_archive, archive)
-        except Exception:
-            return result
+        except Exception as exc:
+            # 解析失败必须 fail-closed：按访客处理，绝不能当成有档案的成员
+            audit_log.record("identity_resolve_failed", level="warn", dedupe=False,
+                             error=f"{type(exc).__name__}: {exc}", actor_id=str(actor_id))
+            result["archive_id"] = None
+            result["is_guest"] = True
+            if not access_policy.get("guest_enabled", False):
+                return {"error": "guest_disabled"}
+            return self._build_guest_identity(result, raw_user_id, platform_name, profile, access_policy)
 
     def _build_guest_identity(self, result, raw_user_id, platform_name, profile, access_policy):
         """访客：不能召回记忆，时间轴按开关决定。"""
@@ -2768,6 +3055,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         perms["allow_ingest_timeline"] = bool(access_policy.get("guest_timeline_enabled", False))
         result.update({
             "actor_id": actor_id,
+            # 客户端名只属于传输层，不能进记忆和提示词（审计 B21）
+            "actor_name": f"访客_{safe_uid[-4:]}" if safe_uid else "访客",
             "role_type": "guest",
             "person_id": actor_id,
             "is_guest": True,
@@ -2880,12 +3169,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         }
 
     def _gateway_ids(self, body, messages, channel_id):
-        """用户原话、平台 UID、平台名、插件调用链。"""
-        user_query = self._strip_query_prefix(self._extract_user_query(messages))
+        """用户原话、平台 UID、平台名、插件调用链。
+
+        注意顺序：先从**原始**正文里嗅探 UID，再去掉 `昵称(12345):` 前缀，
+        否则前缀被剥离后 UID 永远嗅探不到（审计 P1-3）。
+        """
+        raw_query = self._extract_user_query(messages)
         adapter_ctx = self._adapter_context(body, channel_id)
-        raw_user_id = self._extract_raw_user_id(body, user_query) or str(
+        raw_user_id = self._extract_raw_user_id(body, raw_query) or str(
             adapter_ctx.get("uid") or ""
         )
+        user_query = self._strip_query_prefix(raw_query)
         platform_name = self._resolve_platform_name(body, channel_id, adapter_ctx)
         host_plugin = _header_text(self.headers.get("X-Host-Id")) or str(
             adapter_ctx.get("host_id") or adapter_ctx.get("plugin_id") or ""
@@ -2992,6 +3286,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 session["person_id"],
                 session["channel_id"],
                 session["channel_type"],
+                reserved,
             )
         except Exception:
             return []
@@ -3133,11 +3428,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return bool(tools_all) and len(visible) < len(tools_all)
 
     def _gateway_tool_gate(self, messages, extra, session):
-        """工具闸门：权限硬拒绝 → 分类裁剪；任何异常都全量透传。"""
+        """工具闸门：权限硬拒绝 → 分类裁剪。
+
+        安全边界（身份级拒绝）放在 try **外面**：它一旦抛异常，
+        宿主机工具就没人拦了。异常时按「全拒」处理，宁可少给工具（复核报告 §4.5）。
+        """
         if not extra.get("tools"):
             return None, extra
         try:
             extra, identity_denied = self._gateway_tool_identity_deny(extra, session)
+        except Exception as exc:
+            print(f"[ToolShelves] 身份闸门异常，按全拒处理: {exc}", flush=True)
+            return None, self._strip_all_tools(extra)
+        try:
             if tool_gate is None:
                 return None, extra
             extra, denied = self._gateway_tool_hard_deny(extra, session)
@@ -3148,6 +3451,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             print(f"[ToolShelves] 闸门跳过，全量透传: {exc}", flush=True)
             return None, extra
+
+    @staticmethod
+    def _strip_all_tools(extra):
+        """摘掉全部工具字段；工具闸门自身出错时用它兜底。"""
+        cleaned = dict(extra or {})
+        for key in ("tools", "tool_choice", "parallel_tool_calls"):
+            cleaned.pop(key, None)
+        return cleaned
 
     def _gateway_tool_hard_deny(self, extra, session):
         """权限硬拒绝：先按客户端把宿主机等敏感工具摘掉，再走分类裁剪。"""
@@ -3378,6 +3689,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
         if not bool(memory_settings.get("prefetch_enabled", False)):
             return ""
+        # 隐私开关必须和主召回一致：访客、关掉召回的通道一律不预取（审计 B6）
+        if ctx.get("is_guest"):
+            return ""
+        if not (ctx.get("perms") or {}).get("allow_recall_memory", True):
+            return ""
 
         store = self._memory_store()
         if store is None:
@@ -3496,10 +3812,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
-    def _gateway_record(self, ctx, content, p_in, p_out, has_tool_calls=False, detail_id="", tool_calls=None):
+    def _gateway_record(self, ctx, content, p_in, p_out, has_tool_calls=False, detail_id="",
+                        tool_calls=None, fallback=False):
         """账本 + 时间轴 + 事实/好感度：一次请求的记忆副作用都在这。"""
         tools = _join_tool_names(tool_calls)
         self._record_usage(ctx, p_in, p_out, tools)
+        if fallback:
+            # 兜底话术不是模型说的话：不写时间轴、不抽事实、不评好感度（审计 B19）
+            return None
         if has_tool_calls or tools or not content or not ctx["user_query"]:
             return None
         if not ctx["perms"].get("allow_ingest_timeline", True):
@@ -3808,7 +4128,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             choice.get("message") or {},
             choice.get("finish_reason") or "stop",
             data.get("usage") or {},
-            data.get("model") or "",
+            data.get("model") or data.get("_hub_model") or "",
         )
 
     def _gateway_complete(self, ctx):
@@ -3818,7 +4138,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         event_id = self._gateway_record(
             ctx, out["message"]["content"], out["in"], out["out"],
             bool(out["tool_calls"]), detail_id=detail_id or "",
-            tool_calls=out["tool_calls"],
+            tool_calls=out["tool_calls"], fallback=out["fallback"],
         )
         self._complete_invocations(ctx, state, out, event_id)
         self._timeline_release(ctx)
@@ -3869,19 +4189,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             {"role": "system", "content": "You are a top-tier software engineer and logical reasoning engine. Solve the problem directly, rigorously and clearly. Output clean markdown and code with zero fluff."},
             {"role": "user", "content": ctx["user_query"]},
         ]
-        worker_out, w_in, w_out = ctx["compute_mgr"].chat_completion(
+        worker_out, w_in, w_out, worker_model = ctx["compute_mgr"].chat_completion_meta(
             "logic_slot", worker_msgs, current_port=PORT, timeout=90
         )
         if not worker_out:
             return None
-        self._record_logic_usage(ctx, w_in, w_out)
+        self._record_logic_usage(ctx, w_in, w_out, worker_model)
         return self._complete_logic_handoff(ctx, worker_out)
 
-    def _record_logic_usage(self, ctx, tokens_in, tokens_out):
-        """工兵那一笔也要记账；失败不影响主流程。"""
+    def _record_logic_usage(self, ctx, tokens_in, tokens_out, model=""):
+        """工兵那一笔也要记账；按实际跑通的模型记，失败不影响主流程。"""
         try:
             backend.record_token_usage_event(
-                ctx["compute_mgr"].resolve_model("logic_slot") or "logic_slot",
+                model or ctx["compute_mgr"].resolve_model("logic_slot") or "unknown_model",
                 tokens_in, tokens_out, source=ctx["channel_id"],
             )
         except Exception:
@@ -4490,6 +4810,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _ingest_tool_event(self, ctx, fn_name, tool_call=None):
         """人对工具插件的请求单独成事件：工具插件名 + 发起人档案 + 权限。"""
+        # 访客/关掉时间轴的通道不写工具事件，和主记忆开关保持一致（审计 B20）
+        if ctx.get("is_guest") or not (ctx.get("perms") or {}).get("allow_ingest_timeline", True):
+            return
         tool_plugin = self._tool_plugin_name(fn_name, tool_call)
         payload = self._timeline_payload(ctx, "")
         secondary = self._timeline_initiator_tag(ctx)
@@ -4557,6 +4880,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         event_id = self._gateway_record(
             ctx, out["content"], out["in"], out["out"], out["tool_call_flag"],
             detail_id=detail_id or "", tool_calls=out["tool_calls"],
+            fallback=out["fallback"],
         )
         self._complete_invocations(ctx, state, out, event_id)
         self._timeline_release(ctx)
@@ -4568,7 +4892,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # 和 _send_json 保持一致：只有同源才回 CORS 头，绝不固定 "*"
+        origin = self._allowed_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
         for key, value in self._hub_identity_headers(ctx).items():
             self.send_header(key, str(value))
         self.end_headers()
@@ -4675,6 +5004,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def _stream_recall(self, ctx, active_msgs, head, accumulator):
         """首段是指令：查库、让出预算重拼、换一轮流式。"""
+        depth = int(ctx.get("stream_recall_depth") or 0)
+        if depth >= MAX_STREAM_RECALL_DEPTH:
+            # 到上限就转成「不再识别指令」的纯转发：
+            # 否则模型再说一次指令又会回到这里，等于无限递归（复核报告 §4.4）
+            return self._stream_plain(ctx, active_msgs, accumulator)
+        ctx["stream_recall_depth"] = depth + 1
         request = _parse_memory_directive(head)
         found = self._run_memory_lookup(ctx, request)
         messages = self._rebuild_prompt_with_recall(ctx, found) or active_msgs
@@ -4683,6 +5018,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "persona_slot", messages, current_port=PORT, timeout=180, extra=ctx["extra"]
         )
         return self._stream_guarded(ctx, stream, messages, accumulator) or True
+
+    def _stream_plain(self, ctx, active_msgs, accumulator):
+        """纯转发：逐块写出去，不再解析记忆指令（递归兜底用）。"""
+        stream = ctx["compute_mgr"].stream_chat_completion(
+            "persona_slot", active_msgs, current_port=PORT, timeout=180, extra=ctx["extra"]
+        )
+        wrote = False
+        for chunk in stream:
+            self._stream_write(chunk, accumulator)
+            wrote = True
+        return wrote
 
     def _stream_write(self, chunk, accumulator):
         self.wfile.write(chunk)
@@ -4707,6 +5053,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         """流结束后的汇总：正文、usage、token 估算、工具名。"""
         content = "".join(accumulator.content)
         usage = accumulator.usage or {}
+        # 账本要记上游真正用的模型，不能记请求体里的标签（审计 B14）
+        if accumulator.model:
+            ctx["actual_model"] = accumulator.model
         p_in, p_out = self._estimate_tokens(ctx, content, usage)
         return {
             "content": content,
@@ -4740,6 +5089,7 @@ class _StreamAccumulator:
         self.buf = b""
         self.content = []
         self.usage = {}
+        self.model = ""
         self.finish_reason = None
         self.saw_done = False
         self.tool_calls = False
@@ -4773,9 +5123,11 @@ class _StreamAccumulator:
             return None
 
     def _feed_object(self, obj):
-        """usage / finish_reason 可能出现在任意一块里。"""
+        """usage / model / finish_reason 可能出现在任意一块里。"""
         if obj.get("usage"):
             self.usage = obj["usage"]
+        if obj.get("model"):
+            self.model = str(obj["model"])
         for choice in obj.get("choices") or []:
             if choice.get("finish_reason"):
                 self.finish_reason = choice["finish_reason"]
@@ -4816,6 +5168,36 @@ class _StreamAccumulator:
 class ReusableThreadingServer(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+    # 并发上限：超过就直接 503，别无限开线程
+    max_concurrent = 64
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._slots = threading.BoundedSemaphore(self.max_concurrent)
+
+    def process_request(self, request, client_address):
+        """拿不到并发名额就立刻 503，避免线程数失控。"""
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.1 503 Service Unavailable\r\n"
+                    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            except Exception:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 _discovery_service = None
@@ -4946,18 +5328,40 @@ def _startup_deploy_check() -> None:
 
 
 def _bind_host() -> str:
-    """监听地址：环境变量 HUB_BIND > data/api_security.json 的 bind_host > 0.0.0.0。"""
+    """监听地址：环境变量 HUB_BIND > data/api_security.json 的 bind_host > 127.0.0.1。
+
+    默认只绑本机（审计 A18/D3）：要对局域网/公网开放，请显式设置
+    HUB_BIND=0.0.0.0 或把 bind_host 写进 data/api_security.json，并同步开 local_only / 反代。
+    """
     env = (os.getenv("HUB_BIND") or "").strip()
     if env:
         return env
     try:
         return api_security.load_config()["bind_host"]
     except Exception:
-        return "0.0.0.0"
+        return "127.0.0.1"
+
+
+def _warn_missing_clients_config() -> None:
+    """没有 clients.json 时给一句提示：/v1 现在会拒绝匿名请求。"""
+    try:
+        if client_registry.path.exists():
+            return
+        from agent_core import messages as _msgs
+
+        _msgs.warn(
+            "未检测到 data/clients.json：/v1 与 /hub/v1 已拒绝匿名请求，"
+            "请运行 scripts/connect_astrbot.py 或复制 clients.example.json 为 data/clients.json"
+        )
+    except Exception:
+        pass
 
 
 def run_server():
     audit_log.migrate_legacy()
+    # 存量弱口令轮换只在真启动时做，import 本身不改任何线上配置
+    auth_mgr.enforce_password_policy()
+    _warn_missing_clients_config()
     _start_aggregator()
     _start_memory_maintenance()
     _start_discovery()
@@ -4978,8 +5382,9 @@ def run_server():
             print(f"⚠️ 服务异常中断: {e}，将在 1 秒后自动重启...", flush=True)
             time.sleep(1)
         except BaseException as be:
-            print(f"⚠️ 捕获系统退出信号: {be}，等待 1 秒后恢复常驻...", flush=True)
-            time.sleep(1)
+            # Ctrl+C / SystemExit：真的退出，不要再常驻
+            print(f"\n👋 收到退出信号（{be}），控制台已停止。", flush=True)
+            break
 
 
 if __name__ == "__main__":

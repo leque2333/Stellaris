@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """L1→L2 聚合器：一段活动只生成一条时间轴摘要"""
 
 import sys
@@ -64,7 +64,7 @@ class AggregatorTest(unittest.TestCase):
             metadata={"group_id": "784826874", "group_name": "乌合之众喵",
                       "plugin_name": "napcat", "platform": "qq",
                       "archive_id": "arc_master", "tag_permission": "admin",
-                      "sender_uid": "2986371638", "channel_type": "group"},
+                      "sender_uid": "2000000001", "channel_type": "group"},
         )
         self.agg.tick(now=t0 + 5)
         self.agg.tick(now=t0 + 120)
@@ -78,10 +78,10 @@ class AggregatorTest(unittest.TestCase):
         t0 = time.time() - 1000
         self._invocation(
             "tr_private", "channel", "qq", t0, channel_id="qq", actor_id="master",
-            metadata={"session_id": "2986371638", "peer_name": "乐阙",
+            metadata={"session_id": "2000000001", "peer_name": "乐阙",
                       "plugin_name": "napcat", "platform": "qq",
                       "archive_id": "arc_master", "tag_permission": "admin",
-                      "sender_uid": "2986371638", "channel_type": "private"},
+                      "sender_uid": "2000000001", "channel_type": "private"},
         )
         self.agg.tick(now=t0 + 5)
         self.agg.tick(now=t0 + 120)

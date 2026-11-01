@@ -79,14 +79,17 @@ def _timeline_event(**kwargs):
     )
 
 def _price_for_model(model_id, at=None):
+    """按模型取单价；查不到就返回空，绝不套用主控模型的单价（审计 B17）。"""
     try:
-        from .model_service import get_model_pricing_map, get_models_config
+        from .model_service import get_model_pricing_map
         pricing = get_model_pricing_map(at)
-        if model_id in pricing:
-            return pricing[model_id]
-        active = str(get_models_config().get("active_model") or "")
-        if active in pricing:
-            return pricing[active]
+        model = str(model_id or "").strip()
+        if model in pricing:
+            return pricing[model]
+        lowered = model.lower()
+        for key, value in pricing.items():
+            if str(key).strip().lower() == lowered:
+                return value
     except Exception:
         pass
     return {}

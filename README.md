@@ -20,16 +20,35 @@ python console/server.py 18895
 
 打开 `http://127.0.0.1:18895`。
 
-首次启动会自动建库、跑 schema 迁移，备份落在 `backups/`。
+首次启动会自动建库、跑 schema 迁移，备份落在 `backups/`（数据导入的备份在 `data/backups/`）。
+
+首次启动会生成**随机管理员口令**，打印在控制台并写入 `data/auth_initial_password.txt`；
+登录后强制改密（新密码至少 12 位），改完该文件会自动删除。
+
+> 默认只监听 `127.0.0.1`。要让局域网/公网访问，请显式设置 `HUB_BIND=0.0.0.0`
+> （或在 `data/api_security.json` 里改 `bind_host`），并同时开启 `local_only` 或前面挂反向代理。
+
+## Docker
+
+```bash
+docker compose up -d --build
+```
+
+容器内监听 `18890`，宿主映射到 `18895`（与本地一致）；容器内已通过 `HUB_BIND=0.0.0.0` 允许端口映射。
 
 ## 接入外部客户端
 
 ```text
 Base URL : http://<host>:18895/v1
-API Key  : 在 data/clients.json 里签发
+API Key  : 在 data/clients.json 里签发（必填）
 Model    : 当前活跃模型
 Header   : X-Channel: <通道名>   X-User-Id: <实体 ID>
 ```
+
+> **默认必须带 Key**：没有 `data/clients.json` 时 `/v1` 与 `/hub/v1` 会直接返回 401 `missing_key`。
+> 第一次接入先 `copy clients.example.json data\clients.json` 并换掉示例 Key，
+> 或直接跑 `python scripts/connect_astrbot.py`（自动生成 Key 并写好配置）。
+> 这是刻意的：没有 Key 不等于管理员。
 
 任何支持 OpenAI 格式的客户端都能接：Dify、NextChat、Cline、各种 IDE 插件。
 
@@ -79,9 +98,10 @@ curl http://127.0.0.1:18895/v1/chat/completions \
 
 ```bash
 python -m unittest discover -s tests -t .
+python -m ruff check console agent_core scripts tests
 ```
 
-CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍。依赖生产库的集成测试在干净环境会自动 skip。
+当前 **645 项**测试（1 skip）。CI 在 Python 3.10 / 3.11 / 3.12 上跑一遍，依赖生产库的集成测试在干净环境会自动 skip。
 
 ## 参与
 
